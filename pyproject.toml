@@ -30,6 +30,19 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/mambo_power"]
 
+[tool.hatch.build.targets.sdist]
+# Explicit allow-list: hatch's VCS default follows the machine-local `.bionic` symlink and
+# would ship planning docs, uv.lock and dotfiles. The sdist must carry tests/ and fixtures/
+# so a source install can run the parity suite; the wheel stays package-only.
+include = [
+  "/src/mambo_power",
+  "/tests",
+  "/fixtures",
+  "/README.md",
+  "/LICENSE",
+  "/pyproject.toml",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
