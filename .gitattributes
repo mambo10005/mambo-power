@@ -1,0 +1,2 @@
+# Fixtures are verbatim upstream bytes (provenance); never CRLF-smudge them.
+*.m -text
