@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: macos-latest
+            python: "3.12"
+          - os: windows-latest
+            python: "3.12"
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.13"
+    env:
+      # Overrides .python-version so the 3.11 / 3.13 legs really run on their interpreter.
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install ${{ matrix.python }}
+      - run: uv sync --locked --all-groups
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
