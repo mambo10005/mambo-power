@@ -17,9 +17,12 @@ print(result.branches[0].p_from_mw)
 !!! info "Status"
     Wave **M1** (substrate: model, MATPOWER import, network matrices) is merged. Wave **M2**
     (power flow, typed results, jobs API, this documentation site) is in progress on its
-    wave branch: the DC and AC Newton-Raphson solvers, typed results, the `jobs` surface, the
-    runnable examples and this site are all there. Nothing is on PyPI yet — install from
-    source (see [Getting started](getting-started.md)).
+    wave branch, with everything below shipped there: the DC and AC Newton-Raphson solvers
+    (`pf.solve_dc`, `pf.solve_ac`), typed results with provenance, the stateless
+    [jobs surface](manual/jobs.md) exposing both as `kind="pf.dc"` / `"pf.ac"` through
+    `jobs.run(SolveRequest)` and `jobs.run_json`, seven [runnable examples](examples/index.md)
+    executed in CI, and this site. Nothing is on PyPI yet — install from source (see
+    [Getting started](getting-started.md)).
 
 ## Three principles
 
