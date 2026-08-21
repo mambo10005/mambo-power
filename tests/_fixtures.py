@@ -9,4 +9,4 @@ pick it up.
 from pathlib import Path
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "matpower"
-FIXTURES = ["case14", "case30", "case_ieee30", "case57", "case118"]
+FIXTURES = ["case14", "case30", "case_ieee30", "case57", "case118", "case300"]

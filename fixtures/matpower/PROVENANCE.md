@@ -10,11 +10,35 @@ each fixture file's own header comments, and the AC parity suite header
 printed gate output. Nothing here is asserted beyond those sources; each
 section cites where its facts live.
 
-All five files are byte-identical copies of the verbatim MATPOWER distribution
+The five M1 files are byte-identical copies of the verbatim MATPOWER distribution
 files in `packages/io/test/fixtures/matpower/` (this directory's `SOURCES.md`),
 retrieved 2026-08-19 from the MATPOWER `master` branch `data/` directory via
-raw.githubusercontent.com (retrieval table in the io `SOURCES.md`). Do not
-edit them.
+raw.githubusercontent.com (retrieval table in the io `SOURCES.md`). The sixth
+file, `case300.m`, was retrieved the same way on 2026-08-20 and is pinned by git
+blob SHA-1 and sha256 (its section below; `tests/unit/test_fixture_case300.py`
+re-checks the digest). Do not edit them.
+
+Synthetic variants for AC-4 / AC-5 live in `derived/` with their own
+`derived/PROVENANCE.md`; they are not upstream bytes and are not in the parity
+fixture list.
+
+## Licence (applies to every file in this directory)
+
+The case files are carried as public IEEE test data as distributed by MATPOWER.
+No BSD claim is made for them: MATPOWER's `LICENSE` (master, sha256
+`5d14c09b3e4f2adf62c0373e6320163697aa4603186f8925c07c6b84201e1750`, fetched
+2026-08-20) opens with
+
+> The code in MATPOWER is distributed under the 3-clause BSD license below. The
+> MATPOWER case files distributed with MATPOWER are not covered by the BSD
+> license. In most cases, the data has either been included with permission or
+> has been converted from data available from a public source.
+
+and none of the case files carries a licence line of its own (only the
+"MATPOWER" mark and the CDF provenance in its header). The underlying data are
+the IEEE test cases published by the University of Washington Power Systems
+Test Case Archive (https://labs.ece.uw.edu/pstca/), converted by MATPOWER's
+`cdf2matp`, plus MATPOWER's documented edits (each file's header).
 
 ## Per-fixture record
 
@@ -94,6 +118,44 @@ edit them.
   shipped data there (AC test header: "bus 30 and neighbors"; measured gate
   output for the full bus list and magnitudes).
 
+### case300.m
+- **Source:** https://raw.githubusercontent.com/MATPOWER/matpower/master/data/case300.m — retrieved 2026-08-20 (M2 S1, `curl -sSL`). Pinned: git blob SHA-1 `004203b8adae83b3f21ce9ceb4a13db9b18f0132` (`git hash-object`), sha256 `69a90280e999ef533d94656e0fbc08311f1347c962dd2753ff2005ff5e3f9ac5`, 66034 bytes, LF line endings (`.gitattributes` keeps `*.m` unnormalised). The same three values were recorded independently in `record/m2-research.md` §4.1 on 2026-08-20 against the GitHub contents API.
+- **Upstream lineage:** converted from IEEE Common Data Format
+  (`ieee300cdf.txt`) on 18-Nov-2014 by cdf2matp rev. 2393; UW archive,
+  https://labs.ece.uw.edu/pstca/ — "13/05/91 CYME INTERNATIONAL 100.0 1991 S
+  IEEE 300-BUS TEST SYSTEM" (file header). Modification v2 (2025-06-14, WGV):
+  "Set tap parameter of branches # 71, 90, 188, 189, 190, 191, 192, 193, 208,
+  232, 233, 267, 279, 299, 310, 313, 315, 316, 318, 320, 324, and 325 to 1.0
+  to model transformers with nominal turns ratio" — 22 branches (file header;
+  all 22 rows carry TAP = 1.0 in the file). MATPOWER Case Format version 2,
+  baseMVA 100; 300 bus rows, 69 gen rows, 411 branch rows, 69 gencost rows;
+  no type-4 buses; no BASE_KV <= 0; slack = bus 7049 (stored VM 1.0507,
+  VA 0, 13.8 kV); one negative-reactance branch (row 179, 1201-120,
+  x = -0.3697); no phase shifters (`record/m2-research.md` §4.1; counts
+  re-checked by `tests/unit/test_fixture_case300.py`).
+- **Licence:** see "Licence" above — public IEEE data as distributed by
+  MATPOWER, not covered by MATPOWER's BSD licence (`record/m2-research.md`
+  §4.2).
+- **Reference solution:** the stored VM/VA columns (4 / 2 decimals) are a
+  CDF-era (1991) solved point, NOT a solution of the shipped v2 data — and
+  the v2 tap edits are not the cause (the pre-v2 pandapower-bundled copy and
+  the verbatim file converge to the same point, 0.107 pu from the stored
+  columns at bus 17). case300 is therefore a convergence + self-consistency +
+  DC fixture and a pandapower-oracle column-parity fixture with Q-limits OFF
+  only (`record/m2-research.md` §1.2, §4.3; spec AC-1, AC-3, AC-7). With
+  Q-limits enforced pandapower does not converge on it (23 of 68 generators
+  violate their Q range at the unlimited solution).
+- **Known reference-quality findings:** the W1 reference-quality gate
+  (5 MVA; cap ceil(5%) = 15 buses) excludes 9 buses: 137 (7.7), 181 (7.3),
+  196 (926.1), 231 (11.2), 235 (7.2), 237 (9.9), 238 (8.5), 2040 (926.9),
+  9001 (5.0) MVA. The 927 MVA pair sits across branch row 390, 196-2040
+  (r = 0.0001, x = 0.02, b = 0, tap = 1): the stored angles differ by 10.4
+  deg across it (196 at -25.32, 2040 at -14.94), implying ~9 pu of flow, so
+  the CDF-era solution cannot have been computed with this branch as shipped.
+  No later wave may treat the stored columns as a converged solution of this
+  file (`record/m2-research.md` §1.3, §4.3 — transcribed, not re-measured
+  here).
+
 ## Reference-quality findings (shared context)
 
 - **Q-limit-enforced lineage:** the stored solutions are compared under the
@@ -113,7 +175,8 @@ edit them.
   `packages/engine-pf/src/parity.ts`). Measured exclusions (parity suite gate
   output, 2026-08-19 run): case_ieee30 bus 3 (8.2 MVA); case57 buses 14
   (21.2), 46 (45.8), 47 (24.7); case118 buses 17 (45.3), 30 (129.7),
-  38 (31.3), 68 (10.5); case14 none.
+  38 (31.3), 68 (10.5); case14 none. case300 (M2 research, 2026-08-20 run,
+  same gate recomputed densely): 9 buses, listed in its section above.
 
 ## W9 regeneration contract
 
