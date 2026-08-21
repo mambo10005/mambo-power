@@ -68,7 +68,9 @@ notation, rows split by `;` or by newlines, and ignores every field it does not 
 | --- | --- |
 | `matpower.load(path) -> Network` | Parse a file; repair warnings discarded. |
 | `matpower.loads(text) -> Network` | Parse case text. |
-| `matpower.load_with_warnings(path) -> (Network, list[str])` | Parse and return the repairs performed, one `CODE: message` string each. |
+| `matpower.load_with_report(path) -> (Network, ImportReport)` | Parse and return the repairs performed as typed [`ImportIssue`](model.md#import-issues-and-island-repair) entries (code, message, bus and element ids). |
+| `matpower.loads_with_report(text) -> (Network, ImportReport)` | Same, from text. |
+| `matpower.load_with_warnings(path) -> (Network, list[str])` | The legacy form: one `CODE: message` string per repair — exactly `report.as_strings()`. |
 | `matpower.loads_with_warnings(text) -> (Network, list[str])` | Same, from text. |
 
 The path/text split follows the `json` module precedent; the importer never sniffs whether a
@@ -160,16 +162,34 @@ When `mpc.gencost` is absent every generator has `cost=None`.
 
 ### Warnings (repairs)
 
-Conditions that are repaired rather than rejected are reported by `load_with_warnings` /
-`loads_with_warnings` as strings of the form `CODE: message`:
+Conditions that are repaired rather than rejected are reported by `load_with_report` /
+`loads_with_report` as an `ImportReport` whose `.warnings` are typed `ImportIssue` records
+(`code`, `message`, `bus_ids`, `element_ids`; `.codes` is the set of distinct codes), and by
+`load_with_warnings` / `loads_with_warnings` as the same entries rendered `CODE: message`:
 
 | Code | Repair |
 | --- | --- |
-| `BASE_KV_REPLACED` | `BASE_KV <= 0` becomes `1.0` (CDF-derived cases store 0 for "unknown"); one warning per bus, naming the bus and the line. |
+| `BASE_KV_REPLACED` | `BASE_KV <= 0` becomes `1.0` (CDF-derived cases store 0 for "unknown"); one issue per bus, naming the bus (`bus_ids`) and the line. |
 | `GENCOST_REACTIVE_IGNORED` | `mpc.gencost` had `2 * ngen` rows; the second half (reactive costs) was dropped. |
-| `ISLAND_DEACTIVATED` | Buses the slack cannot reach over in-service branches were switched off together with their generators, loads, shunts and storage, listing the ids. Landing in wave M2 (decision D1). |
+| `ISLAND_DEACTIVATED` | Buses the slack cannot reach over in-service branches were switched off together with their generators, loads, shunts and storage; one issue per island, `bus_ids` and `element_ids` list what was switched off (decision D1). |
 
-`load` / `loads` apply the same repairs and discard the warnings.
+`load` / `loads` apply the same repairs and discard the report.
+
+```python
+from mambo_power.io import matpower
+
+net, report = matpower.load_with_report("fixtures/matpower/derived/case14_island.m")
+print(sorted(report.codes), len(report.warnings))
+island = next(w for w in report.warnings if w.code == "ISLAND_DEACTIVATED")
+print(island.bus_ids, island.element_ids)
+print(str(island))
+```
+
+```text
+['BASE_KV_REPLACED', 'ISLAND_DEACTIVATED'] 15
+['bus-8'] ['gen-5']
+ISLAND_DEACTIVATED: bus bus-8 cannot reach slack bus bus-1 over in-service branches; deactivated with attached elements [gen-5]
+```
 
 ### Islands
 
@@ -181,7 +201,9 @@ every element attached to those buses, and one `ISLAND_DEACTIVATED` warning list
 resulting `Network` is valid and solves on the main island; the deactivated elements remain
 in the file for inspection. Building the same `Network(...)` by hand still raises — the
 importer repairs, the model stays strict. The shared implementation,
-`model.repair_islands`, is what every later importer must call too.
+[`model.repair_islands`](model.md#import-issues-and-island-repair), is what every later
+importer must call too. [`05_roles_and_islands.py`](../examples/index.md#5-roles-and-islands)
+walks through the repaired fixture and the model's rejection of the same network.
 
 ### Errors
 

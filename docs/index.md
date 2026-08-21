@@ -16,10 +16,10 @@ print(result.branches[0].p_from_mw)
 
 !!! info "Status"
     Wave **M1** (substrate: model, MATPOWER import, network matrices) is merged. Wave **M2**
-    (power flow, typed results, jobs API, this documentation site) is in progress. The DC
-    solver is on the wave branch; the AC Newton-Raphson solver and the `jobs` surface land
-    in the same wave. Nothing is on PyPI yet — install from source
-    (see [Getting started](getting-started.md)).
+    (power flow, typed results, jobs API, this documentation site) is in progress on its
+    wave branch: the DC and AC Newton-Raphson solvers, typed results, the `jobs` surface, the
+    runnable examples and this site are all there. Nothing is on PyPI yet — install from
+    source (see [Getting started](getting-started.md)).
 
 ## Three principles
 
@@ -81,9 +81,10 @@ flowchart LR
 | Understand the network model, its units and validation errors | [Manual › Network model](manual/model.md) |
 | Import a MATPOWER case or write native JSON | [Manual › File formats](manual/formats.md) |
 | Build Ybus, Bbus, PTDF or LODF matrices | [Manual › Numerics](manual/numerics.md) |
-| Run DC power flow now, AC power flow when it lands | [Manual › Power flow](manual/power-flow.md) |
+| Run a DC or AC power flow, understand Q-limits and effective roles | [Manual › Power flow](manual/power-flow.md) |
 | Read and serialise results | [Manual › Results](manual/results.md) |
 | Call the package from a service | [Manual › Jobs API](manual/jobs.md) |
+| Copy a working script | [Examples](examples/index.md) |
 | Browse every public class and function | [API reference](api/model.md) |
 | See how the packages fit together and why | [Design](design/architecture.md) |
 | Contribute a change | [Contributing](contributing.md) |

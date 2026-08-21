@@ -13,7 +13,7 @@ as the file stores them. Derived ids: ``bus-<BUS_I>``, ``gen-<row>``, ``branch-<
 ``load-<BUS_I>``, ``shunt-<BUS_I>``; loads and shunts are emitted only for non-zero rows.
 
 Three conditions are repaired rather than rejected, and each repair is reported as an
-:class:`~mambo_power.model.ImportWarning` — typed, in the
+:class:`~mambo_power.model.ImportIssue` — typed, in the
 :class:`~mambo_power.io.report.ImportReport` returned by :func:`load_with_report` /
 :func:`loads_with_report`, and as the ``CODE: message`` string in the legacy list returned by
 :func:`load_with_warnings` / :func:`loads_with_warnings`:
@@ -49,7 +49,7 @@ from mambo_power.model import (
     BusType,
     Generator,
     GeneratorCost,
-    ImportWarning,
+    ImportIssue,
     Load,
     Network,
     PiecewiseCost,
@@ -290,8 +290,8 @@ def _matrix(case: _Case, name: str, required: bool) -> list[tuple[int, list[floa
 # --- building: matrices -> Network --------------------------------------------------------------
 
 
-def _build(case: _Case) -> tuple[Network, list[ImportWarning]]:
-    warnings: list[ImportWarning] = []
+def _build(case: _Case) -> tuple[Network, list[ImportIssue]]:
+    warnings: list[ImportIssue] = []
     base = case.scalars.get("baseMVA")
     if base is None:
         raise MatpowerImportError("MISSING_BASE_MVA", "mpc.baseMVA = ...; not found")
@@ -318,7 +318,7 @@ def _build(case: _Case) -> tuple[Network, list[ImportWarning]]:
         base_kv = row[9]
         if not base_kv > 0:
             warnings.append(
-                ImportWarning(
+                ImportIssue(
                     code="BASE_KV_REPLACED",
                     message=(
                         f"{bus_id}: BASE_KV is {base_kv:g}; base_kv set to {DEFAULT_BASE_KV} "
@@ -403,13 +403,13 @@ def _build(case: _Case) -> tuple[Network, list[ImportWarning]]:
 
 
 def _costs(
-    rows: list[tuple[int, list[float]]], n_gen: int, warnings: list[ImportWarning]
+    rows: list[tuple[int, list[float]]], n_gen: int, warnings: list[ImportIssue]
 ) -> list[GeneratorCost | None]:
     if not rows:
         return [None] * n_gen
     if len(rows) == 2 * n_gen and n_gen > 0:
         warnings.append(
-            ImportWarning(
+            ImportIssue(
                 code="GENCOST_REACTIVE_IGNORED",
                 message=(
                     f"mpc.gencost has {len(rows)} rows for {n_gen} generators; the second half "

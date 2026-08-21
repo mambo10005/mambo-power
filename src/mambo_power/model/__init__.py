@@ -18,7 +18,7 @@ from mambo_power.model.entities import (
 from mambo_power.model.errors import NetworkValidationError, ValidationCode, ValidationIssue
 from mambo_power.model.islands import repair_islands, repair_islands_entities
 from mambo_power.model.network import Network, validate_network
-from mambo_power.model.warnings import ImportWarning, ImportWarningCode
+from mambo_power.model.warnings import ImportIssue, ImportIssueCode
 
 __all__ = [
     "Branch",
@@ -27,8 +27,8 @@ __all__ = [
     "Generator",
     "GeneratorCost",
     "Geo",
-    "ImportWarning",
-    "ImportWarningCode",
+    "ImportIssue",
+    "ImportIssueCode",
     "Load",
     "Network",
     "NetworkValidationError",

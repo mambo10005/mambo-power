@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable
 
 import pytest
 
@@ -34,16 +35,24 @@ print(f"{{int(result.converged)}} {{result.iterations}} {{cold:.4f}} {{warm:.4f}
 
 
 @pytest.mark.parity
-def test_case300_cold_solve_under_one_second() -> None:
+def test_case300_cold_solve_under_one_second(
+    record_property: Callable[[str, object], None],
+) -> None:
     script = SCRIPT.format(path=FIXTURES_DIR / "case300.m")
     proc = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, check=True, timeout=300
     )
     converged, iterations, cold, warm = proc.stdout.split()[-4:]
     cold_s, warm_s = float(cold), float(warm)
-    print(f"case300 AC cold {cold_s:.4f} s, warm {warm_s:.4f} s, {iterations} iterations")
-    assert converged == "1" and int(iterations) > 0
+    figure = f"case300 AC cold {cold_s:.4f} s, warm {warm_s:.4f} s, {iterations} iterations"
+    # AC-7 wants the measured figure in the CI log, not only the verdict: the print reaches
+    # the log under `-s` (the dedicated ubuntu 3.12 CI step), the recorded properties reach
+    # any junit/xml reporter, and the assertion message carries it on failure.
+    print(figure)
+    record_property("case300_ac_cold_s", cold_s)
+    record_property("case300_ac_warm_s", warm_s)
+    record_property("case300_ac_iterations", int(iterations))
+    assert converged == "1" and int(iterations) > 0, figure
     assert cold_s < THRESHOLD_S, (
-        f"case300 cold solve_ac took {cold_s:.4f} s (warm {warm_s:.4f} s); AC-7 threshold "
-        f"{THRESHOLD_S} s — CI ubuntu is the contracted surface"
+        f"{figure}; AC-7 threshold {THRESHOLD_S} s — CI ubuntu is the contracted surface"
     )

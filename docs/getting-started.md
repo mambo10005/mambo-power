@@ -181,6 +181,33 @@ True
 
 See [Results](manual/results.md) for every field and the provenance stamp.
 
+## Run an AC power flow
+
+The AC Newton-Raphson solver has the same shape: a network in, an `AcPowerFlowResult` out,
+with the Newton diagnostics on top. `AcOptions` controls the tolerance, the iteration budget,
+Q-limit enforcement and the starting point (`init="flat"` here; the default `"auto"` warm-starts
+from stored bus voltages when every bus has them).
+
+```python
+ac = pf.solve_ac(net, options=pf.AcOptions(init="flat"))
+print(ac.converged, ac.iterations, ac.q_limit_rounds, f"{ac.max_mismatch_mva:.1e} MVA")
+for bus in ac.buses[:3]:
+    print(f"{bus.id:7s} vm={bus.vm_pu:.4f} pu  va={bus.va_deg:8.3f} deg  q={bus.q_mvar:7.2f} MVAr")
+print(f"losses {sum(b.p_from_mw + b.p_to_mw for b in ac.branches):.3f} MW")
+```
+
+```text
+True 4 0 8.8e-13 MVA
+bus-1   vm=1.0600 pu  va=   0.000 deg  q= -16.55 MVAr
+bus-2   vm=1.0450 pu  va=  -4.983 deg  q=  30.86 MVAr
+bus-3   vm=1.0100 pu  va= -12.725 deg  q=   6.08 MVAr
+losses 13.393 MW
+```
+
+Generators pinned at a reactive limit show up as `q_limited="min"` / `"max"` on their
+`GenResult` rows (none on case14; six on case118). See [Power flow](manual/power-flow.md) for
+the formulation, the Q-limit semantics and the parity figures.
+
 ## Build a network by hand
 
 You do not need a file. A two-bus network is a few lines:
@@ -221,7 +248,8 @@ native.save(mini, "mini.json")  # the native format is the model's JSON
 
 - [Network model](manual/model.md) — every entity, field, unit and validation code.
 - [Numerics](manual/numerics.md) — Ybus, Bbus, PTDF and LODF from the same network.
-- [Power flow](manual/power-flow.md) — the DC formulation in detail and the AC solver's
-  contract.
+- [Power flow](manual/power-flow.md) — the DC and AC formulations, Q-limit semantics,
+  effective roles, parity and timing figures.
 - [Jobs API](manual/jobs.md) — the stateless `run(SolveRequest)` surface for services.
-- [Examples](examples/index.md) — runnable scripts executed in CI.
+- [Examples](examples/index.md) — seven runnable scripts executed in CI, embedded in the
+  manual.

@@ -36,11 +36,34 @@ will be 0.1.0 on PyPI (wave M9).
   `VALIDATION` with every issue, `NO_SLACK_GENERATOR`, `BAD_REQUEST`, `INTERNAL`); a
   non-converged power flow is `status="ok"` with `converged=False`; warnings emitted by the
   solve are attached as strings. Manual page with executed examples and API reference page.
-- Landing in the same wave: AC Newton-Raphson power flow with pandapower Q-limit semantics
-  (`pf.solve_ac`, `AcOptions`); effective bus roles (`numerics.effective_roles`,
-  `NoSlackGeneratorError`, `SetpointConflictWarning`); island repair in importers
-  (`model.repair_islands`, `ISLAND_DEACTIVATED` warning, typed `ImportWarning`); runnable
-  `examples/` executed in CI.
+- `pf.solve_ac(net, *, options=AcOptions()) -> AcPowerFlowResult`: sparse polar
+  Newton-Raphson AC power flow (MATPOWER `newtonpf` formulation, `scipy.sparse.linalg.splu`),
+  tolerance 1e-8 pu on the mismatch ∞-norm, flat or warm start (`init="auto"|"flat"`),
+  reactive-limit enforcement with pandapower semantics (pin PV→PQ at the limit, never
+  restore, slack never limited, ≤ `max_q_rounds` rounds); non-convergence is
+  `converged=False`, never an exception. `pf.ac_newton.newton` is the positional solver;
+  `results.ac_result_from_arrays` builds the typed result. Parity with pandapower `runpp` at
+  machine precision on case14, case_ieee30, case57, case118 (Q-limits on) and case300
+  (Q-limits off and on), identical pinned sets; MATPOWER stored columns within 2e-3 pu /
+  0.5 deg outside the documented exclusions; case300 cold solve measured and echoed in CI.
+- Effective bus roles (`numerics.effective_roles`, `EffectiveRoles`): a PV bus without an
+  in-service generator solves as PQ, a slack without one raises `NoSlackGeneratorError`, the
+  last in-service generator's setpoint wins with a `SetpointConflictWarning` when setpoints
+  differ. Both solvers and `BusResult.role_effective` use the effective roles.
+- Island repair in importers (`model.repair_islands`, `model.repair_islands_entities`):
+  buses unreachable from the slack and their elements are deactivated before validation,
+  reported as typed `ImportIssue(code="ISLAND_DEACTIVATED", bus_ids, element_ids)`; the
+  model itself still rejects islands (`DISCONNECTED_BUS`). `io.matpower.load_with_report` /
+  `loads_with_report` return an `ImportReport` of typed issues; the `load_with_warnings`
+  strings are the same entries rendered `CODE: message`.
+- `examples/`: seven runnable scripts (load and validate, AC power flow, DC power flow, jobs
+  API, roles and islands, network matrices, results and export), each run by
+  `tests/unit/test_examples_run.py` and by the `examples` CI job, and embedded byte-for-byte
+  in the documentation's Examples gallery.
+- Documentation: the power-flow manual covers the AC solver as shipped (options, formulation,
+  Q-limit loop diagram, warm start, parity and timing tables); the model and formats manuals
+  document `ImportIssue`, `ImportReport` and `repair_islands`; getting started runs an AC
+  power flow.
 
 ### Added — wave M1 (substrate), merged
 
@@ -77,6 +100,13 @@ will be 0.1.0 on PyPI (wave M9).
 ### Changed
 
 - MATPOWER repair warnings are now `CODE: message` strings (`BASE_KV_REPLACED`,
-  `GENCOST_REACTIVE_IGNORED`, `ISLAND_DEACTIVATED`) — M2, landing with island repair.
+  `GENCOST_REACTIVE_IGNORED`, `ISLAND_DEACTIVATED`) — M2, with island repair.
+- The typed import-issue record is `model.ImportIssue` (`ImportIssueCode`); it was briefly
+  named `ImportWarning` on the wave branch, which shadowed the Python built-in. Behaviour is
+  unchanged.
+- `fixtures/matpower/PROVENANCE.md`, case300: the reference-solution wording now carries the
+  measured residual against the AC solver (8.5e-3 pu worst, 11 of 300 buses beyond 2e-3) and
+  withdraws the earlier "0.107 pu" and "pandapower cannot converge with Q-limits" figures,
+  which came from a tap-side defect in the research's oracle copy, not from the data.
 
 [Unreleased]: https://github.com/mambo10005/mambo-power/commits/epic/01-foundation

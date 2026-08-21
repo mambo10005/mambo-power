@@ -1,14 +1,13 @@
 """Typed, non-fatal findings reported by importers and repairs.
 
 A :class:`ValidationIssue` (``model.errors``) is something the model rejects; an
-:class:`ImportWarning` is something an importer *repaired* and wants the caller to know
+:class:`ImportIssue` is something an importer *repaired* and wants the caller to know
 about. Codes are a closed set so callers can dispatch on them; ``str(warning)`` is the
 ``CODE: message`` line the legacy ``list[str]`` APIs carry.
 
-Note: this class deliberately shares its name with :class:`builtins.ImportWarning` because
-the wave spec names it so. It is a pydantic record, not a :class:`Warning` subclass, and is
-never passed to :func:`warnings.warn`; import it as ``mambo_power.model.ImportWarning`` to
-keep the distinction visible.
+Note: the class was first shipped as ``ImportWarning`` (the wave spec's name) and renamed
+``ImportIssue`` because that name shadowed :class:`builtins.ImportWarning`. It is a pydantic
+record, not a :class:`Warning` subclass, and is never passed to :func:`warnings.warn`.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ImportWarningCode = Literal[
+ImportIssueCode = Literal[
     "ISLAND_DEACTIVATED",
     "BASE_KV_REPLACED",
     "GENCOST_REACTIVE_IGNORED",
@@ -30,12 +29,12 @@ ImportWarningCode = Literal[
 """
 
 
-class ImportWarning(BaseModel):
+class ImportIssue(BaseModel):
     """One repair an importer performed: stable ``code``, message, and the ids it touched."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    code: ImportWarningCode
+    code: ImportIssueCode
     message: str
     bus_ids: list[str] = Field(default_factory=list, description="Buses involved, if any.")
     element_ids: list[str] = Field(

@@ -137,16 +137,26 @@ Test Case Archive (https://labs.ece.uw.edu/pstca/), converted by MATPOWER's
   MATPOWER, not covered by MATPOWER's BSD licence (`record/m2-research.md`
   §4.2).
 - **Reference solution:** the stored VM/VA columns (4 / 2 decimals) are a
-  CDF-era (1991) solved point, NOT a solution of the shipped v2 data — and
-  the v2 tap edits are not the cause (the pre-v2 pandapower-bundled copy and
-  the verbatim file converge to the same point, 0.107 pu from the stored
-  columns at bus 17). case300 is therefore a convergence + self-consistency +
-  DC fixture and a pandapower-oracle column-parity fixture with Q-limits OFF
-  only (`record/m2-research.md` §1.2, §4.3; spec AC-1, AC-3, AC-7). With
-  Q-limits enforced pandapower does not converge on it (23 of 68 generators
-  violate their Q range at the unlimited solution).
-- **Known reference-quality findings:** the W1 reference-quality gate
-  (5 MVA; cap ceil(5%) = 15 buses) excludes 9 buses: 137 (7.7), 181 (7.3),
+  CDF-era (1991) solved point, NOT a converged solution of the shipped v2
+  data — and the v2 tap edits are not the cause (the pre-v2 pandapower-bundled
+  copy and the verbatim file converge to the same point). Measured against
+  our AC Newton-Raphson solution (Q-limits on, flat start, 5 iterations), the
+  stored VM columns are at worst 8.5e-3 pu away, with 11 of 300 buses beyond
+  the 2e-3 pu band (M2 S4, `tests/parity/test_ac_vs_matpower_stored.py`).
+  case300 is a convergence + self-consistency + DC fixture and a
+  pandapower-oracle column-parity fixture with Q-limits both OFF and ON
+  (spec AC-1, AC-3, AC-7): on a tap-side-correct oracle copy pandapower
+  converges case300 with `enforce_q_lims=True` in 2 iterations and pins the
+  same 10 generator buses we pin. Erratum: the earlier record of "0.107 pu
+  away at bus 17" and "pandapower cannot converge with Q-limits"
+  (`record/m2-research.md` §1.2, §4.3; M2 plan A11) came from a pandapower
+  `from_ppc` oracle that placed the tap of 16 transformers on the wrong
+  winding, i.e. a different network; those two figures are withdrawn and the
+  column-parity statement above replaces them.
+- **Known reference-quality findings (research transcription, not
+  re-measured by S4 — the column-parity figure above is the current
+  statement of how far the stored columns sit from a solution):** the W1
+  reference-quality gate (5 MVA; cap ceil(5%) = 15 buses) excluded 9 buses: 137 (7.7), 181 (7.3),
   196 (926.1), 231 (11.2), 235 (7.2), 237 (9.9), 238 (8.5), 2040 (926.9),
   9001 (5.0) MVA. The 927 MVA pair sits across branch row 390, 196-2040
   (r = 0.0001, x = 0.02, b = 0, tap = 1): the stored angles differ by 10.4

@@ -5,7 +5,7 @@ Policy (user decision D1, 2026-08-21: "importer repairs, model stays strict"): t
 built directly with an island is rejected. Importers call :func:`repair_islands_entities`
 on the raw entity lists *before* constructing the network, so the file loads, the island is
 switched off, and the caller receives one ``ISLAND_DEACTIVATED``
-:class:`~mambo_power.model.ImportWarning` per island naming the buses and elements.
+:class:`~mambo_power.model.ImportIssue` per island naming the buses and elements.
 
 Algorithm: breadth-first search from every in-service slack bus over in-service branches
 whose two endpoints are in service. Every in-service bus not reached is an island bus; it is
@@ -30,7 +30,7 @@ from typing import TypeVar
 
 from mambo_power.model.entities import Branch, Bus, Generator, Load, Shunt, Storage
 from mambo_power.model.network import Network
-from mambo_power.model.warnings import ImportWarning
+from mambo_power.model.warnings import ImportIssue
 
 _AtBus = TypeVar("_AtBus", Generator, Load, Shunt, Storage)
 
@@ -41,7 +41,7 @@ RepairedEntities = tuple[
     list[Load],
     list[Shunt],
     list[Storage],
-    list[ImportWarning],
+    list[ImportIssue],
 ]
 """What :func:`repair_islands_entities` returns: the six entity lists, then the warnings."""
 
@@ -107,7 +107,7 @@ def repair_islands_entities(
     new_shunts = _deactivate_at(shunts, island_buses)
     new_storage = _deactivate_at(storage, island_buses)
 
-    warnings: list[ImportWarning] = []
+    warnings: list[ImportIssue] = []
     for component in _components(island_buses, adjacency, buses):
         members = set(component)
         element_ids: list[str] = []
@@ -125,7 +125,7 @@ def repair_islands_entities(
             f"[{', '.join(element_ids)}]"
         )
         warnings.append(
-            ImportWarning(
+            ImportIssue(
                 code="ISLAND_DEACTIVATED",
                 message=message,
                 bus_ids=list(component),
@@ -136,7 +136,7 @@ def repair_islands_entities(
     return new_buses, new_branches, new_generators, new_loads, new_shunts, new_storage, warnings
 
 
-def repair_islands(net: Network) -> tuple[Network, list[ImportWarning]]:
+def repair_islands(net: Network) -> tuple[Network, list[ImportIssue]]:
     """Return a new, validated :class:`Network` with every island switched off, plus warnings.
 
     ``net`` is not modified. On an already-connected network the result is an equal copy and

@@ -7,20 +7,18 @@ state; every public function takes and returns pydantic models.
 
 ## Component diagram
 
-Solid arrows are the allowed import directions today; the lower groups are modules that
-this and later waves add (their dependencies are already fixed by the epic design).
+Solid arrows are the allowed import directions today; the lower group holds modules that
+later waves add (their dependencies are already fixed by the epic design).
 
 ```mermaid
 flowchart TB
-    subgraph present["Shipped (M1 + M2 so far)"]
-        model["model<br/>Network, entities, validation errors"]
-        io["io<br/>matpower, native"]
-        numerics["numerics<br/>NetworkArrays, ybus, bbus, ptdf, lodf"]
-        pf["pf<br/>solve_dc, dc.solve"]
+    subgraph present["Shipped (M1 + M2)"]
+        model["model<br/>Network, entities, validation errors,<br/>ImportIssue, repair_islands"]
+        io["io<br/>matpower, native, ImportReport"]
+        numerics["numerics<br/>NetworkArrays, ybus, bbus, ptdf, lodf,<br/>effective_roles"]
+        pf["pf<br/>solve_dc, solve_ac, dc.solve"]
+        ac["pf.ac_newton<br/>AcOptions, newton"]
         results["results<br/>BusResult, BranchResult, GenResult,<br/>ResultProvenance, from_arrays"]
-    end
-    subgraph wave["Landing in M2"]
-        ac["pf.ac_newton"]
         jobs["jobs<br/>SolveRequest, SolveResult, KINDS, run"]
     end
     subgraph later["Later waves"]

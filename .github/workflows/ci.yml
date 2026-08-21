@@ -39,6 +39,37 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run pytest
+      - name: AC-7 timing figure (case300 cold / warm seconds in the log)
+        # The ubuntu 3.12 leg is the contracted surface for the < 1.0 s cold-solve threshold;
+        # -s lets the test's print reach the log so the measured figure is recorded, not
+        # only the pass/fail verdict.
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: uv run pytest tests/parity/test_ac_timing.py -q -s -p no:cacheprovider
+
+  examples:
+    # AC-9: every script under examples/ runs to completion against the installed package.
+    # tests/unit/test_examples_run.py runs the same loop inside the test matrix; this job
+    # exists so each script's output is readable in the CI log on its own.
+    name: examples (run every script)
+    runs-on: ubuntu-latest
+    needs: []
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --locked --all-groups
+      - name: Run every example
+        run: |
+          set -euo pipefail
+          for f in examples/*.py; do
+            echo "::group::$f"
+            uv run python "$f" || { echo "::error::$f failed"; exit 1; }
+            echo "::endgroup::"
+          done
 
   install-smoke:
     # AC-8: the built wheel installs into a clean venv (no project, no dev group) and is

@@ -253,7 +253,63 @@ buses[0].base_kv
 ```
 
 Use it after editing a network in place and before handing it to a solver. Solvers do not
-re-validate either; `NetworkArrays.from_network` only re-checks the slack count.
+re-validate either; `NetworkArrays.from_network` only re-checks the slack count. (The
+[jobs API](jobs.md) does re-validate, because it must not trust its input.)
+
+## Import issues and island repair
+
+A `ValidationIssue` is something the model **rejects**; an `ImportIssue` is something an
+importer **repaired** and wants the caller to know about. Both are frozen pydantic records
+with a closed code set, so callers can dispatch on `code` without parsing text.
+
+| `ImportIssue` field | Type | Meaning |
+| --- | --- | --- |
+| `code` | `ImportIssueCode` | `"ISLAND_DEACTIVATED"`, `"BASE_KV_REPLACED"` or `"GENCOST_REACTIVE_IGNORED"`. |
+| `message` | `str` | Human-readable description. |
+| `bus_ids` | `list[str]` | Buses involved, if any. |
+| `element_ids` | `list[str]` | Branches, generators, loads, shunts or storage involved, if any. |
+
+`str(issue)` is the `CODE: message` line the legacy `list[str]` importer APIs return; the
+typed form is returned by `load_with_report` inside an `ImportReport` (see
+[File formats](formats.md#warnings-repairs)). The class was first shipped as
+`ImportWarning` and renamed because that shadowed the built-in of the same name; it is a
+record, not a `Warning`, and is never passed to `warnings.warn`.
+
+### `repair_islands`
+
+The model rejects an in-service bus that cannot reach the slack (`DISCONNECTED_BUS`). Real
+files contain such islands, so every importer runs the **one shared repair** before
+validation: `repair_islands(net) -> (Network, list[ImportIssue])` walks the in-service graph
+from the in-service slack over in-service branches whose end buses are both in service, sets
+`in_service=False` on every unreached bus and on every in-service branch, generator, load,
+shunt and storage attached to it, and returns a new, validated `Network` plus one
+`ISLAND_DEACTIVATED` issue **per island** listing the buses and the elements it switched off
+(elements that were already out are not listed). The input is never mutated. With no
+in-service slack nothing is changed — that is `NO_SLACK`'s job to report. The entity-level
+form, `repair_islands_entities(buses, branches, generators, loads, shunts, storage)`, is what
+importers call before they construct the `Network`.
+
+```python
+from mambo_power.io import matpower
+from mambo_power.model import repair_islands
+
+net = matpower.load("fixtures/matpower/case14.m")
+net.branches[13].in_service = False  # branch-14 (7-8) is case14's only bridge: bus-8 islands
+repaired, issues = repair_islands(net)
+print([(i.code, i.bus_ids, i.element_ids) for i in issues])
+print(sum(b.in_service for b in repaired.buses), "of", len(repaired.buses), "buses in service")
+print(sum(b.in_service for b in net.buses), "in the untouched input")
+```
+
+```text
+[('ISLAND_DEACTIVATED', ['bus-8'], ['gen-5'])]
+13 of 14 buses in service
+14 in the untouched input
+```
+
+The model itself stays strict: `Network.model_validate(...)` with the island switched back on
+raises `DISCONNECTED_BUS`. [`05_roles_and_islands.py`](../examples/index.md#5-roles-and-islands)
+shows both sides on the `case14_island` fixture.
 
 ## JSON schema
 

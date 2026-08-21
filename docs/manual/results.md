@@ -105,7 +105,7 @@ print(text[:120])
 
 ```text
 True
-{"provenance":{"engine":"mambo-power","version":"0.0.1.dev0","kind":"pf.dc","solver":"scipy.sparse.linalg.splu","started_a
+{"provenance":{"engine":"mambo-power","version":"0.0.1.dev0","kind":"pf.dc","solver":"scipy.sparse.linalg.splu","started
 ```
 
 Result models are frozen (`model_config.frozen = True`) — build a modified copy with
@@ -149,5 +149,11 @@ branch-1
 Solvers do not construct rows by hand. `results.dc_result_from_arrays(arr, theta_rad=...,
 p_from_pu=..., p_inj_pu=..., gen_p_pu=..., provenance=...)` is the one place that walks from
 `NetworkArrays` positions back to ids and multiplies per-unit quantities by `base_mva` on the
-way out; it validates array shapes and raises `ValueError` on a mismatch. The AC solver gets
-its own builder in the same module when it lands.
+way out; it validates array shapes and raises `ValueError` on a mismatch.
+`results.ac_result_from_arrays(arr, v=..., s_bus_pu=..., s_from_pu=..., s_to_pu=...,
+gen_p_pu=..., gen_q_pu=..., bus_type=..., q_limited=..., converged=..., iterations=...,
+max_mismatch_pu=..., q_limit_rounds=..., provenance=...)` is the AC counterpart: complex
+voltages become `vm_pu` / `va_deg`, complex flows become the four branch columns,
+`loading_pct` is the from-side apparent flow over the rating, and each generator's
+`q_limited` is inherited from its bus's pin. [`07_results_and_export.py`](../examples/index.md#7-results-and-export)
+round-trips an AC result and exports its tables to CSV.

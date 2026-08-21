@@ -4,7 +4,7 @@
 BFS from the in-service slack bus(es) over in-service branches whose endpoints are in
 service; every in-service bus not reached is deactivated together with its attached
 generators, loads, shunts, storage and branches, and each island is reported as one
-``ISLAND_DEACTIVATED`` :class:`ImportWarning`. This mirrors pandapower's
+``ISLAND_DEACTIVATED`` :class:`ImportIssue`. This mirrors pandapower's
 ``check_connectivity`` (unreached buses get ``BUS_TYPE = NONE``, their elements are dropped
 from the solve) and MATPOWER's ``ext2int`` handling of isolated buses — except that here the
 result is an explicit, validated :class:`Network` and a warning, never a NaN row.
@@ -21,7 +21,7 @@ from mambo_power.model import (
     Bus,
     BusType,
     Generator,
-    ImportWarning,
+    ImportIssue,
     Load,
     Network,
     NetworkValidationError,
@@ -68,7 +68,7 @@ def test_load_with_report_carries_typed_island_warning() -> None:
     assert net == matpower.load(ISLAND)
     assert report.codes == {"BASE_KV_REPLACED", "ISLAND_DEACTIVATED"}
     (w,) = [w for w in report.warnings if w.code == "ISLAND_DEACTIVATED"]
-    assert isinstance(w, ImportWarning)
+    assert isinstance(w, ImportIssue)
     assert w.bus_ids == ["bus-8"]
     assert w.element_ids == ["gen-5"]
     assert report.as_strings() == matpower.load_with_warnings(ISLAND)[1]
@@ -223,7 +223,7 @@ def test_two_islands_each_with_a_slack_are_both_kept_but_the_model_rejects_multi
 
 
 def test_import_warning_is_typed_and_prints_with_its_code() -> None:
-    w = ImportWarning(code="ISLAND_DEACTIVATED", message="m", bus_ids=["b1"], element_ids=[])
+    w = ImportIssue(code="ISLAND_DEACTIVATED", message="m", bus_ids=["b1"], element_ids=[])
     assert str(w) == "ISLAND_DEACTIVATED: m"
     with pytest.raises(ValidationError):  # closed code set
-        ImportWarning(code="SOMETHING_ELSE", message="m")  # type: ignore[arg-type]
+        ImportIssue(code="SOMETHING_ELSE", message="m")  # type: ignore[arg-type]
