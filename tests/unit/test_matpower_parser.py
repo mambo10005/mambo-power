@@ -303,6 +303,16 @@ def test_crlf_comments_tabs_blank_lines_and_scientific_notation() -> None:
     assert net.branches[0].r == 0.01
 
 
+def test_utf8_bom_does_not_hide_the_first_assignment(tmp_path: Path) -> None:
+    # A BOM-prefixed file whose first line is an mpc.* assignment must still parse: U+FEFF is
+    # not whitespace, so the anchored `^\\s*mpc\\.` regex would otherwise skip that line.
+    text = "mpc.baseMVA = 100;\n" + BUS_2 + "\n" + GEN_1 + "\n" + BRANCH_1 + "\n"
+    path = tmp_path / "bom.m"
+    path.write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
+    assert matpower.load(path) == matpower.loads(text)
+    assert matpower.loads("\ufeff" + text) == matpower.loads(text)
+
+
 def test_rows_without_semicolons_and_multiple_rows_per_line() -> None:
     text = _case(
         bus="mpc.bus = [\n1 3 0 0 0 0 1 1 0 110 1 1.1 0.9\n2 1 50 10 0 0 1 1 0 110 1 1.1 0.9\n];",

@@ -1,4 +1,4 @@
-"""A well-formed 3-bus network validates silently and the index helper is positional."""
+"""A well-formed 3-bus network validates silently; defaults apply; unknown fields fail."""
 
 import pytest
 from pydantic import ValidationError
@@ -52,10 +52,6 @@ def test_three_bus_validates_silently() -> None:
     assert net.schema_version == 1
     assert [b.id for b in net.buses] == ["bus-1", "bus-2", "bus-3"]
     assert net.shunts == [] and net.storage == [] and net.zones == []
-
-
-def test_bus_index_is_positional() -> None:
-    assert three_bus().bus_index() == {"bus-1": 0, "bus-2": 1, "bus-3": 2}
 
 
 def test_defaults_are_applied() -> None:

@@ -4,9 +4,11 @@ Each test builds the smallest network that violates exactly one invariant and as
 expected ``ValidationCode`` appears in ``NetworkValidationError.issues``.
 """
 
+import math
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from mambo_power.model import (
     Branch,
@@ -16,6 +18,7 @@ from mambo_power.model import (
     Network,
     NetworkValidationError,
     PiecewiseCost,
+    PolynomialCost,
     Storage,
     ValidationCode,
 )
@@ -130,8 +133,8 @@ def test_out_of_service_bus_is_not_disconnected() -> None:
 def test_duplicate_id() -> None:
     err = expect(
         "DUPLICATE_ID",
-        buses=[slack("b1"), pq("b1")],
-        branches=[line("l1", "b1", "b1")],
+        buses=[slack("b1"), pq("b1"), pq("b2")],
+        branches=[line("l1", "b1", "b2")],
     )
     assert any(i.code == "DUPLICATE_ID" and i.path == "buses[1].id" for i in err.issues)
 
@@ -206,6 +209,59 @@ def test_bad_base_kv() -> None:
             },
             "generators[0].cost.points",
         ),
+        # Correctness 2: a branch may not connect a bus to itself.
+        (
+            {
+                "buses": [slack("b1"), pq("b2")],
+                "branches": [line("l1", "b1", "b2"), line("l2", "b2", "b2")],
+            },
+            "branches[1].to_bus",
+        ),
+        # Correctness 3: tap_ratio <= 0 and r == x == 0 would reach the builders as NaN.
+        (
+            {"buses": [slack("b1"), pq("b2")], "branches": [line("l1", "b1", "b2", tap_ratio=0.0)]},
+            "branches[0].tap_ratio",
+        ),
+        (
+            {
+                "buses": [slack("b1"), pq("b2")],
+                "branches": [line("l1", "b1", "b2", tap_ratio=-1.0)],
+            },
+            "branches[0].tap_ratio",
+        ),
+        (
+            {"buses": [slack("b1"), pq("b2")], "branches": [line("l1", "b1", "b2", r=0.0, x=0.0)]},
+            "branches[0].x",
+        ),
+        # Critic 6: rating_mva 0 in a native file means zero capacity, not "no rating".
+        (
+            {
+                "buses": [slack("b1"), pq("b2")],
+                "branches": [line("l1", "b1", "b2", rating_mva=0.0)],
+            },
+            "branches[0].rating_mva",
+        ),
+        (
+            {"generators": [gen("g1", "b1", cost=PolynomialCost(coefficients=[]))]},
+            "generators[0].cost.coefficients",
+        ),
+        (
+            {"generators": [gen("g1", "b1", cost=PiecewiseCost(points=[(0.0, 0.0)]))]},
+            "generators[0].cost.points",
+        ),
+        (
+            # equal consecutive p: a vertical segment; MATPOWER requires strictly increasing x
+            {
+                "generators": [
+                    gen(
+                        "g1",
+                        "b1",
+                        cost=PiecewiseCost(points=[(0.0, 0.0), (10.0, 5.0), (10.0, 9.0)]),
+                    )
+                ]
+            },
+            "generators[0].cost.points",
+        ),
     ],
 )
 def test_bad_range(kwargs: dict[str, Any], path: str) -> None:
@@ -217,8 +273,8 @@ def test_bad_range(kwargs: dict[str, Any], path: str) -> None:
 def test_all_issues_are_reported_in_one_error() -> None:
     err = expect(
         "DUPLICATE_ID",
-        buses=[slack("b1"), pq("b1")],
-        branches=[line("l1", "b1", "b1")],
+        buses=[slack("b1"), pq("b1"), pq("b2")],
+        branches=[line("l1", "b1", "b2")],
         generators=[gen("g1", "b1", p_min_mw=50.0, p_max_mw=10.0)],
     )
     assert {"DUPLICATE_ID", "BAD_RANGE"} <= codes(err)
@@ -230,3 +286,34 @@ def test_model_validate_json_raises_the_same_error() -> None:
     with pytest.raises(NetworkValidationError) as excinfo:
         Network.model_validate_json('{"base_mva": 100, "buses": []}')
     assert "NO_SLACK" in codes(excinfo.value)
+
+
+# --- non-finite floats (critic issue 1) -----------------------------------------------------------
+
+
+def test_nan_field_is_rejected_at_construction() -> None:
+    with pytest.raises(ValidationError):
+        Branch(id="l1", from_bus="b1", to_bus="b2", r=0.01, x=math.nan, b=0.0)
+
+
+def test_inf_base_mva_is_rejected_at_construction() -> None:
+    with pytest.raises(ValidationError):
+        Network(base_mva=math.inf, buses=[slack("b1")])
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        '{"base_mva": Infinity, "buses": [{"id": "b1", "base_kv": 110.0, "type": "slack"}]}',
+        '{"base_mva": 100.0, "buses": [{"id": "b1", "base_kv": NaN, "type": "slack"}]}',
+        (
+            '{"base_mva": 100.0, "buses": [{"id": "b1", "base_kv": 110.0, "type": "slack"}],'
+            ' "loads": [{"id": "d", "bus": "b1", "p_mw": -Infinity, "q_mvar": 0.0}]}'
+        ),
+    ],
+)
+def test_non_standard_json_tokens_are_rejected_not_coerced(document: str) -> None:
+    # pydantic's JSON parser accepts NaN/Infinity tokens; allow_inf_nan=False must refuse them
+    # rather than letting a non-finite value (or a null) into a float field.
+    with pytest.raises(ValidationError):
+        Network.model_validate_json(document)

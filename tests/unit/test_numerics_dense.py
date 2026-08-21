@@ -5,9 +5,14 @@ this file — a double loop over branches for Ybus and Bbus, ``numpy.linalg.solv
 DC angles, and an actual network rebuild with one branch removed for LODF. No helper is
 shared with ``mambo_power.numerics``.
 
-The case is a 5-bus meshed core (buses 1-5, seven branches including a tapped and
-phase-shifted transformer and a parallel pair) plus one radial bus 6 hanging off bus 5, so
-that exactly one branch is a bridge and the undefined-LODF path is exercised.
+Every check runs on the hand-built 6-bus case *and* on each of the five MATPOWER fixtures
+(AC-7: "for every fixture"). The 6-bus case is a 5-bus meshed core (buses 1-5, seven
+branches including a tapped and phase-shifted transformer and a parallel pair) plus one radial
+bus 6 hanging off bus 5, so that exactly one branch is a bridge and the undefined-LODF path is
+exercised; the fixtures carry no phase shifter, so the assertions that need one stay on the
+6-bus case (``six_arr``). The brute-force LODF (one network rebuild per branch) runs here on
+the 6-bus case only and on the fixtures in the parity tier, to keep this tier under its time
+budget.
 """
 
 from __future__ import annotations
@@ -18,10 +23,14 @@ import math
 import numpy as np
 import pytest
 
+from mambo_power.io import matpower
 from mambo_power.model import Branch, Bus, Generator, Load, Network, Shunt
 from mambo_power.numerics import NetworkArrays, bbus, bf, bridges, lodf, p_shift, ptdf, ybus, yf_yt
+from tests._brute_force_lodf import brute_force_lodf
+from tests._fixtures import FIXTURES, FIXTURES_DIR
 
 BASE = 100.0
+CASES = ["six_bus", *FIXTURES]
 
 
 def six_bus() -> Network:
@@ -91,14 +100,26 @@ def six_bus() -> Network:
     )
 
 
-@pytest.fixture(scope="module")
-def net() -> Network:
-    return six_bus()
+@pytest.fixture(scope="module", params=CASES)
+def net(request: pytest.FixtureRequest) -> Network:
+    if request.param == "six_bus":
+        return six_bus()
+    loaded = matpower.load(FIXTURES_DIR / f"{request.param}.m")
+    # The dense helpers index buses by position in ``net.buses``; that equals the arrays'
+    # position only when nothing is out of service, which holds for every fixture.
+    assert all(b.in_service for b in loaded.buses), request.param
+    assert all(br.in_service for br in loaded.branches), request.param
+    return loaded
 
 
 @pytest.fixture(scope="module")
 def arr(net: Network) -> NetworkArrays:
     return NetworkArrays.from_network(net)
+
+
+@pytest.fixture(scope="module")
+def six_arr() -> NetworkArrays:
+    return NetworkArrays.from_network(six_bus())
 
 
 # --- dense re-derivations written out in full ---------------------------------------------------
@@ -157,15 +178,15 @@ def dense_bbus(net: Network) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nda
     return bmat, bfm, susc, pinj
 
 
-def dense_ptdf_column(net: Network, bus: int, slack: int) -> np.ndarray:
-    """Flows for a unit injection at ``bus`` withdrawn at ``slack`` by solving B θ = P directly."""
+def dense_ptdf(net: Network, slack: int) -> np.ndarray:
+    """Column ``j``: flows for a unit injection at bus ``j`` withdrawn at ``slack``, by solving
+    the reduced dense ``B θ = P`` directly (one right-hand side per bus)."""
     bmat, bfm, _, _ = dense_bbus(net)
     nb = bmat.shape[0]
     keep = [k for k in range(nb) if k != slack]
-    p = np.zeros(nb)
-    p[bus] += 1.0
-    p[slack] -= 1.0
-    theta = np.zeros(nb)
+    p = np.eye(nb)
+    p[slack, :] -= 1.0
+    theta = np.zeros((nb, nb))
     theta[keep] = np.linalg.solve(bmat[np.ix_(keep, keep)], p[keep])
     return bfm @ theta
 
@@ -176,7 +197,7 @@ def dense_ptdf_column(net: Network, bus: int, slack: int) -> np.ndarray:
 def test_ybus_matches_dense_double_loop(net: Network, arr: NetworkArrays) -> None:
     y_dense, _, _ = dense_ybus(net)
     y_sparse = ybus(arr)
-    assert y_sparse.shape == (6, 6)
+    assert y_sparse.shape == (arr.n_bus, arr.n_bus)
     assert y_sparse.dtype == np.complex128
     np.testing.assert_allclose(y_sparse.toarray(), y_dense, rtol=0, atol=1e-12)
 
@@ -196,9 +217,9 @@ def test_yf_yt_match_dense_and_assemble_ybus(net: Network, arr: NetworkArrays) -
     np.testing.assert_allclose(rebuilt, ybus(arr).toarray(), rtol=0, atol=1e-12)
 
 
-def test_ybus_is_not_symmetric_with_phase_shift(arr: NetworkArrays) -> None:
-    y = ybus(arr).toarray()
-    i, j = arr.bus_index["bus-3"], arr.bus_index["bus-4"]
+def test_ybus_is_not_symmetric_with_phase_shift(six_arr: NetworkArrays) -> None:
+    y = ybus(six_arr).toarray()
+    i, j = six_arr.bus_index["bus-3"], six_arr.bus_index["bus-4"]
     assert abs(y[i, j] - y[j, i]) > 1e-6
 
 
@@ -212,7 +233,12 @@ def test_bbus_matches_dense_double_loop(net: Network, arr: NetworkArrays) -> Non
     np.testing.assert_allclose(b_sparse.toarray(), b_dense, rtol=0, atol=1e-12)
     np.testing.assert_allclose(bf(arr).toarray(), bf_dense, rtol=0, atol=1e-12)
     np.testing.assert_allclose(p_shift(arr), pinj_dense, rtol=0, atol=1e-12)
+
+
+def test_phase_shifter_contributes_to_p_shift(six_arr: NetworkArrays) -> None:
+    _, _, _, pinj_dense = dense_bbus(six_bus())
     assert abs(pinj_dense).max() > 0.0  # the shifter really contributes
+    np.testing.assert_allclose(p_shift(six_arr), pinj_dense, rtol=0, atol=1e-12)
 
 
 def test_bbus_is_symmetric_with_zero_row_sums(arr: NetworkArrays) -> None:
@@ -233,19 +259,14 @@ def test_ptdf_slack_column_is_zero(arr: NetworkArrays) -> None:
 
 
 def test_ptdf_columns_equal_direct_dc_solve(net: Network, arr: NetworkArrays) -> None:
-    h = ptdf(arr)
-    for bus in range(arr.n_bus):
-        expected = dense_ptdf_column(net, bus, arr.slack)
-        np.testing.assert_allclose(h[:, bus], expected, rtol=0, atol=1e-10)
+    np.testing.assert_allclose(ptdf(arr), dense_ptdf(net, arr.slack), rtol=0, atol=1e-10)
 
 
 def test_ptdf_with_explicit_slack(net: Network, arr: NetworkArrays) -> None:
-    other = arr.bus_index["bus-4"]
+    other = arr.n_bus - 1 if arr.slack != arr.n_bus - 1 else 0
     h = ptdf(arr, slack=other)
     np.testing.assert_array_equal(h[:, other], 0.0)
-    for bus in range(arr.n_bus):
-        expected = dense_ptdf_column(net, bus, other)
-        np.testing.assert_allclose(h[:, bus], expected, rtol=0, atol=1e-10)
+    np.testing.assert_allclose(h, dense_ptdf(net, other), rtol=0, atol=1e-10)
 
 
 def test_ptdf_flows_conserve_at_every_bus(arr: NetworkArrays) -> None:
@@ -265,48 +286,34 @@ def test_ptdf_flows_conserve_at_every_bus(arr: NetworkArrays) -> None:
 # --- LODF and bridges ----------------------------------------------------------------------------
 
 
-def test_bridges_is_exactly_the_radial_branch(arr: NetworkArrays) -> None:
-    assert bridges(arr) == [arr.branch_index["br-56"]]
+def test_bridges_is_exactly_the_radial_branch(six_arr: NetworkArrays) -> None:
+    assert bridges(six_arr) == [six_arr.branch_index["br-56"]]
 
 
-def test_lodf_bridge_column_is_nan_and_diagonal_minus_one(arr: NetworkArrays) -> None:
+def test_lodf_bridge_columns_are_nan_and_diagonal_minus_one(arr: NetworkArrays) -> None:
     l_mat = lodf(arr)
     assert l_mat.shape == (arr.n_branch, arr.n_branch)
-    k_bridge = arr.branch_index["br-56"]
-    assert np.isnan(l_mat[:, k_bridge]).all()
+    bridge = bridges(arr)
     for k in range(arr.n_branch):
-        if k != k_bridge:
+        if k in bridge:
+            assert np.isnan(l_mat[:, k]).all()
+        else:
             assert l_mat[k, k] == -1.0
+            assert np.isfinite(l_mat[:, k]).all()
     nan_columns = [k for k in range(arr.n_branch) if np.isnan(l_mat[:, k]).any()]
-    assert nan_columns == bridges(arr)
+    assert nan_columns == bridge
 
 
-def test_lodf_matches_brute_force_outage(net: Network, arr: NetworkArrays) -> None:
-    h = ptdf(arr)
-    l_mat = lodf(arr)
+def test_lodf_matches_brute_force_outage(six_arr: NetworkArrays) -> None:
+    # The same check over the five fixtures (177 rebuilds on case118) lives in the parity tier:
+    # tests/parity/test_ybus_vs_pandapower.py::test_lodf_matches_brute_force_outage.
     rng = np.random.default_rng(11)
-    p = rng.normal(size=arr.n_bus)
-    p[arr.slack] -= p.sum()
-    pre = h @ p
-    for k in range(arr.n_branch):
-        if k in bridges(arr):
-            continue
-        assert abs(pre[k]) > 1e-6, "test injection must load every branch"
-        outaged = net.model_copy(deep=True)
-        outaged.branches = [
-            br.model_copy(update={"in_service": br.id != arr.branch_ids[k]}) for br in net.branches
-        ]
-        outaged = Network.model_validate(outaged.model_dump())
-        arr_k = NetworkArrays.from_network(outaged)
-        assert arr_k.bus_ids == arr.bus_ids
-        post = ptdf(arr_k) @ p
-        expected = np.zeros(arr.n_branch)
-        for l_idx, branch_id in enumerate(arr.branch_ids):
-            if l_idx == k:
-                expected[l_idx] = -1.0
-            else:
-                expected[l_idx] = (post[arr_k.branch_index[branch_id]] - pre[l_idx]) / pre[k]
-        np.testing.assert_allclose(l_mat[:, k], expected, rtol=0, atol=1e-8)
+    p = rng.normal(size=six_arr.n_bus)
+    p[six_arr.slack] -= p.sum()
+    expected = brute_force_lodf(six_bus(), six_arr, p)
+    keep = [k for k in range(six_arr.n_branch) if k not in bridges(six_arr)]
+    assert len(keep) == six_arr.n_branch - 1
+    np.testing.assert_allclose(lodf(six_arr)[:, keep], expected[:, keep], rtol=0, atol=1e-8)
 
 
 def test_lodf_accepts_precomputed_ptdf(arr: NetworkArrays) -> None:
@@ -317,6 +324,6 @@ def test_lodf_accepts_precomputed_ptdf(arr: NetworkArrays) -> None:
     )
 
 
-def test_dense_oracle_case_has_parallel_branches(arr: NetworkArrays) -> None:
-    pairs = list(zip(arr.f.tolist(), arr.t.tolist(), strict=True))
+def test_dense_oracle_case_has_parallel_branches(six_arr: NetworkArrays) -> None:
+    pairs = list(zip(six_arr.f.tolist(), six_arr.t.tolist(), strict=True))
     assert len(pairs) != len(set(pairs))

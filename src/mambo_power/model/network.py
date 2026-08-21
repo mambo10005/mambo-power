@@ -1,7 +1,7 @@
 """The :class:`Network` root model and its cross-entity invariants."""
 
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -25,7 +25,7 @@ class Network(BaseModel):
     a constructed network does not re-validate; call :func:`validate_network` to re-check.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=False)
+    model_config = ConfigDict(extra="forbid", frozen=False, allow_inf_nan=False)
 
     schema_version: Literal[1] = 1
     base_mva: float = Field(description="System MVA base for all per-unit quantities. Must be > 0.")
@@ -49,10 +49,6 @@ class Network(BaseModel):
         """The JSON schema of the native file format (snapshot-tested)."""
         return cls.model_json_schema()
 
-    def bus_index(self) -> dict[str, int]:
-        """Map bus id to its position in ``buses`` (all buses, in service or not)."""
-        return {bus.id: index for index, bus in enumerate(self.buses)}
-
 
 class _HasId(Protocol):
     id: str
@@ -61,6 +57,9 @@ class _HasId(Protocol):
 class _AtBus(Protocol):
     id: str
     bus: str
+
+
+_AddIssue = Callable[[ValidationCode, str, str], None]
 
 
 def validate_network(net: Network) -> list[ValidationIssue]:
@@ -136,6 +135,31 @@ def validate_network(net: Network) -> list[ValidationIssue]:
                 f"buses[{index}].v_min_pu",
                 f'bus "{bus.id}": v_min_pu {bus.v_min_pu} > v_max_pu {bus.v_max_pu}',
             )
+    for index, branch in enumerate(net.branches):
+        if branch.from_bus == branch.to_bus:
+            add(
+                "BAD_RANGE",
+                f"branches[{index}].to_bus",
+                f'branch "{branch.id}": from_bus and to_bus are both "{branch.from_bus}"',
+            )
+        if branch.tap_ratio is not None and not branch.tap_ratio > 0:
+            add(
+                "BAD_RANGE",
+                f"branches[{index}].tap_ratio",
+                f'branch "{branch.id}": tap_ratio must be > 0, got {branch.tap_ratio}',
+            )
+        if branch.r == 0 and branch.x == 0:
+            add(
+                "BAD_RANGE",
+                f"branches[{index}].x",
+                f'branch "{branch.id}": r and x are both 0 (no series impedance)',
+            )
+        if branch.rating_mva is not None and not branch.rating_mva > 0:
+            add(
+                "BAD_RANGE",
+                f"branches[{index}].rating_mva",
+                f'branch "{branch.id}": rating_mva must be > 0 when given, got {branch.rating_mva}',
+            )
     for index, gen in enumerate(net.generators):
         if gen.p_min_mw > gen.p_max_mw:
             add(
@@ -149,13 +173,27 @@ def validate_network(net: Network) -> list[ValidationIssue]:
                 f"generators[{index}].q_min_mvar",
                 f'generator "{gen.id}": q_min_mvar {gen.q_min_mvar} > q_max_mvar {gen.q_max_mvar}',
             )
+        if gen.cost is not None and gen.cost.kind == "polynomial" and not gen.cost.coefficients:
+            add(
+                "BAD_RANGE",
+                f"generators[{index}].cost.coefficients",
+                f'generator "{gen.id}": polynomial cost needs at least one coefficient',
+            )
         if gen.cost is not None and gen.cost.kind == "piecewise":
             p_values = [p for p, _ in gen.cost.points]
-            if any(later < earlier for earlier, later in zip(p_values, p_values[1:], strict=False)):
+            if len(p_values) < 2:
                 add(
                     "BAD_RANGE",
                     f"generators[{index}].cost.points",
-                    f'generator "{gen.id}": piecewise cost points must be non-decreasing in p_mw',
+                    f'generator "{gen.id}": piecewise cost needs at least two points',
+                )
+            elif any(
+                later <= earlier for earlier, later in zip(p_values, p_values[1:], strict=False)
+            ):
+                add(
+                    "BAD_RANGE",
+                    f"generators[{index}].cost.points",
+                    f'generator "{gen.id}": piecewise cost p_mw values must be strictly increasing',
                 )
     for index, unit in enumerate(net.storage):
         if not 0.0 <= unit.soc_initial <= 1.0:
@@ -191,7 +229,7 @@ def validate_network(net: Network) -> list[ValidationIssue]:
 def _check_connectivity(
     net: Network,
     slack_buses: Sequence[Bus],
-    add: Any,
+    add: _AddIssue,
 ) -> None:
     """DISCONNECTED_BUS: every in-service bus must reach the slack over live branches."""
     live = {bus.id for bus in net.buses if bus.in_service}

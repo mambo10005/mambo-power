@@ -6,9 +6,7 @@ import pytest
 
 from mambo_power.io import matpower, native
 from mambo_power.model import Network
-
-FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "matpower"
-FIXTURES = ["case14", "case30", "case_ieee30", "case57", "case118"]
+from tests._fixtures import FIXTURES, FIXTURES_DIR
 
 
 @pytest.mark.parametrize("name", FIXTURES)

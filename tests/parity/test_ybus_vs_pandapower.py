@@ -1,13 +1,14 @@
-"""AC-7 oracle: our Ybus / Yf / Yt / Bbus agree with pandapower's pypower builders.
+"""AC-7 oracle: our Ybus / Yf / Yt / Bbus / PTDF / LODF agree with pandapower's pypower builders.
 
 Oracle path (wave spec Design assumption (b)): ``pandapower.pypower.makeYbus.makeYbus(baseMVA,
-bus, branch)`` and ``pandapower.pypower.makeBdc.makeBdc(bus, branch)`` called directly on an
-internally-indexed ppc. The ppc comes from the S4 parity module's independent numpy read of
-the ``.m`` bytes (``read_mpc_numpy``), re-indexed here so that ``BUS_I`` runs 0..nb-1 in row
-order and the branch endpoint columns hold those positions; the branch matrix is zero-padded
-to pandapower's ``branch_cols`` width because ``branch_vectors`` reads the asymmetry columns.
-Bus alignment to our arrays goes through ``BUS_I`` → ``bus-<n>`` → ``NetworkArrays.bus_index``,
-never through row order.
+bus, branch)``, ``makeBdc.makeBdc(bus, branch)``, ``makePTDF.makePTDF(baseMVA, bus, branch)``
+and ``makeLODF.makeLODF(branch, PTDF)`` called directly on an internally-indexed ppc. The ppc
+comes from the shared independent numpy read of the ``.m`` bytes
+(:func:`tests.parity._mpc_reader.read_mpc_numpy`), re-indexed here so that ``BUS_I`` runs
+0..nb-1 in row order and the branch endpoint columns hold those positions; the branch matrix
+is zero-padded to pandapower's ``branch_cols`` width because ``branch_vectors`` reads the
+asymmetry columns. Bus alignment to our arrays goes through ``BUS_I`` → ``bus-<n>`` →
+``NetworkArrays.bus_index``, never through row order.
 
 The five fixtures carry no out-of-service buses or branches (S4 report §6.14), which the test
 asserts before comparing: the oracle builds Ybus over *all* ppc buses, while ``NetworkArrays``
@@ -17,36 +18,19 @@ element-by-element.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-from types import ModuleType
+import warnings
 from typing import Any
 
 import numpy as np
 import pytest
 
 from mambo_power.io import matpower
-from mambo_power.numerics import NetworkArrays, bbus, bf, bridges, p_shift, ybus, yf_yt
+from mambo_power.numerics import NetworkArrays, bbus, bf, bridges, lodf, p_shift, ptdf, ybus, yf_yt
+from tests._brute_force_lodf import brute_force_lodf
+from tests._fixtures import FIXTURES, FIXTURES_DIR
+from tests.parity._mpc_reader import read_mpc_numpy
 
-FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "matpower"
-FIXTURES = ["case14", "case30", "case_ieee30", "case57", "case118"]
 TOL = 1e-9
-
-
-def _s4_module() -> ModuleType:
-    """Load the S4 parity module by path (``--import-mode=importlib`` has no package)."""
-    name = "_s4_matpower_vs_pandapower"
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(
-        name, Path(__file__).with_name("test_matpower_vs_pandapower.py")
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def internal_ppc(raw: dict[str, Any]) -> tuple[float, np.ndarray, np.ndarray, dict[str, int]]:
@@ -70,7 +54,7 @@ def internal_ppc(raw: dict[str, Any]) -> tuple[float, np.ndarray, np.ndarray, di
 @pytest.fixture(scope="module", params=FIXTURES)
 def case(request: pytest.FixtureRequest) -> dict[str, Any]:
     path = FIXTURES_DIR / f"{request.param}.m"
-    raw = _s4_module().read_mpc_numpy(path)
+    raw = read_mpc_numpy(path)
     net = matpower.load(path)
     arr = NetworkArrays.from_network(net)
     base, bus, branch, id_to_pos = internal_ppc(raw)
@@ -85,6 +69,7 @@ def case(request: pytest.FixtureRequest) -> dict[str, Any]:
         "base": base,
         "bus": bus,
         "branch": branch,
+        "net": net,
         "arr": arr,
         "perm": perm,
     }
@@ -119,6 +104,50 @@ def test_bbus_bf_pshift_match_pandapower(case: dict[str, Any]) -> None:
     assert float(np.abs(bbus(arr).toarray() - b_pp).max()) <= TOL
     assert float(np.abs(bf(arr).toarray() - bf_pp).max()) <= TOL
     assert float(np.abs(p_shift(arr) - pbusinj_pp).max()) <= TOL
+
+
+def test_bus_type_codes_round_trip_from_raw(case: dict[str, Any]) -> None:
+    """Duplication 4: importer decode (``_BUS_TYPES``) and arrays encode (``BUS_TYPE_CODE``) agree.
+
+    The raw BUS_TYPE column is permuted into our bus order before comparing.
+    """
+    raw_types = case["bus"][:, 1].astype(int)[case["perm"]]
+    np.testing.assert_array_equal(case["arr"].bus_type, raw_types)
+
+
+def test_ptdf_lodf_match_pandapower(case: dict[str, Any]) -> None:
+    """Critic issue 5: independent PTDF/LODF oracle; bridge columns are undefined on both sides."""
+    from pandapower.pypower.makeLODF import makeLODF
+    from pandapower.pypower.makePTDF import makePTDF
+
+    arr, perm = case["arr"], case["perm"]
+    h_pp_raw = np.asarray(makePTDF(case["base"], case["bus"], case["branch"]))  # slack = REF bus
+    h = ptdf(arr)
+    worst = float(np.abs(h - h_pp_raw[:, perm]).max())
+    assert worst <= TOL, f"{case['name']}: max |PTDF diff| = {worst:.3e}"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # pypower divides by zero on bridge columns
+        l_pp = np.asarray(makeLODF(case["branch"], h_pp_raw))
+    l_ours = lodf(arr)
+    bridge = bridges(arr)
+    keep = [k for k in range(arr.n_branch) if k not in bridge]
+    worst = float(np.abs(l_ours[:, keep] - l_pp[:, keep]).max())
+    assert worst <= TOL, f"{case['name']}: max |LODF diff| = {worst:.3e}"
+    for k in bridge:
+        assert np.isnan(l_ours[:, k]).all()
+        assert not np.isfinite(l_pp[:, k]).all()
+
+
+def test_lodf_matches_brute_force_outage(case: dict[str, Any]) -> None:
+    """AC-7 on every fixture: LODF equals the single-outage PTDF difference, branch by branch."""
+    arr = case["arr"]
+    rng = np.random.default_rng(11)
+    p = rng.normal(size=arr.n_bus)
+    p[arr.slack] -= p.sum()
+    expected = brute_force_lodf(case["net"], arr, p)
+    keep = [k for k in range(arr.n_branch) if k not in bridges(arr)]
+    np.testing.assert_allclose(lodf(arr)[:, keep], expected[:, keep], rtol=0, atol=1e-8)
 
 
 def test_bridges_are_consistent_with_a_removal_bfs(case: dict[str, Any]) -> None:

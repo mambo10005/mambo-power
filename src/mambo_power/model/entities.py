@@ -19,7 +19,7 @@ BusType = Literal["slack", "pv", "pq"]
 
 
 class _Entity(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=False)
+    model_config = ConfigDict(extra="forbid", frozen=False, allow_inf_nan=False)
 
 
 class Geo(_Entity):
@@ -65,18 +65,18 @@ class PolynomialCost(_Entity):
 
     kind: Literal["polynomial"] = "polynomial"
     coefficients: list[float] = Field(
-        description="Polynomial coefficients, highest order first, cost per hour at p_mw."
+        description="Polynomial coefficients (at least one), highest order first, cost per hour."
     )
     startup: float = Field(default=0.0, description="Startup cost.")
     shutdown: float = Field(default=0.0, description="Shutdown cost.")
 
 
 class PiecewiseCost(_Entity):
-    """MATPOWER gencost MODEL 1: piecewise-linear (p_mw, cost) breakpoints, non-decreasing in p."""
+    """MATPOWER gencost MODEL 1: piecewise-linear (p_mw, cost) breakpoints, increasing in p."""
 
     kind: Literal["piecewise"] = "piecewise"
     points: list[tuple[float, float]] = Field(
-        description="(p_mw, cost) breakpoints; p_mw must be non-decreasing."
+        description="(p_mw, cost) breakpoints, at least two; p_mw must be strictly increasing."
     )
     startup: float = Field(default=0.0, description="Startup cost.")
     shutdown: float = Field(default=0.0, description="Shutdown cost.")

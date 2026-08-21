@@ -106,13 +106,14 @@ def loads(text: str) -> Network:
 
 def load_with_warnings(source: str | PathLike[str]) -> tuple[Network, list[str]]:
     """Parse the file at ``source`` and return ``(network, warnings)``."""
-    text = Path(source).read_text(encoding="utf-8", errors="replace")
+    text = Path(source).read_text(encoding="utf-8-sig", errors="replace")
     return loads_with_warnings(text)
 
 
 def loads_with_warnings(text: str) -> tuple[Network, list[str]]:
     """Parse case text and return ``(network, warnings)``; see the module docstring."""
-    case = _scan(text)
+    # A leading BOM is not whitespace and would hide an ``mpc.`` assignment on the first line.
+    case = _scan(text.lstrip("\ufeff"))
     return _build(case)
 
 
@@ -127,7 +128,6 @@ class _Row:
 
 @dataclass(frozen=True)
 class _Matrix:
-    line: int
     rows: list[_Row]
 
 
@@ -167,7 +167,7 @@ def _scan(text: str) -> _Case:
         opener_line = index + 1
         if rest.startswith("["):
             rows, index = _collect_block(lines, index, rest[1:], "]", opener_line)
-            case.matrices[name] = _Matrix(opener_line, rows)
+            case.matrices[name] = _Matrix(rows)
         elif rest.startswith("{"):
             _, index = _collect_block(lines, index, rest[1:], "}", opener_line)
         else:

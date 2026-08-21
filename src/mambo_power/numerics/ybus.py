@@ -27,6 +27,12 @@ def branch_admittances(
     arr: NetworkArrays,
 ) -> tuple[ComplexArray, ComplexArray, ComplexArray, ComplexArray]:
     """Per-branch ``(Yff, Yft, Ytf, Ytt)`` vectors."""
+    shorted = (arr.r == 0.0) & (arr.x == 0.0)
+    if np.any(shorted):
+        zero = [arr.branch_ids[k] for k in np.flatnonzero(shorted)]
+        raise ValueError(
+            f"series admittance undefined: r == x == 0 on in-service branch(es) {zero}"
+        )
     ys = np.asarray(1.0 / (arr.r + 1j * arr.x), dtype=np.complex128)
     bc = np.asarray(1j * arr.b / 2.0, dtype=np.complex128)
     a = np.asarray(arr.tap * np.exp(1j * arr.shift_rad), dtype=np.complex128)

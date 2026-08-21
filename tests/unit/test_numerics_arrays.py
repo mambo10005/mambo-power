@@ -197,6 +197,21 @@ def test_per_generator_arrays(arr: NetworkArrays) -> None:
     np.testing.assert_allclose(arr.gen_v_set, [1.05, 1.02, 1.03])
 
 
+def test_per_bus_sums_agree_with_per_generator_arrays(arr: NetworkArrays) -> None:
+    # bus-2 carries two in-service generators, so this is the multi-generator agreement case.
+    pairs = [
+        (arr.p_gen_pu, arr.gen_p_pu),
+        (arr.q_gen_pu, arr.gen_q_pu),
+        (arr.p_min_pu, arr.gen_p_min_pu),
+        (arr.p_max_pu, arr.gen_p_max_pu),
+        (arr.q_min_pu, arr.gen_q_min_pu),
+        (arr.q_max_pu, arr.gen_q_max_pu),
+    ]
+    for per_bus, per_gen in pairs:
+        summed = np.bincount(arr.gen_bus, weights=per_gen, minlength=arr.n_bus)
+        np.testing.assert_allclose(summed, per_bus, rtol=0, atol=1e-15)
+
+
 def test_view_is_frozen(arr: NetworkArrays) -> None:
     with pytest.raises(dataclasses.FrozenInstanceError):
         arr.slack = 1  # type: ignore[misc]

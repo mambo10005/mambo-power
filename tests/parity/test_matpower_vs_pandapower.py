@@ -19,11 +19,8 @@ the pandapower pipeline unchanged. The comparison then has two layers:
 
 from __future__ import annotations
 
-import io
 import math
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -31,36 +28,16 @@ import pytest
 
 from mambo_power.io import matpower
 from mambo_power.model import Network, PolynomialCost
+from tests._fixtures import FIXTURES, FIXTURES_DIR
+from tests.parity._mpc_reader import read_mpc_numpy
 
-FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "matpower"
-FIXTURES = ["case14", "case30", "case_ieee30", "case57", "case118"]
 TOL = 1e-9
 F_HZ = 60.0
 PP_MAX_VAL = 99999.0  # pandapower from_ppc sentinel for "no rating"
 BUS_TYPE = {3: "slack", 2: "pv", 1: "pq", 4: "pq"}
 
 
-# --- independent read of the .m bytes -----------------------------------------------------------
-
-
-def read_mpc_numpy(path: Path) -> dict[str, Any]:
-    """Read baseMVA and the numeric matrices with regex + ``numpy.loadtxt`` (1-based, raw)."""
-    text = re.sub(r"%[^\n]*", "", path.read_text(encoding="utf-8"))
-    base = re.search(r"mpc\.baseMVA\s*=\s*([^;\s]+)", text)
-    assert base is not None
-
-    def block(name: str) -> np.ndarray | None:
-        match = re.search(rf"mpc\.{name}\s*=\s*\[(.*?)\];", text, re.S)
-        if match is None:
-            return None
-        return np.loadtxt(io.StringIO(match.group(1).replace(";", "\n")), ndmin=2)
-
-    ppc: dict[str, Any] = {"version": "2", "baseMVA": float(base.group(1))}
-    for name in ("bus", "gen", "branch", "gencost"):
-        matrix = block(name)
-        if matrix is not None:
-            ppc[name] = matrix
-    return ppc
+# --- the pandapower half of from_mpc (the .m read is tests/parity/_mpc_reader.py) -----------------
 
 
 def pandapower_from_raw(raw: dict[str, Any]) -> Any:
