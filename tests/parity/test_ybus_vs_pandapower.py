@@ -136,7 +136,14 @@ def test_ptdf_lodf_match_pandapower(case: dict[str, Any]) -> None:
     assert worst <= TOL, f"{case['name']}: max |LODF diff| = {worst:.3e}"
     for k in bridge:
         assert np.isnan(l_ours[:, k]).all()
-        assert not np.isfinite(l_pp[:, k]).all()
+        # pypower's makeLODF scales column k by 1 / (1 - h_kk). For a bridge, h_kk is 1 in exact
+        # arithmetic; whether the BLAS-computed 1 - h_kk is exactly 0.0 (Linux/Windows OpenBLAS
+        # -> inf/NaN column) or ~1e-16 (macOS Accelerate -> huge but finite column) is platform
+        # noise. Accept either: the oracle column is non-finite or blows past 1e6.
+        col = l_pp[:, k]
+        assert (~np.isfinite(col)).any() or float(np.nanmax(np.abs(col))) > 1e6, (
+            f"{case['name']}: oracle bridge column {k} is finite and bounded"
+        )
 
 
 def test_lodf_matches_brute_force_outage(case: dict[str, Any]) -> None:
