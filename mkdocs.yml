@@ -111,6 +111,7 @@ nav:
       - mambo_power.numerics: api/numerics.md
       - mambo_power.pf: api/pf.md
       - mambo_power.results: api/results.md
+      - mambo_power.jobs: api/jobs.md
   - Design:
       - Architecture: design/architecture.md
       - Data model: design/data-model.md

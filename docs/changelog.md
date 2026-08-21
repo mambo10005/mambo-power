@@ -28,11 +28,18 @@ will be 0.1.0 on PyPI (wave M9).
   (`mkdocs build --strict`) and a GitHub Pages deploy workflow.
 - `tests/unit/test_docstrings.py`: every public module, class, function and method in
   `mambo_power` must carry a docstring.
+- `jobs`: the stateless, JSON-serialisable job surface (ADR-004) — `SolveRequest(kind,
+  network, options, job_id)`, `SolveResult(kind, job_id, status, result, error, provenance,
+  warnings)`, `StructuredError(code, message, issues, details)`, the `KINDS` registry
+  (`KindSpec`, `register`, `kinds`) with `pf.ac` and `pf.dc`, and `run` / `run_json`. Every
+  failure is a `status="failed"` result with a stable code (`UNKNOWN_KIND`, `BAD_OPTIONS`,
+  `VALIDATION` with every issue, `NO_SLACK_GENERATOR`, `BAD_REQUEST`, `INTERNAL`); a
+  non-converged power flow is `status="ok"` with `converged=False`; warnings emitted by the
+  solve are attached as strings. Manual page with executed examples and API reference page.
 - Landing in the same wave: AC Newton-Raphson power flow with pandapower Q-limit semantics
   (`pf.solve_ac`, `AcOptions`); effective bus roles (`numerics.effective_roles`,
   `NoSlackGeneratorError`, `SetpointConflictWarning`); island repair in importers
-  (`model.repair_islands`, `ISLAND_DEACTIVATED` warning, typed `ImportWarning`); the
-  stateless `jobs` API (`SolveRequest`, `SolveResult`, `KINDS`, `run`); runnable
+  (`model.repair_islands`, `ISLAND_DEACTIVATED` warning, typed `ImportWarning`); runnable
   `examples/` executed in CI.
 
 ### Added — wave M1 (substrate), merged
