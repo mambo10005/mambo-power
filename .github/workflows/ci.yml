@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: macos-latest
+            python: "3.12"
+          - os: windows-latest
+            python: "3.12"
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.13"
+    env:
+      # Overrides .python-version so the 3.11 / 3.13 legs really run on their interpreter.
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install ${{ matrix.python }}
+      - run: uv sync --locked --all-groups
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
+
+  install-smoke:
+    # AC-8: the built wheel installs into a clean venv (no project, no dev group) and is
+    # usable; the sdist is buildable and installable. Independent of the test matrix.
+    name: install smoke (wheel + sdist)
+    runs-on: ubuntu-latest
+    needs: []
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv build
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Wheel ships py.typed and nothing from fixtures/ or tests/
+        run: |
+          set -euo pipefail
+          listing="$(uv run --no-project --python 3.12 python -m zipfile -l dist/*.whl)"
+          echo "$listing"
+          grep -Eq '(^|/)py\.typed[[:space:]]' <<<"$listing" \
+            || { echo "::error::py.typed missing from wheel"; exit 1; }
+          if grep -E '(^|/)(fixtures|tests)/' <<<"$listing"; then
+            echo "::error::wheel bundles fixtures/ or tests/"; exit 1
+          fi
+
+      - name: Sdist carries src, tests, fixtures and nothing machine-local
+        run: |
+          set -euo pipefail
+          listing="$(tar -tzf dist/*.tar.gz)"
+          echo "$listing"
+          for required in src/mambo_power/py.typed tests/conftest.py fixtures/matpower/case14.m \
+                          README.md LICENSE pyproject.toml; do
+            grep -Eq "^[^/]+/${required}\$" <<<"$listing" \
+              || { echo "::error::sdist is missing ${required}"; exit 1; }
+          done
+          if grep -E '^[^/]+/(\.bionic|\.github|\.venv|uv\.lock|\.python-version)' <<<"$listing"; then
+            echo "::error::sdist bundles machine-local or CI files"; exit 1
+          fi
+
+      - name: Install wheel into a clean venv (no dev group) and load case14
+        run: |
+          set -euo pipefail
+          uv venv .smoke --python 3.12
+          uv pip install --python .smoke dist/*.whl
+          uv pip list --python .smoke
+          .smoke/bin/python -c "import mambo_power; from mambo_power.io import matpower; n = matpower.load('fixtures/matpower/case14.m'); print(mambo_power.__version__, len(n.buses))"
+
+      - name: Install sdist into a second clean venv and import
+        run: |
+          set -euo pipefail
+          uv venv .smoke2 --python 3.12
+          uv pip install --python .smoke2 dist/*.tar.gz
+          .smoke2/bin/python -c "import mambo_power; print('sdist install ok', mambo_power.__version__)"
