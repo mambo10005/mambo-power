@@ -26,6 +26,11 @@ dev = [
   "ruff",
   "mypy",
 ]
+docs = [
+  "mkdocs-material>=9.7",
+  "mkdocstrings[python]>=1.0",
+  "pymdown-extensions>=10.16",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mambo_power"]

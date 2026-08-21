@@ -97,3 +97,25 @@ jobs:
           uv venv .smoke2 --python 3.12
           uv pip install --python .smoke2 dist/*.tar.gz
           .smoke2/bin/python -c "import mambo_power; print('sdist install ok', mambo_power.__version__)"
+
+  docs:
+    # AC-8: the documentation site builds with zero warnings; the API reference is generated
+    # from the docstrings under src/, so a broken cross-reference or a missing page fails here.
+    name: docs (mkdocs --strict)
+    runs-on: ubuntu-latest
+    needs: []
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --locked --all-groups
+      - run: uv run mkdocs build --strict
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: site/
+          retention-days: 14
