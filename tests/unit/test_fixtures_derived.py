@@ -7,8 +7,7 @@ each file's header). Two things are checked here:
   matrices of case14 after applying the edit in numpy (``tests.parity._mpc_reader``, the
   independent reader), so nothing else drifted;
 * the importer's behaviour on each file TODAY, which S2 (effective roles, island repair)
-  builds on. ``case14_island`` is the one whose expected behaviour S2 flips — see the note on
-  that test.
+  built on. ``case14_island`` is the one whose expected behaviour S2 flipped — see that test.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ import numpy as np
 import pytest
 
 from mambo_power.io import matpower, native
-from mambo_power.model import NetworkValidationError
+from mambo_power.model import Network, NetworkValidationError
 from tests._fixtures import FIXTURES_DIR
 from tests.parity._mpc_reader import read_mpc_numpy
 
@@ -96,12 +95,21 @@ def test_roles_loads_with_one_unit_less_pv_bus_and_one_two_gen_bus() -> None:
     assert native.loads(native.dumps(net)) == net
 
 
-def test_island_raises_disconnected_bus_today() -> None:
-    # S2 (W4, design item 4) flips this: `load` / `load_with_warnings` will repair the island
-    # (deactivate bus-8 and gen-5, warn ISLAND_DEACTIVATED) and only a direct `Network(...)`
-    # keeps raising DISCONNECTED_BUS. Until S2 lands, the model's strictness reaches `load`.
+def test_island_is_repaired_by_the_importer_and_rejected_by_the_model() -> None:
+    # S2 (W4, design item 4): `load` / `load_with_warnings` repair the island (deactivate
+    # bus-8 and gen-5, warn ISLAND_DEACTIVATED); only a direct `Network(...)` keeps raising
+    # DISCONNECTED_BUS. The full behaviour is covered in tests/unit/test_islands.py.
+    net, warnings = matpower.load_with_warnings(DERIVED_DIR / "case14_island.m")
+    assert [b.in_service for b in net.buses if b.id == "bus-8"] == [False]
+    assert [g.in_service for g in net.generators if g.id == "gen-5"] == [False]
+    island = [w for w in warnings if w.startswith("ISLAND_DEACTIVATED:")]  # + 14 BASE_KV ones
+    assert len(island) == 1 and "bus-8" in island[0] and "gen-5" in island[0]
+    assert native.loads(native.dumps(net)) == net
+    raw = net.model_dump()
+    for bus in raw["buses"]:
+        bus["in_service"] = True
     with pytest.raises(NetworkValidationError) as excinfo:
-        matpower.load(DERIVED_DIR / "case14_island.m")
+        Network.model_validate(raw)
     assert excinfo.value.codes == {"DISCONNECTED_BUS"}
     assert any("bus-8" in str(issue) for issue in excinfo.value.issues)
 
