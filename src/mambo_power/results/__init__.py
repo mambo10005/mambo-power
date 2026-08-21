@@ -6,7 +6,7 @@ unknown fields and non-finite numbers rejected — keyed by the network's stable
 positional ``to_arrays()`` view. They are never attached to a ``Network``.
 """
 
-from mambo_power.results.from_arrays import dc_result_from_arrays
+from mambo_power.results.from_arrays import ac_result_from_arrays, dc_result_from_arrays
 from mambo_power.results.power_flow import (
     AcPowerFlowResult,
     DcPowerFlowResult,
@@ -33,5 +33,6 @@ __all__ = [
     "PowerFlowResultBase",
     "QLimitSide",
     "ResultProvenance",
+    "ac_result_from_arrays",
     "dc_result_from_arrays",
 ]
