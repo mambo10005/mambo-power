@@ -12,13 +12,25 @@ Units stay physical — MW, MVAr, kV, degrees, branch impedances in pu on ``base
 as the file stores them. Derived ids: ``bus-<BUS_I>``, ``gen-<row>``, ``branch-<row>``,
 ``load-<BUS_I>``, ``shunt-<BUS_I>``; loads and shunts are emitted only for non-zero rows.
 
-Two file conditions are repaired rather than rejected, and each repair is reported in the
-warning list returned by :func:`load_with_warnings` / :func:`loads_with_warnings`:
-``BASE_KV <= 0`` becomes ``1.0`` (CDF-derived cases carry 0 for "unknown"), and a ``gencost``
-with ``2 * ngen`` rows (reactive costs appended) keeps the first ``ngen`` rows. Everything else
-that is wrong with the *file* raises :class:`MatpowerImportError`; everything that is wrong
-with the *network* (no slack, dangling bus, ...) is left to :class:`~mambo_power.model.Network`
-validation, which raises :class:`~mambo_power.model.NetworkValidationError`.
+Three conditions are repaired rather than rejected, and each repair is reported as an
+:class:`~mambo_power.model.ImportIssue` — typed, in the
+:class:`~mambo_power.io.report.ImportReport` returned by :func:`load_with_report` /
+:func:`loads_with_report`, and as the ``CODE: message`` string in the legacy list returned by
+:func:`load_with_warnings` / :func:`loads_with_warnings`:
+
+* ``BASE_KV_REPLACED`` — ``BASE_KV <= 0`` becomes ``1.0`` (CDF-derived cases carry 0 for
+  "unknown");
+* ``GENCOST_REACTIVE_IGNORED`` — a ``gencost`` with ``2 * ngen`` rows (reactive costs
+  appended) keeps the first ``ngen`` rows;
+* ``ISLAND_DEACTIVATED`` — buses the slack cannot reach over in-service branches are switched
+  off with their elements by :func:`mambo_power.model.repair_islands_entities` *before* the
+  network is validated (W4, design item 4: the importer repairs, the model stays strict).
+
+Everything else that is wrong with the *file* raises :class:`MatpowerImportError`; everything
+that is wrong with the *network* (no slack, dangling bus, ...) is left to
+:class:`~mambo_power.model.Network` validation, which raises
+:class:`~mambo_power.model.NetworkValidationError`. :func:`load` / :func:`loads` discard the
+warnings.
 """
 
 from __future__ import annotations
@@ -30,26 +42,32 @@ from os import PathLike
 from pathlib import Path
 from typing import Literal
 
+from mambo_power.io.report import ImportReport
 from mambo_power.model import (
     Branch,
     Bus,
     BusType,
     Generator,
     GeneratorCost,
+    ImportIssue,
     Load,
     Network,
     PiecewiseCost,
     PolynomialCost,
     Shunt,
     Zone,
+    repair_islands_entities,
 )
 
 __all__ = [
+    "ImportReport",
     "MatpowerImportCode",
     "MatpowerImportError",
     "load",
+    "load_with_report",
     "load_with_warnings",
     "loads",
+    "loads_with_report",
     "loads_with_warnings",
 ]
 
@@ -105,16 +123,33 @@ def loads(text: str) -> Network:
 
 
 def load_with_warnings(source: str | PathLike[str]) -> tuple[Network, list[str]]:
-    """Parse the file at ``source`` and return ``(network, warnings)``."""
-    text = Path(source).read_text(encoding="utf-8-sig", errors="replace")
-    return loads_with_warnings(text)
+    """Parse the file at ``source`` and return ``(network, warnings)`` with string warnings.
+
+    Each string is ``str(warning)`` of the typed warning :func:`load_with_report` returns \u2014
+    ``CODE: message`` \u2014 kept as ``list[str]`` for M1 callers.
+    """
+    net, report = load_with_report(source)
+    return net, report.as_strings()
 
 
 def loads_with_warnings(text: str) -> tuple[Network, list[str]]:
-    """Parse case text and return ``(network, warnings)``; see the module docstring."""
+    """Parse case text and return ``(network, warnings)`` with string warnings."""
+    net, report = loads_with_report(text)
+    return net, report.as_strings()
+
+
+def load_with_report(source: str | PathLike[str]) -> tuple[Network, ImportReport]:
+    """Parse the file at ``source`` and return ``(network, report)`` with typed warnings."""
+    text = Path(source).read_text(encoding="utf-8-sig", errors="replace")
+    return loads_with_report(text)
+
+
+def loads_with_report(text: str) -> tuple[Network, ImportReport]:
+    """Parse case text and return ``(network, report)``; see the module docstring."""
     # A leading BOM is not whitespace and would hide an ``mpc.`` assignment on the first line.
     case = _scan(text.lstrip("\ufeff"))
-    return _build(case)
+    net, warnings = _build(case)
+    return net, ImportReport(warnings=warnings)
 
 
 # --- scanning: text -> matrices and scalars -----------------------------------------------------
@@ -255,8 +290,8 @@ def _matrix(case: _Case, name: str, required: bool) -> list[tuple[int, list[floa
 # --- building: matrices -> Network --------------------------------------------------------------
 
 
-def _build(case: _Case) -> tuple[Network, list[str]]:
-    warnings: list[str] = []
+def _build(case: _Case) -> tuple[Network, list[ImportIssue]]:
+    warnings: list[ImportIssue] = []
     base = case.scalars.get("baseMVA")
     if base is None:
         raise MatpowerImportError("MISSING_BASE_MVA", "mpc.baseMVA = ...; not found")
@@ -283,7 +318,14 @@ def _build(case: _Case) -> tuple[Network, list[str]]:
         base_kv = row[9]
         if not base_kv > 0:
             warnings.append(
-                f"{bus_id}: BASE_KV is {base_kv:g}; base_kv set to {DEFAULT_BASE_KV} (line {line})"
+                ImportIssue(
+                    code="BASE_KV_REPLACED",
+                    message=(
+                        f"{bus_id}: BASE_KV is {base_kv:g}; base_kv set to {DEFAULT_BASE_KV} "
+                        f"(line {line})"
+                    ),
+                    bus_ids=[bus_id],
+                )
             )
             base_kv = DEFAULT_BASE_KV
         zone = _label(row[10])
@@ -341,6 +383,12 @@ def _build(case: _Case) -> tuple[Network, list[str]]:
         for k, (line, row) in enumerate(branch_rows, start=1)
     ]
 
+    # W4: switch off islands on the raw entities, before the model's strict validation.
+    buses, branches, generators, loads, shunts, storage, island_warnings = repair_islands_entities(
+        buses, branches, generators, loads, shunts, []
+    )
+    warnings.extend(island_warnings)
+
     net = Network(
         base_mva=base_mva,
         buses=buses,
@@ -348,20 +396,26 @@ def _build(case: _Case) -> tuple[Network, list[str]]:
         generators=generators,
         loads=loads,
         shunts=shunts,
+        storage=storage,
         zones=list(zones.values()),
     )
     return net, warnings
 
 
 def _costs(
-    rows: list[tuple[int, list[float]]], n_gen: int, warnings: list[str]
+    rows: list[tuple[int, list[float]]], n_gen: int, warnings: list[ImportIssue]
 ) -> list[GeneratorCost | None]:
     if not rows:
         return [None] * n_gen
     if len(rows) == 2 * n_gen and n_gen > 0:
         warnings.append(
-            f"mpc.gencost has {len(rows)} rows for {n_gen} generators; the second half "
-            f"(reactive power costs) is ignored (line {rows[0][0]})"
+            ImportIssue(
+                code="GENCOST_REACTIVE_IGNORED",
+                message=(
+                    f"mpc.gencost has {len(rows)} rows for {n_gen} generators; the second half "
+                    f"(reactive power costs) is ignored (line {rows[0][0]})"
+                ),
+            )
         )
         rows = rows[:n_gen]
     elif len(rows) != n_gen:

@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from mambo_power.model import Branch, Bus, Generator, Network
-from mambo_power.numerics import NetworkArrays, bbus, lodf, ptdf, ybus
+from mambo_power.numerics import NetworkArrays, UnsolvableNetworkError, bbus, lodf, ptdf, ybus
 
 
 def two_bus() -> Network:
@@ -55,10 +55,14 @@ def test_ybus_rejects_zero_series_impedance() -> None:
 
 
 def test_bbus_rejects_zero_reactance() -> None:
+    """C2: named rather than a bare ``ValueError`` — a valid ``x == 0`` network is a
+    user-data problem DC cannot solve, distinct from the malformed-input ``ValueError``s
+    elsewhere in this module (``UnsolvableNetworkError`` is deliberately not a ``ValueError``,
+    same design as ``NoSlackGeneratorError`` — module docstring)."""
     net = two_bus()
     net.branches[0].x = 0.0
     arr = NetworkArrays.from_network(net)
-    with pytest.raises(ValueError, match=r"DC susceptance undefined.*l1"):
+    with pytest.raises(UnsolvableNetworkError, match=r"DC susceptance undefined.*l1"):
         bbus(arr)
 
 

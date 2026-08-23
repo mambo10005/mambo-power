@@ -19,6 +19,7 @@ import numpy.typing as npt
 from scipy import sparse
 
 from mambo_power.numerics.arrays import NetworkArrays
+from mambo_power.numerics.errors import UnsolvableNetworkError
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -27,7 +28,9 @@ def branch_susceptance(arr: NetworkArrays) -> FloatArray:
     """Per-branch DC susceptance ``1 / (x · tap)``."""
     if np.any(arr.x == 0.0):
         zero = [arr.branch_ids[k] for k in np.flatnonzero(arr.x == 0.0)]
-        raise ValueError(f"DC susceptance undefined: x == 0 on in-service branch(es) {zero}")
+        raise UnsolvableNetworkError(
+            f"DC susceptance undefined: x == 0 on in-service branch(es) {zero}"
+        )
     result: FloatArray = 1.0 / (arr.x * arr.tap)
     return result
 

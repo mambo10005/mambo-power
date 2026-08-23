@@ -1,0 +1,120 @@
+site_name: mambo-power
+site_description: Fundamental Python package for power system analysis and electricity market modelling
+site_url: https://mambo10005.github.io/mambo-power/
+repo_url: https://github.com/mambo10005/mambo-power
+repo_name: mambo10005/mambo-power
+edit_uri: edit/epic/01-foundation/docs/
+copyright: MIT licence
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - autorefs
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: sphinx
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: true
+            members_order: source
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_signature_annotations: true
+            separate_signature: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            show_if_no_docstring: false
+            docstring_section_style: table
+            filters: ["!^_"]
+
+# Renders the reST roles used in the code's docstrings (:class:`X`) as cross-reference links.
+hooks:
+  - docs/hooks/rest_roles.py
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path: ["examples", "."]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Manual:
+      - Network model: manual/model.md
+      - File formats: manual/formats.md
+      - Numerics: manual/numerics.md
+      - Power flow: manual/power-flow.md
+      - Results: manual/results.md
+      - Jobs API: manual/jobs.md
+  - Examples: examples/index.md
+  - API reference:
+      - mambo_power.model: api/model.md
+      - mambo_power.io.matpower: api/io-matpower.md
+      - mambo_power.io.native: api/io-native.md
+      - mambo_power.numerics: api/numerics.md
+      - mambo_power.pf: api/pf.md
+      - mambo_power.results: api/results.md
+      - mambo_power.jobs: api/jobs.md
+  - Design:
+      - Architecture: design/architecture.md
+      - Data model: design/data-model.md
+      - Decisions: design/decisions.md
+  - Changelog: changelog.md
+  - Contributing: contributing.md

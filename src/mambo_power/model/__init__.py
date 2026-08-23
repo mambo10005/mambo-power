@@ -1,4 +1,5 @@
-"""Data model: the pydantic v2 ``Network`` and its entities, plus named validation errors."""
+"""Data model: the pydantic v2 ``Network`` and its entities, named validation errors, typed
+import warnings, and the island repair every importer applies before validation."""
 
 from mambo_power.model.entities import (
     Branch,
@@ -15,7 +16,9 @@ from mambo_power.model.entities import (
     Zone,
 )
 from mambo_power.model.errors import NetworkValidationError, ValidationCode, ValidationIssue
+from mambo_power.model.islands import repair_islands, repair_islands_entities
 from mambo_power.model.network import Network, validate_network
+from mambo_power.model.warnings import ImportIssue, ImportIssueCode
 
 __all__ = [
     "Branch",
@@ -24,6 +27,8 @@ __all__ = [
     "Generator",
     "GeneratorCost",
     "Geo",
+    "ImportIssue",
+    "ImportIssueCode",
     "Load",
     "Network",
     "NetworkValidationError",
@@ -34,5 +39,7 @@ __all__ = [
     "ValidationCode",
     "ValidationIssue",
     "Zone",
+    "repair_islands",
+    "repair_islands_entities",
     "validate_network",
 ]
