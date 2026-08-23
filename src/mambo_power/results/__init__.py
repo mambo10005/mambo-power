@@ -7,6 +7,7 @@ positional ``to_arrays()`` view. They are never attached to a ``Network``.
 """
 
 from mambo_power.results.from_arrays import ac_result_from_arrays, dc_result_from_arrays
+from mambo_power.results.n1 import N1BranchFlag, N1OutageResult, N1Result
 from mambo_power.results.power_flow import (
     AcPowerFlowResult,
     DcPowerFlowResult,
@@ -29,6 +30,9 @@ __all__ = [
     "BusRole",
     "DcPowerFlowResult",
     "GenResult",
+    "N1BranchFlag",
+    "N1OutageResult",
+    "N1Result",
     "PowerFlowArrays",
     "PowerFlowResultBase",
     "QLimitSide",
