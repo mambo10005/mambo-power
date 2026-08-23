@@ -64,3 +64,21 @@ S2 role/island tests.
 - `mpc.gen` row 1 (bus 1, the slack bus's only generator): `GEN_STATUS` 1 -> 0.
   The slack bus still exists and is in service, so the model accepts the file;
   `numerics.effective_roles` must raise `NoSlackGeneratorError` on it.
+
+### case14_pwl.m — AC-5 (W4, convex piecewise-linear generator costs)
+- No MATPOWER-shipped fixture carries any MODEL-1 (piecewise) `gencost` data
+  (record/m3-research.md §2.2 — every fixture's `gencost` is MODEL 2). This
+  fixture exists solely to exercise `opf.dc_opf`'s convex-PWL-cost LP path
+  (wave M3, slice S3) against real multi-bus topology; it is a fresh synthetic
+  derivation, not a fit to any published data.
+- `mpc.gencost` row 2 (gen-2, bus 2, `Pmax` 140): `MODEL` 2 -> 1, four
+  breakpoints `(0,0), (40,800), (90,2050), (140,3550)`. Segment slopes 20, 25,
+  30 $/MWh — strictly increasing, i.e. convex.
+- `mpc.gencost` row 3 (gen-3, bus 3, `Pmax` 100): `MODEL` 2 -> 1, four
+  breakpoints `(0,0), (30,600), (70,1800), (100,3000)`. Segment slopes 20, 30,
+  40 $/MWh — strictly increasing, i.e. convex.
+- `mpc.gencost` rows 1, 4, 5 (gen-1/slack, gen-4, gen-5): unchanged MODEL 2
+  polynomial rows, widened with trailing zero padding to the file's now-uniform
+  12-column row width (`mpc.gencost` rows must be rectangular; MODEL 2 import
+  only reads each row's first `NCOST` coefficients, so the padding is inert).
+- `mpc.bus`, `mpc.gen` (all fields but `gencost`), `mpc.branch`: unchanged.
