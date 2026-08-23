@@ -40,3 +40,18 @@ def test_importer_reproduces_the_file_counts() -> None:
 def test_native_round_trip_is_identity() -> None:
     net = matpower.load(CASE300)
     assert native.loads(native.dumps(net)) == net
+
+
+def test_provenance_case300_entry_carries_the_licence_exclusion_and_no_bsd_claim() -> None:
+    """AC-11: the case300 entry in PROVENANCE.md quotes MATPOWER's own carve-out for its case
+    files (not covered by the BSD license) and never claims the fixture itself is BSD-licensed
+    (audit m2-audit.md §1, "Uncovered list": W7 had no criterion for this clause)."""
+    text = (FIXTURES_DIR / "PROVENANCE.md").read_text(encoding="utf-8")
+    start = text.index("### case300.m")
+    end = text.index("\n## ", start)
+    entry = text[start:end]
+    assert "not covered by MATPOWER's BSD licence" in entry
+    assert SHA256 in entry
+    # no sentence in the entry affirmatively claims the fixture is BSD-licensed
+    for phrase in ("is BSD", "under the BSD", "BSD-licensed", "BSD licensed"):
+        assert phrase not in entry, phrase

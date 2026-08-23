@@ -3,9 +3,8 @@
 > Consolidated per-fixture provenance record (sources, lineage, reference
 > solutions, known reference defects): see `PROVENANCE.md` in this directory.
 
-Byte-identical copies of the verbatim MATPOWER distribution files in
-`packages/io/test/fixtures/matpower/` (see that directory's SOURCES.md for the
-retrieval table: MATPOWER `master` `data/` directory via raw.githubusercontent.com,
+Byte-identical copies of the verbatim MATPOWER distribution files (retrieval
+table below: MATPOWER `master` `data/` directory via raw.githubusercontent.com,
 retrieved 2026-08-19; upstream IEEE provenance in each file's header, converted
 from IEEE Common Data Format, https://labs.ece.uw.edu/pstca/).
 
@@ -23,11 +22,12 @@ MATPOWER are not covered by the BSD license", so no BSD claim is made for them
 
 Reference solutions: the VM (voltage magnitude, pu) and VA (voltage angle, deg)
 columns of each file's `mpc.bus` matrix are the solved operating points shipped
-by MATPOWER with the distribution — the published reference the parity suite
-(W1-R5 / AC-4) compares against — except case300, whose stored columns are
+by MATPOWER with the distribution — the published reference the parity tests
+(AC-4) compare against — except case300, whose stored columns are
 not a solution of the shipped data (see its `PROVENANCE.md` section; pandapower
-with Q-limits off is the oracle there). This directory is the one copy both runners
-consume (Node suite here; browser harness in S8) per W1 design decision 3.
+with Q-limits off is the oracle there). This directory is the one copy
+mambo-power's `tests/parity/` and `tests/unit/` consume — see `PROVENANCE.md`
+"Consumers".
 
 Do not edit these files.
 

@@ -10,3 +10,7 @@ slack convention and the AC solver's contract.
 ## DC solver over arrays
 
 ::: mambo_power.pf.dc
+
+## AC solver over arrays
+
+::: mambo_power.pf.ac_newton

@@ -68,6 +68,7 @@ from scipy.sparse.linalg import splu
 from mambo_power.numerics.arrays import BUS_TYPE_CODE, NetworkArrays
 from mambo_power.numerics.roles import EffectiveRoles
 from mambo_power.numerics.ybus import ybus
+from mambo_power.pf._common import absorb_slack_p
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
@@ -75,6 +76,14 @@ ComplexArray = npt.NDArray[np.complex128]
 
 SOLVER = "scipy.sparse.linalg.splu"
 """Linear-algebra backend name stamped into the result provenance."""
+
+_DIVERGENCE_FACTOR = 1e6
+"""Stop a Newton solve once ‖F‖∞ exceeds this multiple of its starting value.
+
+Caller-controlled ``max_iter`` is now bounded (:class:`AcOptions`), but a genuinely diverging
+start can still burn the whole bound doing no useful work — this catches that case without
+touching the well-behaved (converging or merely slow) ones, which never grow past their own
+starting mismatch by anywhere near this factor."""
 
 _PQ, _PV, _SLACK = BUS_TYPE_CODE["pq"], BUS_TYPE_CODE["pv"], BUS_TYPE_CODE["slack"]
 
@@ -91,9 +100,9 @@ class AcOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     tol: float = Field(default=1e-8, gt=0.0, description="Mismatch ∞-norm tolerance, pu.")
-    max_iter: int = Field(default=20, ge=1, description="Newton iterations per solve.")
+    max_iter: int = Field(default=20, ge=1, le=1000, description="Newton iterations per solve.")
     q_limits: bool = Field(default=True, description="Enforce generator reactive limits.")
-    max_q_rounds: int = Field(default=10, ge=0, description="Maximum Q-limit re-solves.")
+    max_q_rounds: int = Field(default=10, ge=0, le=100, description="Maximum Q-limit re-solves.")
     init: Literal["auto", "flat"] = Field(default="auto", description="Starting point rule.")
 
 
@@ -176,6 +185,7 @@ def newton_raphson(
 
     f = mismatch(v)
     norm = float(np.max(np.abs(f))) if f.size else 0.0
+    norm0 = norm
     converged = bool(np.isfinite(norm) and norm <= tol)
     iterations = 0
     message: str | None = None
@@ -208,6 +218,13 @@ def newton_raphson(
         if not np.isfinite(norm):
             message = f"non-finite mismatch at iteration {iterations}"
             break
+        if norm0 > 0.0 and norm > _DIVERGENCE_FACTOR * norm0:
+            message = (
+                f"diverging: ‖F‖∞ = {norm:.3e} pu exceeds "
+                f"{_DIVERGENCE_FACTOR:.0e}× the starting mismatch ({norm0:.3e} pu) "
+                f"at iteration {iterations}"
+            )
+            break
         converged = norm <= tol
     if not converged and message is None:
         message = f"did not converge in {max_iter} iterations (‖F‖∞ = {norm:.3e} pu)"
@@ -224,14 +241,11 @@ def allocate_generation(
     ``fixedQg`` the same way, ``run_newton_raphson_pf.py:246``).
     """
     n_gen = len(arr.gen_ids)
-    gen_p = arr.gen_p_pu.copy()
     gen_q = np.zeros(n_gen)
     if n_gen == 0:
-        return gen_p, gen_q
-    slack_gens = np.flatnonzero(arr.gen_bus == arr.slack)
-    if slack_gens.size:
-        p_bus = s_bus[arr.slack].real + arr.p_load_pu[arr.slack]
-        gen_p[slack_gens[0]] += p_bus - arr.p_gen_pu[arr.slack]
+        return arr.gen_p_pu.copy(), gen_q
+    p_bus = float(s_bus[arr.slack].real + arr.p_load_pu[arr.slack])
+    gen_p = absorb_slack_p(arr, p_bus)
     q_bus = s_bus.imag + arr.q_load_pu
     q_bus[q_limited == 1] = arr.q_max_pu[q_limited == 1]
     q_bus[q_limited == -1] = arr.q_min_pu[q_limited == -1]

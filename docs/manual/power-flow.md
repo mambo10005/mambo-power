@@ -67,9 +67,11 @@ naming that situation is the job of [effective roles](#effective-bus-roles).
 
 ### Errors
 
-`pf.dc.solve` raises `ValueError` when a branch has `x == 0` (susceptance undefined) or when
-the reduced \(B'\) is singular or yields non-finite angles — an islanded bus set that slipped
-past validation. Through the [jobs API](jobs.md) these become structured failures.
+`pf.dc.solve` raises `UnsolvableNetworkError` when a branch has `x == 0` (susceptance
+undefined — a valid network the DC numerics cannot solve, not a solver bug) or `ValueError`
+when the reduced \(B'\) is singular or yields non-finite angles — an islanded bus set that
+slipped past validation. Through the [jobs API](jobs.md) these become structured failures
+(`UNSOLVABLE_NETWORK` and `INTERNAL` respectively).
 
 ### The result
 

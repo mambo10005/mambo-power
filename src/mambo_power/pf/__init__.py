@@ -120,6 +120,7 @@ def solve_ac(net: Network, *, options: AcOptions | None = None) -> AcPowerFlowRe
         max_mismatch_pu=sol.max_mismatch_pu,
         q_limit_rounds=sol.q_limit_rounds,
         provenance=provenance,
+        message=sol.message,
     )
 
 

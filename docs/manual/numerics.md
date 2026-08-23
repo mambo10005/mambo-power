@@ -130,7 +130,9 @@ P = B_\text{bus}\,\theta + P_\text{shift} .
 | `bbus.branch_susceptance(arr)` | Per-branch \(b_k\). |
 | `bbus.incidence(arr)` | \(C_{ft}\). |
 
-A branch with `x == 0` has undefined DC susceptance and raises `ValueError`.
+A branch with `x == 0` has undefined DC susceptance and raises
+[`UnsolvableNetworkError`](../api/numerics.md) — a valid network the DC numerics cannot solve,
+distinct from the malformed-input `ValueError`s elsewhere on this page.
 
 ## Power transfer distribution factors — `ptdf`
 

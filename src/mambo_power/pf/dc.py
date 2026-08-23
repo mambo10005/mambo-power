@@ -44,6 +44,7 @@ from scipy.sparse.linalg import splu
 
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import bbus, bf, p_shift, pf_shift
+from mambo_power.pf._common import absorb_slack_p
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -74,8 +75,10 @@ def declared_injection(arr: NetworkArrays) -> FloatArray:
 def solve(arr: NetworkArrays) -> DcSolution:
     """Solve ``B'θ = P − p_shift`` with the slack at 0 and return angles, flows and injections.
 
-    Raises ``ValueError`` when a branch has ``x == 0`` (susceptance undefined) or when the
-    reduced ``B'`` is singular / yields non-finite angles (an islanded bus set).
+    Raises :class:`~mambo_power.numerics.UnsolvableNetworkError` when a branch has ``x == 0``
+    (susceptance undefined; user data DC cannot solve, distinct from a malformed-input
+    ``ValueError``) or ``ValueError`` when the reduced ``B'`` is singular / yields non-finite
+    angles (an islanded bus set).
     """
     b_matrix = bbus(arr)
     p_declared = declared_injection(arr)
@@ -95,9 +98,10 @@ def solve(arr: NetworkArrays) -> DcSolution:
     p_from: FloatArray = np.asarray(bf(arr) @ theta, dtype=np.float64).ravel() + pf_shift(arr)
     p_inj: FloatArray = np.asarray(b_matrix @ theta, dtype=np.float64).ravel() + p_shift(arr)
 
-    gen_p = arr.gen_p_pu.copy()
-    slack_gens = np.flatnonzero(arr.gen_bus == arr.slack)
-    if slack_gens.size:
-        gen_p[slack_gens[0]] += p_inj[arr.slack] - p_declared[arr.slack]
+    # realised gross generation the slack bus supplies = realised net injection plus what
+    # declared_injection subtracted to declare it (load, shunt); absorb_slack_p undoes that
+    # subtraction on the other side (arr.p_gen_pu[arr.slack]) — see its docstring.
+    p_bus = float(p_inj[arr.slack] + arr.p_load_pu[arr.slack] + arr.g_shunt_pu[arr.slack])
+    gen_p = absorb_slack_p(arr, p_bus)
 
     return DcSolution(theta_rad=theta, p_from_pu=p_from, p_inj_pu=p_inj, gen_p_pu=gen_p)

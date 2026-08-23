@@ -124,6 +124,7 @@ def ac_result_from_arrays(
     max_mismatch_pu: float,
     q_limit_rounds: int,
     provenance: ResultProvenance,
+    message: str | None = None,
 ) -> AcPowerFlowResult:
     """Map an AC solution in ``arr`` order to an :class:`AcPowerFlowResult` in MW/MVAr/degrees.
 
@@ -133,6 +134,8 @@ def ac_result_from_arrays(
     Q-limit pinning and ``q_limited`` the per-bus pin side (0 / +1 max / -1 min), which every
     generator at the bus inherits (limits are enforced on the bus aggregate). Non-finite
     voltages are rejected by the result model, so callers pass the last finite iterate.
+    ``message`` is :attr:`~mambo_power.pf.ac_newton.AcSolution.message`, threaded through
+    unchanged (set when ``converged`` is False, ``None`` otherwise).
     """
     if v.shape != (arr.n_bus,) or s_bus_pu.shape != (arr.n_bus,):
         raise ValueError("bus arrays must have shape (n_bus,)")
@@ -189,4 +192,5 @@ def ac_result_from_arrays(
         iterations=iterations,
         max_mismatch_mva=max_mismatch_pu * base,
         q_limit_rounds=q_limit_rounds,
+        message=message,
     )

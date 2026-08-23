@@ -7,7 +7,11 @@ per-unit conversion site; every builder here takes that view, never a ``Network`
 
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import bbus, bf, p_shift
-from mambo_power.numerics.errors import NoSlackGeneratorError, SetpointConflictWarning
+from mambo_power.numerics.errors import (
+    NoSlackGeneratorError,
+    SetpointConflictWarning,
+    UnsolvableNetworkError,
+)
 from mambo_power.numerics.lodf import bridges, lodf
 from mambo_power.numerics.ptdf import ptdf
 from mambo_power.numerics.roles import EffectiveRoles, effective_roles
@@ -18,6 +22,7 @@ __all__ = [
     "NetworkArrays",
     "NoSlackGeneratorError",
     "SetpointConflictWarning",
+    "UnsolvableNetworkError",
     "bbus",
     "bf",
     "bridges",

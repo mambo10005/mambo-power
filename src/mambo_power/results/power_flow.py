@@ -93,3 +93,8 @@ class AcPowerFlowResult(PowerFlowResultBase):
     iterations: int = Field(ge=0, description="Newton iterations summed over all Q-limit rounds.")
     max_mismatch_mva: float = Field(ge=0.0, description="Final power-mismatch infinity norm, MVA.")
     q_limit_rounds: int = Field(ge=0, description="Outer Q-limit enforcement rounds run.")
+    message: str | None = Field(
+        default=None,
+        description="Diagnostic when converged is False (singular Jacobian, iteration or "
+        "Q-limit-round exhaustion, naming the still-violating buses); None otherwise.",
+    )

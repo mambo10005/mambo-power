@@ -36,6 +36,7 @@ FailureCode = Literal[
     "BAD_OPTIONS",
     "VALIDATION",
     "NO_SLACK_GENERATOR",
+    "UNSOLVABLE_NETWORK",
     "INTERNAL",
 ]
 """The codes :func:`mambo_power.jobs.run` / :func:`mambo_power.jobs.run_json` emit (M2)."""

@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 from mambo_power.model import Branch, Bus, Generator, Load, Network, Shunt
-from mambo_power.numerics import NetworkArrays
+from mambo_power.numerics import NetworkArrays, UnsolvableNetworkError
 from mambo_power.pf import DcSolution, solve_dc
 from mambo_power.pf import dc as pf_dc
 from mambo_power.results import DcPowerFlowResult
@@ -226,7 +226,9 @@ def test_branch_endpoints_are_ids(result: DcPowerFlowResult) -> None:
 
 
 def test_zero_reactance_branch_is_a_named_error() -> None:
+    """C2: user data (a legal ``x == 0`` branch), not a solver bug — ``UnsolvableNetworkError``,
+    not a bare ``ValueError`` (jobs.run maps it to the structured UNSOLVABLE_NETWORK code)."""
     net = three_bus()
     net.branches[0].x = 0.0
-    with pytest.raises(ValueError, match="x == 0"):
+    with pytest.raises(UnsolvableNetworkError, match="x == 0"):
         solve_dc(net)

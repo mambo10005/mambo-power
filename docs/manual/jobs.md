@@ -73,6 +73,7 @@ discriminator lives on the parent, not inside the result.
 | `BAD_OPTIONS` | `options` did not validate against the kind's options model (wrong type, unknown key, any key for a kind without options). |
 | `VALIDATION` | The network failed validation — on mutation after construction, or in the request JSON (`run_json`); `issues` holds every code and path. |
 | `NO_SLACK_GENERATOR` | The slack bus has no in-service generator (`NoSlackGeneratorError` from `effective_roles`). |
+| `UNSOLVABLE_NETWORK` | A valid network the numerics it was handed to cannot solve, e.g. DC on a branch with `x == 0` (`UnsolvableNetworkError`) — user data, not a solver bug. |
 | `BAD_REQUEST` | `run_json` only: the text is not valid JSON or not a `SolveRequest`. |
 | `INTERNAL` | Anything else the runner raised (singular matrix, a bug): `"ExceptionType: message"`. |
 
@@ -108,7 +109,7 @@ run_json(text: str) -> str
 3. Re-check the network's invariants with `validate_network` (`VALIDATION`) — a `Network`
    validates on construction but not on mutation, so `run` does not trust its input.
 4. Call the runner under `warnings.catch_warnings(record=True)`; wrap what it raises
-   (`VALIDATION`, `NO_SLACK_GENERATOR`, `INTERNAL`).
+   (`VALIDATION`, `NO_SLACK_GENERATOR`, `UNSOLVABLE_NETWORK`, `INTERNAL`).
 5. Check the runner returned the kind's `result_model`, copy its provenance and the captured
    warnings onto the `SolveResult`.
 

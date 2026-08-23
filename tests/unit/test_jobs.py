@@ -282,6 +282,32 @@ def test_malformed_request_json_is_a_failed_result() -> None:
     assert not_json.kind == ""
 
 
+def test_deeply_nested_malformed_json_is_a_failed_result_not_a_crash() -> None:
+    """S4.1: pydantic's own parser bails on depth with a caught ``ValidationError``, but the
+    ``_peek`` helper's own ``json.loads`` on the same text raised an uncaught ``RecursionError``
+    — nothing crossing the boundary is the whole contract of ``run_json`` (module docstring)."""
+    text = "[" * 5000 + "]" * 5000
+    out = SolveResult.model_validate_json(run_json(text))
+    _assert_failed(out, "BAD_REQUEST")
+    assert out.kind == ""
+    assert out.job_id is None
+
+
+def test_dc_of_a_zero_reactance_branch_is_unsolvable_network_not_internal(case14: Network) -> None:
+    """C2: a branch with ``x == 0`` is a legal ``Network`` (BAD_RANGE only fires on a branch
+    with r == x == 0, model M1 fold item B) but DC susceptance is undefined for it — a
+    user-data problem, not a solver bug, so it must not be filed as INTERNAL (review
+    m2-review-6axis.md, Correctness finding 2)."""
+    branches = list(case14.branches)
+    branches[0] = branches[0].model_copy(update={"x": 0.0})
+    assert branches[0].r != 0.0  # legal per validate_network; only DC cannot solve it
+    net = case14.model_copy(update={"branches": branches})
+    out = run(SolveRequest(kind="pf.dc", network=net))
+    error = _assert_failed(out, "UNSOLVABLE_NETWORK")
+    assert "x == 0" in error.message
+    assert branches[0].id in error.message
+
+
 def test_slack_without_generator_is_a_failed_result() -> None:
     for kind in ("pf.ac", "pf.dc"):
         out = run(SolveRequest(kind=kind, network=_network("case14_noslackgen")))
@@ -352,5 +378,6 @@ def test_non_convergence_is_ok_with_converged_false(case14: Network) -> None:
     assert isinstance(out.result, AcPowerFlowResult)
     assert out.result.converged is False
     assert out.result.iterations == 1
+    assert out.result.message is not None and "did not converge" in out.result.message
     assert out.provenance is not None
     assert out.provenance.options["max_iter"] == 1

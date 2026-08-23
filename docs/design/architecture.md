@@ -32,12 +32,13 @@ flowchart TB
     numerics --> model
     pf --> numerics
     pf --> results
+    pf --> model
     results --> numerics
     ac --> numerics
-    ac --> results
     jobs --> pf
     jobs --> results
     jobs --> model
+    jobs --> numerics
     opf -.-> numerics
     n1 -.-> pf
     n1 -.-> numerics

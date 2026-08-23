@@ -29,6 +29,15 @@ class NoSlackGeneratorError(Exception):
         )
 
 
+class UnsolvableNetworkError(Exception):
+    """A ``Network`` that passes :func:`~mambo_power.model.validate_network` but cannot be
+    solved by the numerics it was handed to — e.g. DC susceptance is undefined when a branch
+    carries ``x == 0`` with ``r != 0`` (legal under the model, since ``BAD_RANGE`` only rejects
+    ``r == x == 0``). This is user data, not a solver bug: :func:`mambo_power.jobs.run` maps it
+    to the structured ``UNSOLVABLE_NETWORK`` failure code rather than ``INTERNAL``.
+    """
+
+
 class SetpointConflictWarning(UserWarning):
     """Several in-service generators at one bus carry different voltage setpoints.
 

@@ -10,8 +10,10 @@ Pipeline of :func:`run` (design item 6):
    mutation, so ``run`` does not trust its input);
 4. call the runner under ``warnings.catch_warnings(record=True)`` and wrap what it raises:
    :class:`~mambo_power.model.NetworkValidationError` → ``VALIDATION`` with ``.issues``;
-   :class:`~mambo_power.numerics.NoSlackGeneratorError` → ``NO_SLACK_GENERATOR``; anything
-   else → ``INTERNAL`` with ``"ExceptionType: message"``;
+   :class:`~mambo_power.numerics.NoSlackGeneratorError` → ``NO_SLACK_GENERATOR``;
+   :class:`~mambo_power.numerics.UnsolvableNetworkError` → ``UNSOLVABLE_NETWORK`` (a valid
+   network the numerics it was handed to cannot solve, e.g. DC on an ``x == 0`` branch —
+   user data, not a solver bug); anything else → ``INTERNAL`` with ``"ExceptionType: message"``;
 5. check the runner returned the kind's ``result_model`` (else ``INTERNAL``), copy its
    provenance and the captured warnings onto the :class:`~mambo_power.jobs.SolveResult`.
 
@@ -41,7 +43,7 @@ import mambo_power
 from mambo_power.jobs.models import ResultModel, SolveRequest, SolveResult, StructuredError
 from mambo_power.jobs.registry import KINDS
 from mambo_power.model import NetworkValidationError, ValidationIssue, validate_network
-from mambo_power.numerics import NoSlackGeneratorError
+from mambo_power.numerics import NoSlackGeneratorError, UnsolvableNetworkError
 from mambo_power.results import ResultProvenance
 
 NO_SOLVER = "none"
@@ -153,6 +155,8 @@ def run(request: SolveRequest) -> SolveResult:
             failure = ("VALIDATION", str(exc), exc.issues)
         except NoSlackGeneratorError as exc:
             failure = ("NO_SLACK_GENERATOR", str(exc), None)
+        except UnsolvableNetworkError as exc:
+            failure = ("UNSOLVABLE_NETWORK", str(exc), None)
         except Exception as exc:  # noqa: BLE001 — the boundary's whole point
             failure = ("INTERNAL", f"{type(exc).__name__}: {exc}", None)
     captured = _messages(caught)
@@ -187,7 +191,10 @@ def _peek(text: str) -> tuple[str, str | None]:
     """Best-effort ``(kind, job_id)`` from request text that failed to validate."""
     try:
         payload = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # best-effort by definition — a deeply nested payload can blow the recursion limit
+        # inside json.loads itself (not just pydantic's own depth check), and _peek must
+        # never be the thing that lets an exception cross run_json's boundary.
         return "", None
     if not isinstance(payload, dict):
         return "", None

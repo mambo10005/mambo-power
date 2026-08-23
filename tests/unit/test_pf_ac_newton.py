@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from mambo_power.model import Branch, Bus, Generator, Load, Network, Shunt
 from mambo_power.numerics import NetworkArrays, SetpointConflictWarning, effective_roles
@@ -56,7 +57,14 @@ def generator(
     )
 
 
-def three_bus(*, q_min_2: float = -100.0, q_max_2: float = 100.0, v_set_2: float = 1.01) -> Network:
+def three_bus(
+    *,
+    q_min_2: float = -100.0,
+    q_max_2: float = 100.0,
+    v_set_2: float = 1.01,
+    load_p_mw: float = 70.0,
+    load_q_mvar: float = 30.0,
+) -> Network:
     return Network(
         base_mva=BASE,
         buses=[
@@ -93,7 +101,7 @@ def three_bus(*, q_min_2: float = -100.0, q_max_2: float = 100.0, v_set_2: float
             generator("gen-1b", "bus-1", 12.0),
             generator("gen-2", "bus-2", 40.0, v_set=v_set_2, q_min=q_min_2, q_max=q_max_2),
         ],
-        loads=[Load(id="load-3", bus="bus-3", p_mw=70.0, q_mvar=30.0)],
+        loads=[Load(id="load-3", bus="bus-3", p_mw=load_p_mw, q_mvar=load_q_mvar)],
         shunts=[Shunt(id="shunt-3", bus="bus-3", g_mw=5.0, b_mvar=10.0)],
     )
 
@@ -248,6 +256,29 @@ def test_max_iter_one_returns_not_converged() -> None:
     assert not sol.converged
     assert sol.iterations == 1
     assert sol.max_mismatch_pu > 1e-8
+    assert np.all(np.isfinite(sol.v))
+
+
+def test_max_iter_and_max_q_rounds_are_bounded() -> None:
+    """S4.2: unbounded work from caller-controlled options — ``run_json`` hands both straight
+    through to an untrusted caller (review m2-review-6axis.md, Security finding 2)."""
+    AcOptions(max_iter=1000)  # the ceiling itself is fine
+    AcOptions(max_q_rounds=100)
+    with pytest.raises(ValidationError):
+        AcOptions(max_iter=1001)
+    with pytest.raises(ValidationError):
+        AcOptions(max_q_rounds=101)
+
+
+def test_diverging_start_stops_early_with_a_diverging_message() -> None:
+    """S4.2: a genuinely diverging start (an extreme overload, far past any Q-limit/physical
+    range) is stopped by the divergence guard well short of the (now bounded) ``max_iter``
+    cap, rather than burning the whole cap doing no useful work."""
+    net = three_bus(load_p_mw=1e11, load_q_mvar=4e10, q_min_2=-1e12, q_max_2=1e12)
+    _, sol = solve_arrays(net, AcOptions(max_iter=1000, q_limits=False))
+    assert not sol.converged
+    assert sol.iterations < 10  # would run to 1000 without the guard
+    assert sol.message is not None and "diverging" in sol.message
     assert np.all(np.isfinite(sol.v))
 
 
@@ -520,6 +551,7 @@ def test_solve_ac_not_converged_is_reported_not_raised() -> None:
     result = solve_ac(three_bus(), options=AcOptions(max_iter=1))
     assert not result.converged and result.iterations == 1
     assert result.max_mismatch_mva > 0.0
+    assert result.message is not None and "did not converge" in result.message
 
 
 def test_solve_dc_reports_effective_roles() -> None:

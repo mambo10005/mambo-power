@@ -3,20 +3,17 @@
 One consolidated record per fixture file: where it came from, what lineage its
 data carries, what serves as the parity reference solution, and what is known
 about that reference's quality. Every claim below is transcribed from an
-existing in-repo record — the retrieval table in
-`packages/io/test/fixtures/matpower/SOURCES.md`, this directory's `SOURCES.md`,
-each fixture file's own header comments, and the AC parity suite header
-(`packages/engine-pf/test/solveAcPf.test.ts`) — or from the parity suite's
-printed gate output. Nothing here is asserted beyond those sources; each
-section cites where its facts live.
+existing in-repo record — this directory's own `SOURCES.md`, each fixture
+file's own header comments, and the AC parity test headers under
+`tests/parity/` — or from those tests' own printed gate output. Nothing here
+is asserted beyond those sources; each section cites where its facts live.
 
 The five M1 files are byte-identical copies of the verbatim MATPOWER distribution
-files in `packages/io/test/fixtures/matpower/` (this directory's `SOURCES.md`),
-retrieved 2026-08-19 from the MATPOWER `master` branch `data/` directory via
-raw.githubusercontent.com (retrieval table in the io `SOURCES.md`). The sixth
-file, `case300.m`, was retrieved the same way on 2026-08-20 and is pinned by git
-blob SHA-1 and sha256 (its section below; `tests/unit/test_fixture_case300.py`
-re-checks the digest). Do not edit them.
+files (this directory's `SOURCES.md`), retrieved 2026-08-19 from the MATPOWER
+`master` branch `data/` directory via raw.githubusercontent.com (retrieval
+table below). The sixth file, `case300.m`, was retrieved the same way on
+2026-08-20 and is pinned by git blob SHA-1 and sha256 (its section below;
+`tests/unit/test_fixture_case300.py` re-checks the digest). Do not edit them.
 
 Synthetic variants for AC-4 / AC-5 live in `derived/` with their own
 `derived/PROVENANCE.md`; they are not upstream bytes and are not in the parity
@@ -169,7 +166,7 @@ Test Case Archive (https://labs.ece.uw.edu/pstca/), converted by MATPOWER's
 ## Reference-quality findings (shared context)
 
 - **Q-limit-enforced lineage:** the stored solutions are compared under the
-  AMENDED AC-4 (W1-R5, user-ratified 2026-08-19, option C): Q-limit
+  AMENDED AC-4 (user-ratified 2026-08-19, option C): Q-limit
   enforcement ON, data-precision bands max |VM| error 2e-3 pu and max |VA|
   error 0.5 deg, slack-relative angles. The bands are set by the reference
   data itself, not the solver: the stored columns keep 3 decimals of VM and
@@ -181,9 +178,9 @@ Test Case Archive (https://labs.ece.uw.edu/pstca/), converted by MATPOWER's
   stored columns violate the shipped data by more than 5 MVA (P at non-slack
   buses, Q additionally at PQ buses) is a defective reference point, excluded
   from column comparison and printed with its magnitude; the gate is capped
-  at ceil(5%) of buses per case (AC test header; `GATE_MVA` in
-  `packages/engine-pf/src/parity.ts`). Measured exclusions (parity suite gate
-  output, 2026-08-19 run): case_ieee30 bus 3 (8.2 MVA); case57 buses 14
+  at ceil(5%) of buses per case (AC test header; the `EXCLUDED` table in
+  `tests/parity/test_ac_vs_matpower_stored.py`). Measured exclusions (parity
+  test gate output, 2026-08-19 run): case_ieee30 bus 3 (8.2 MVA); case57 buses 14
   (21.2), 46 (45.8), 47 (24.7); case118 buses 17 (45.3), 30 (129.7),
   38 (31.3), 68 (10.5); case14 none. case300 (M2 research, 2026-08-20 run,
   same gate recomputed densely): 9 buses, listed in its section above.
@@ -197,6 +194,15 @@ gated as described, remain the published reference.
 
 ## Consumers
 
-This directory is the one copy both parity runners consume — the Node suite
-in `packages/engine-pf/test/` and the S8 browser harness — per W1 design
-decision 3 (this directory's `SOURCES.md`).
+This directory is the one copy mambo-power's tests consume — `tests/parity/`
+(AC/DC solve, Ybus/Bbus/PTDF/LODF, and stored-column comparisons against
+pandapower and MATPOWER's own reference solutions) and `tests/unit/`
+(importer round-trip, fixture byte/hash checks and this provenance record's
+own wording, e.g. `tests/unit/test_fixture_case300.py`). No browser test
+harness is planned for this repo.
+
+(Note: earlier drafts of this file carried references to a `packages/`
+monorepo, a Node/TypeScript test suite and a browser harness, inherited
+verbatim from an abandoned prior project, `gridlab-w1`, when the fixtures
+were migrated in — commit `ca10b6a`. Those sentences never described
+mambo-power and have been removed; see `record/m2-critic.md` issue 2.)
