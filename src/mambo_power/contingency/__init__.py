@@ -1,4 +1,4 @@
-"""N-1 branch-contingency screening (epic Design §2 ``contingency/``; wave M3 W5).
+"""N-1 branch-contingency screening (epic Design §2 ``contingency/``).
 
 The public entry point (:func:`n1`) takes a :class:`~mambo_power.model.Network` and returns a
 typed :class:`~mambo_power.results.N1Result`; the array-level split

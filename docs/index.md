@@ -15,13 +15,15 @@ print(result.branches[0].p_from_mw)
 ```
 
 !!! info "Status"
-    Wave **M1** (substrate: model, MATPOWER import, network matrices) is merged. Wave **M2**
-    (power flow, typed results, jobs API, this documentation site) is in progress on its
-    wave branch, with everything below shipped there: the DC and AC Newton-Raphson solvers
-    (`pf.solve_dc`, `pf.solve_ac`), typed results with provenance, the stateless
-    [jobs surface](manual/jobs.md) exposing both as `kind="pf.dc"` / `"pf.ac"` through
-    `jobs.run(SolveRequest)` and `jobs.run_json`, seven [runnable examples](examples/index.md)
-    executed in CI, and this site. Nothing is on PyPI yet — install from source (see
+    Wave **M1** (substrate: model, MATPOWER import, network matrices) and wave **M2** (DC/AC
+    Newton-Raphson power flow, typed results, the stateless [jobs API](manual/jobs.md), this
+    documentation site) are both merged. Wave **M3** (DC optimal power flow with duals, N-1
+    branch-contingency screening) is in progress on its own wave branch, with everything below
+    shipped there: the DC-OPF solver with LMPs (`opf.solve_dc_opf`, see
+    [Manual › DC-OPF](manual/opf.md)), N-1 screen-then-confirm contingency analysis (`contingency.n1`,
+    see [Manual › N-1 screening](manual/n1.md)), both exposed through `jobs.run` as
+    `kind="opf.dc"` / `"n1"`, and a new [runnable example](examples/index.md) tying DC-OPF and
+    N-1 together. Nothing is on PyPI yet — install from source (see
     [Getting started](getting-started.md)).
 
 ## Three principles
@@ -85,6 +87,8 @@ flowchart LR
 | Import a MATPOWER case or write native JSON | [Manual › File formats](manual/formats.md) |
 | Build Ybus, Bbus, PTDF or LODF matrices | [Manual › Numerics](manual/numerics.md) |
 | Run a DC or AC power flow, understand Q-limits and effective roles | [Manual › Power flow](manual/power-flow.md) |
+| Solve DC-OPF for cost-minimising dispatch and LMPs | [Manual › DC-OPF](manual/opf.md) |
+| Screen for N-1 branch-contingency violations | [Manual › N-1 screening](manual/n1.md) |
 | Read and serialise results | [Manual › Results](manual/results.md) |
 | Call the package from a service | [Manual › Jobs API](manual/jobs.md) |
 | Copy a working script | [Examples](examples/index.md) |
@@ -97,8 +101,8 @@ flowchart LR
 | Wave | Scope | State |
 | --- | --- | --- |
 | M1 | Installable package, `Network` model, MATPOWER import, Ybus/Bbus/PTDF/LODF, CI matrix | merged |
-| M2 | DC + AC Newton-Raphson power flow, typed results, `jobs` API, docs site, examples | in progress |
-| M3 | DC optimal power flow on HiGHS, N-1 contingency analysis | planned |
+| M2 | DC + AC Newton-Raphson power flow, typed results, `jobs` API, docs site, examples | merged |
+| M3 | DC optimal power flow with duals on HiGHS, N-1 branch-contingency screening | in progress |
 | M4–M7 | Markets: nodal LMP, zonal + redispatch, multi-period with storage, agent-based bidding | planned |
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | planned |
 | M9 | PyPI 0.1.0 with trusted publishing and semantic-release | planned |
