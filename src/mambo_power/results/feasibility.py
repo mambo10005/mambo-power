@@ -1,17 +1,22 @@
-"""``FeasibilityReport``: AC-feasibility check of a dispatch (spec design item 6).
+"""``FeasibilityReport``: AC-feasibility check of a dispatch (spec design item 6, W6).
 
 Shared under ``results`` rather than siloed in ``opf`` since a later wave's AC-checked N-1 state
-wants the identical shape (design item 6). **Not populated by this wave's slice**: wave M3
-slice S5 wires the actual check (``pf.solve_ac`` on the dispatched network, thermal violations
-from ``BranchResult.loading_pct``, voltage violations from the ``Network``'s own ``v_min_pu``/
-``v_max_pu`` against the solved ``vm_pu``) — this module exists now only so
-``OpfDcResult.ac_check`` has a real type to declare; ``opf.solve_dc_opf`` always sets it to
-``None`` in this slice.
+wants the identical shape (design item 6). :func:`feasibility_report` builds one from a solved
+:class:`~mambo_power.results.AcPowerFlowResult` (the dispatched state) plus the
+:class:`~mambo_power.model.Network` it was solved on (the declared bounds) — neither alone
+carries both; :func:`mambo_power.opf.solve_dc_opf` calls it when ``options.ac_check`` is true.
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from mambo_power.model import Network
+from mambo_power.results.power_flow import AcPowerFlowResult
+
+THERMAL_LIMIT_PCT = 100.0
+"""``loading_pct`` above this is a thermal violation — the 100%-of-rating boundary
+``results.from_arrays._loading_pct`` already normalises every branch's apparent flow against."""
 
 
 class _Row(BaseModel):
@@ -45,3 +50,44 @@ class FeasibilityReport(BaseModel):
     message: str | None = Field(default=None, description="Diagnostic when converged is False.")
     thermal_violations: list[ThermalViolation] = Field(default_factory=list)
     voltage_violations: list[VoltageViolation] = Field(default_factory=list)
+
+
+def feasibility_report(ac: AcPowerFlowResult, net: Network) -> FeasibilityReport:
+    """Build a :class:`FeasibilityReport` from a solved AC state and the network it bounds.
+
+    ``ac`` carries the dispatched, solved state (``BranchResult.loading_pct``, ``BusResult.
+    vm_pu``); ``net`` carries the declared bounds (``Branch.rating_mva`` indirectly via ``ac``'s
+    already-computed ``loading_pct``, ``Bus.v_min_pu``/``v_max_pu`` directly) — matched by id.
+    ``converged``/``message`` are passed through from ``ac`` unchanged, never recomputed.
+
+    A branch with no rating (``loading_pct is None``) never contributes a thermal violation —
+    "unmeasurable" is not "violating". A bus with neither bound set never contributes a voltage
+    violation. When both bounds are set and a bus is on the wrong side of both (a misconfigured
+    network with ``v_min_pu > v_max_pu``), the low-side check wins; that misconfiguration is not
+    this function's job to guard against.
+    """
+    thermal = [
+        ThermalViolation(branch_id=b.id, loading_pct=b.loading_pct, limit_pct=THERMAL_LIMIT_PCT)
+        for b in ac.branches
+        if b.loading_pct is not None and b.loading_pct > THERMAL_LIMIT_PCT
+    ]
+    bounds_by_id = {bus.id: bus for bus in net.buses}
+    voltage: list[VoltageViolation] = []
+    for bus in ac.buses:
+        bound = bounds_by_id.get(bus.id)
+        if bound is None:
+            continue
+        if bound.v_min_pu is not None and bus.vm_pu < bound.v_min_pu:
+            voltage.append(
+                VoltageViolation(bus_id=bus.id, vm_pu=bus.vm_pu, limit_pu=bound.v_min_pu)
+            )
+        elif bound.v_max_pu is not None and bus.vm_pu > bound.v_max_pu:
+            voltage.append(
+                VoltageViolation(bus_id=bus.id, vm_pu=bus.vm_pu, limit_pu=bound.v_max_pu)
+            )
+    return FeasibilityReport(
+        converged=ac.converged,
+        message=ac.message,
+        thermal_violations=thermal,
+        voltage_violations=voltage,
+    )

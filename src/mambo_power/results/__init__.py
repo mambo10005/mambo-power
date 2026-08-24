@@ -6,7 +6,12 @@ unknown fields and non-finite numbers rejected — keyed by the network's stable
 positional ``to_arrays()`` view. They are never attached to a ``Network``.
 """
 
-from mambo_power.results.feasibility import FeasibilityReport, ThermalViolation, VoltageViolation
+from mambo_power.results.feasibility import (
+    FeasibilityReport,
+    ThermalViolation,
+    VoltageViolation,
+    feasibility_report,
+)
 from mambo_power.results.from_arrays import ac_result_from_arrays, dc_result_from_arrays
 from mambo_power.results.n1 import N1BranchFlag, N1OutageResult, N1Result
 from mambo_power.results.opf import (
@@ -53,4 +58,5 @@ __all__ = [
     "VoltageViolation",
     "ac_result_from_arrays",
     "dc_result_from_arrays",
+    "feasibility_report",
 ]

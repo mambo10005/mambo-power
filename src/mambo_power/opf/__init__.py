@@ -22,12 +22,14 @@ from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import pf_shift
 from mambo_power.numerics.ptdf import ptdf as compute_ptdf
 from mambo_power.opf.dc_opf import OpfDcOptions, dc_opf, lmp_decomposition
+from mambo_power.pf import solve_ac
 from mambo_power.results import (
     BusLmpResult,
     GenDispatchResult,
     OpfBranchFlowResult,
     OpfDcResult,
     ResultProvenance,
+    feasibility_report,
 )
 
 __all__ = ["OpfDcOptions", "solve_dc_opf"]
@@ -73,8 +75,12 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
     ``OpfDcResult.status``/``message``, mirroring :func:`mambo_power.pf.solve_ac`'s
     never-raise-on-non-convergence convention. Raises ``NotImplementedError`` up front for a
     generator with a :class:`~mambo_power.model.PiecewiseCost` (see :func:`_cost_coeffs`). The
-    network is not modified. ``OpfDcResult.ac_check`` is always ``None`` in this slice (wave M3
-    slice S5 wires the AC-feasibility check).
+    network is not modified. ``OpfDcResult.ac_check`` stays ``None`` unless ``options.ac_check``
+    is true and the LP/QP solved to ``"Optimal"``; when it fires (W6), a fresh deep copy of
+    ``net`` has each in-service generator's ``p_mw`` overwritten from the dispatch (id-keyed),
+    :func:`mambo_power.pf.solve_ac` re-solves that copy, and
+    :func:`mambo_power.results.feasibility_report` builds the report from that solved state plus
+    the copy's own declared bounds.
     """
     opts = options if options is not None else OpfDcOptions()
     started_at = datetime.now(UTC)
@@ -134,6 +140,14 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
         )
         for k, br_id in enumerate(arr.branch_ids)
     ]
+    ac_check = None
+    if opts.ac_check:
+        dispatched = net.model_copy(deep=True)
+        p_mw_by_id = {row.id: row.p_mw for row in generators}
+        for gen in dispatched.generators:
+            if gen.id in p_mw_by_id:
+                gen.p_mw = p_mw_by_id[gen.id]
+        ac_check = feasibility_report(solve_ac(dispatched), dispatched)
     return OpfDcResult(
         provenance=provenance,
         status=solution.status,
@@ -143,5 +157,5 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
         generators=generators,
         buses=buses,
         branches=branches,
-        ac_check=None,
+        ac_check=ac_check,
     )

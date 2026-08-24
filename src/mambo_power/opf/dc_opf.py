@@ -65,7 +65,7 @@ from dataclasses import dataclass
 import highspy
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import pf_shift
@@ -80,16 +80,24 @@ _OPTIMAL = "Optimal"
 
 
 class OpfDcOptions(BaseModel):
-    """Options of the DC-OPF LP/QP solve.
+    """Options of the DC-OPF LP/QP solve, plus the Network-level AC-feasibility check (W6).
 
-    Empty today: HiGHS needs no tuning for the problems this wave builds (small dense LPs/QPs,
-    always solved to default tolerances). A field is added here, not invented speculatively,
-    the first time a caller actually needs to tune something (mirrors the guidance behind
-    :class:`~mambo_power.pf.ac_newton.AcOptions`'s much larger option set: every field there
-    controls real solver behaviour).
+    No solver-tuning field yet: HiGHS needs none for the problems this wave builds (small dense
+    LPs/QPs, always solved to default tolerances) — one is added here, not invented
+    speculatively, the first time a caller actually needs to tune something (mirrors the
+    guidance behind :class:`~mambo_power.pf.ac_newton.AcOptions`'s much larger option set: every
+    field there controls real solver behaviour). ``ac_check`` is read only by
+    :func:`mambo_power.opf.solve_dc_opf`; :func:`dc_opf` itself ignores it (see the ``del
+    options`` below) since the array-level LP has no notion of a Network to AC-solve.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ac_check: bool = Field(
+        default=False,
+        description="Re-run pf.solve_ac on the dispatched network and attach a "
+        "results.FeasibilityReport as OpfDcResult.ac_check.",
+    )
 
 
 @dataclass(frozen=True)
