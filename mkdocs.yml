@@ -101,6 +101,8 @@ nav:
       - File formats: manual/formats.md
       - Numerics: manual/numerics.md
       - Power flow: manual/power-flow.md
+      - DC-OPF: manual/opf.md
+      - N-1 screening: manual/n1.md
       - Results: manual/results.md
       - Jobs API: manual/jobs.md
   - Examples: examples/index.md
@@ -110,6 +112,8 @@ nav:
       - mambo_power.io.native: api/io-native.md
       - mambo_power.numerics: api/numerics.md
       - mambo_power.pf: api/pf.md
+      - mambo_power.opf: api/opf.md
+      - mambo_power.contingency: api/contingency.md
       - mambo_power.results: api/results.md
       - mambo_power.jobs: api/jobs.md
   - Design:

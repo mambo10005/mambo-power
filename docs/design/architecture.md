@@ -12,18 +12,18 @@ later waves add (their dependencies are already fixed by the epic design).
 
 ```mermaid
 flowchart TB
-    subgraph present["Shipped (M1 + M2)"]
+    subgraph present["Shipped (M1-M3)"]
         model["model<br/>Network, entities, validation errors,<br/>ImportIssue, repair_islands"]
         io["io<br/>matpower, native, ImportReport"]
         numerics["numerics<br/>NetworkArrays, ybus, bbus, ptdf, lodf,<br/>effective_roles"]
         pf["pf<br/>solve_dc, solve_ac, dc.solve"]
         ac["pf.ac_newton<br/>AcOptions, newton"]
+        opf["opf<br/>solve_dc_opf, dc_opf, lmp_decomposition"]
+        contingency["contingency<br/>n1, screen_n1, confirm_n1"]
         results["results<br/>BusResult, BranchResult, GenResult,<br/>ResultProvenance, from_arrays"]
         jobs["jobs<br/>SolveRequest, SolveResult, KINDS, run"]
     end
     subgraph later["Later waves"]
-        opf["opf (M3)"]
-        n1["contingency (M3)"]
         market["market (M4-M7)"]
         formats["io: pandapower_json, pypsa,<br/>psse_raw, csv_bundle (M8)"]
     end
@@ -35,13 +35,20 @@ flowchart TB
     pf --> model
     results --> numerics
     ac --> numerics
+    opf --> model
+    opf --> numerics
+    opf --> pf
+    opf --> results
+    contingency --> model
+    contingency --> numerics
+    contingency --> pf
+    contingency --> results
     jobs --> pf
+    jobs --> opf
+    jobs --> contingency
     jobs --> results
     jobs --> model
     jobs --> numerics
-    opf -.-> numerics
-    n1 -.-> pf
-    n1 -.-> numerics
     market -.-> opf
     formats -.-> model
 ```
@@ -52,12 +59,14 @@ Rules the diagram encodes:
   solvers.
 - `numerics` is the **only** module that holds positional indices and the **single** site
   where physical units are divided by `base_mva`.
-- Solvers (`pf`, later `opf`, `contingency`, `market`) consume `NetworkArrays`, never a
+- Solvers (`pf`, `opf`, `contingency`; later `market`) consume `NetworkArrays`, never a
   `Network` directly, and hand plain arrays to `results.from_arrays`, which walks back to ids
-  and multiplies by `base_mva` on the way out.
+  and multiplies by `base_mva` on the way out. `opf` also calls `pf.solve_ac` directly for its
+  post-dispatch AC-feasibility check; `contingency` calls `pf.dc.solve` for its confirming
+  re-solve — neither reimplements power flow.
 - `market` composes `opf`; it never reimplements it.
-- `jobs` is the outermost layer: it validates a request, calls a solver entry point, times
-  it and wraps any exception into a structured failure.
+- `jobs` is the outermost layer: it validates a request, calls a solver entry point (`pf`,
+  `opf` or `contingency`, by kind), times it and wraps any exception into a structured failure.
 - pandapower and PyPSA appear nowhere in this graph. They are development dependencies used
   by the parity test tier only.
 
@@ -74,7 +83,8 @@ consumers honest when the owner changes.
 | Effective bus roles | `numerics.effective_roles` (M2) | pf.ac, pf.dc, results | modified-case14 fixture vs pandapower |
 | Island repair | `model.repair_islands` (M2) | every importer | islanded case14 variant: warning emitted, main island matches pandapower |
 | Result provenance | `results.ResultProvenance` | jobs, docs | `provenance.version == mambo_power.__version__` |
-| DC-OPF formulation | `opf` (M3) | market.* | MATPOWER `rundcopf`, PyPSA `optimize` |
+| DC-OPF formulation | `opf` (M3) | market.*, jobs | parity against pandapower `rundcopp` (primary) and PyPSA `optimize` (secondary) |
+| N-1 screen-vs-confirm | `contingency.n1` (M3) | jobs | brute-force all-outage sweep agrees with the LODF screen + DC re-solve on every fixture |
 | LMP / congestion rent | `market.nodal` (M4) | zonal comparison, multiperiod, agents | settlement identities; LMP(slack) = λ |
 | Analysis kinds registry | `jobs` | future SaaS capability list | contract test: every kind has request model, result model, runner |
 
@@ -112,7 +122,9 @@ src/mambo_power/
   io/               matpower.py (load, loads, *_with_warnings), native.py (load, loads, save, dumps)
   numerics/         arrays.py (NetworkArrays), ybus.py, bbus.py, ptdf.py, lodf.py
   pf/               __init__.py (solve_dc), dc.py (solve, DcSolution)
-  results/          tables.py, provenance.py, power_flow.py, from_arrays.py
+  opf/              __init__.py (solve_dc_opf), dc_opf.py (dc_opf, lmp_decomposition)
+  contingency/      __init__.py (n1), n1.py (screen_n1, confirm_n1)
+  results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, n1.py, feasibility.py
 ```
 
 The test suite mirrors the boundaries: `tests/unit` exercises each module hermetically,
