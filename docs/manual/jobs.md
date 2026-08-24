@@ -164,9 +164,11 @@ for name, spec in jobs.KINDS.items():
 ```
 
 ```text
-['pf.ac', 'pf.dc']
+['n1', 'opf.dc', 'pf.ac', 'pf.dc']
 pf.ac AcOptions AcPowerFlowResult
 pf.dc None DcPowerFlowResult
+opf.dc OpfDcOptions OpfDcResult
+n1 N1Options N1Result
 ```
 
 JSON in, JSON out — what a handler or a queue worker does:
@@ -197,7 +199,7 @@ def solve(body: jobs.SolveRequest) -> jobs.SolveResult:
 ### Failures are data
 
 ```python
-bad_kind = jobs.run(jobs.SolveRequest(kind="opf.dc", network=net))
+bad_kind = jobs.run(jobs.SolveRequest(kind="market.nodal", network=net))
 print(bad_kind.status, bad_kind.error.code, "|", bad_kind.error.message)
 
 bad_opts = jobs.run(jobs.SolveRequest(kind="pf.ac", network=net, options={"tol": "x"}))
@@ -214,7 +216,7 @@ print(noslack.status, noslack.error.code, "|", noslack.error.message)
 ```
 
 ```text
-failed UNKNOWN_KIND | unknown kind "opf.dc"; registered kinds: pf.ac, pf.dc
+failed UNKNOWN_KIND | unknown kind "market.nodal"; registered kinds: n1, opf.dc, pf.ac, pf.dc
 failed BAD_OPTIONS | [{'type': 'float_parsing', 'loc': ['tol'], 'msg': 'Input should be a valid number, unable to parse string as a number'}]
 failed VALIDATION | ['DANGLING_REF at branches[0].to_bus: branch "branch-1": to_bus references missing bus "bus-999"']
 failed NO_SLACK_GENERATOR | slack bus "bus-1" (position 0) has no in-service generator; a power flow cannot close the balance

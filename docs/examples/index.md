@@ -1,6 +1,6 @@
 # Examples
 
-Seven runnable scripts live under `examples/` in the repository. Each one is self-contained,
+Eight runnable scripts live under `examples/` in the repository. Each one is self-contained,
 reads only files under `fixtures/`, prints a short deterministic summary and exits 0 in about a
 second. They are executed on every push — by `tests/unit/test_examples_run.py` inside the test
 matrix and by the dedicated `examples` CI job — and this page embeds them with
@@ -21,6 +21,7 @@ uv run python examples/02_ac_power_flow.py
 | [`05_roles_and_islands.py`](#5-roles-and-islands) | effective bus roles, `NoSlackGeneratorError`, island repair vs strict model | [Power flow](../manual/power-flow.md#effective-bus-roles), [File formats](../manual/formats.md#islands) |
 | [`06_network_matrices.py`](#6-network-matrices) | `NetworkArrays`, Ybus sparsity, PTDF, LODF with the bridge `NaN` column, a 3-bus case in full | [Numerics](../manual/numerics.md) |
 | [`07_results_and_export.py`](#7-results-and-export) | JSON round trip, `to_arrays()`, CSV export | [Results](../manual/results.md) |
+| [`08_opf_and_n1.py`](#8-opf-and-n-1) | `solve_dc_opf` dispatch/duals/LMP, `ac_check`, congestion, `contingency.n1` screen-then-confirm | [DC-OPF](../manual/opf.md), [N-1 screening](../manual/n1.md) |
 
 ## 1. Load and validate
 
@@ -85,6 +86,17 @@ bus and branch tables with the standard library.
 
 ``` { .python }
 --8<-- "examples/07_results_and_export.py"
+```
+
+## 8. OPF and N-1
+
+Cost-minimising DC-OPF dispatch and duals on case14, the `ac_check` AC-feasibility re-solve
+finding real voltage violations on an otherwise-clean dispatch, a tightened branch rating
+splitting the LMP into energy and congestion, and `contingency.n1`'s LODF screen next to its
+confirming DC re-solve on a flagged outage.
+
+``` { .python }
+--8<-- "examples/08_opf_and_n1.py"
 ```
 
 ## Conventions for examples

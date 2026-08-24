@@ -15,18 +15,28 @@ from mambo_power.jobs.models import (
     SolveResult,
     StructuredError,
 )
-from mambo_power.jobs.registry import KINDS, KindSpec, Runner, kinds, register
+from mambo_power.jobs.registry import (
+    KINDS,
+    InfeasibleLpError,
+    KindSpec,
+    Runner,
+    UnboundedLpError,
+    kinds,
+    register,
+)
 from mambo_power.jobs.run import run, run_json
 
 __all__ = [
     "KINDS",
     "FailureCode",
+    "InfeasibleLpError",
     "KindSpec",
     "ResultModel",
     "Runner",
     "SolveRequest",
     "SolveResult",
     "StructuredError",
+    "UnboundedLpError",
     "kinds",
     "register",
     "run",

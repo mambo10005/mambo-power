@@ -13,7 +13,13 @@ Pipeline of :func:`run` (design item 6):
    :class:`~mambo_power.numerics.NoSlackGeneratorError` → ``NO_SLACK_GENERATOR``;
    :class:`~mambo_power.numerics.UnsolvableNetworkError` → ``UNSOLVABLE_NETWORK`` (a valid
    network the numerics it was handed to cannot solve, e.g. DC on an ``x == 0`` branch —
-   user data, not a solver bug); anything else → ``INTERNAL`` with ``"ExceptionType: message"``;
+   user data, not a solver bug);
+   :class:`~mambo_power.jobs.registry.InfeasibleLpError`/:class:`~mambo_power.jobs.registry.
+   UnboundedLpError` → ``INFEASIBLE_LP``/``UNBOUNDED_LP`` (the ``opf.dc`` runner's own
+   translation of a non-Optimal :class:`~mambo_power.results.OpfDcResult.status`; unlike
+   ``pf.ac``'s non-convergence, an infeasible/unbounded LP has no dispatch at all, so it is a
+   structured failure rather than an ``"ok"`` result); anything else → ``INTERNAL`` with
+   ``"ExceptionType: message"``;
 5. check the runner returned the kind's ``result_model`` (else ``INTERNAL``), copy its
    provenance and the captured warnings onto the :class:`~mambo_power.jobs.SolveResult`.
 
@@ -41,7 +47,7 @@ from pydantic import BaseModel, ValidationError
 
 import mambo_power
 from mambo_power.jobs.models import ResultModel, SolveRequest, SolveResult, StructuredError
-from mambo_power.jobs.registry import KINDS
+from mambo_power.jobs.registry import KINDS, InfeasibleLpError, UnboundedLpError
 from mambo_power.model import NetworkValidationError, ValidationIssue, validate_network
 from mambo_power.numerics import NoSlackGeneratorError, UnsolvableNetworkError
 from mambo_power.results import ResultProvenance
@@ -157,6 +163,10 @@ def run(request: SolveRequest) -> SolveResult:
             failure = ("NO_SLACK_GENERATOR", str(exc), None)
         except UnsolvableNetworkError as exc:
             failure = ("UNSOLVABLE_NETWORK", str(exc), None)
+        except InfeasibleLpError as exc:
+            failure = ("INFEASIBLE_LP", str(exc), None)
+        except UnboundedLpError as exc:
+            failure = ("UNBOUNDED_LP", str(exc), None)
         except Exception as exc:  # noqa: BLE001 — the boundary's whole point
             failure = ("INTERNAL", f"{type(exc).__name__}: {exc}", None)
     captured = _messages(caught)

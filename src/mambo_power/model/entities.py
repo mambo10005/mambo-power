@@ -76,7 +76,9 @@ class PiecewiseCost(_Entity):
 
     kind: Literal["piecewise"] = "piecewise"
     points: list[tuple[float, float]] = Field(
-        description="(p_mw, cost) breakpoints, at least two; p_mw must be strictly increasing."
+        max_length=200,
+        description="(p_mw, cost) breakpoints, at least two and at most 200 (each adds one "
+        "epigraph row to opf.dc_opf's LP); p_mw must be strictly increasing.",
     )
     startup: float = Field(default=0.0, description="Startup cost.")
     shutdown: float = Field(default=0.0, description="Shutdown cost.")

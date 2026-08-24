@@ -317,3 +317,18 @@ def test_non_standard_json_tokens_are_rejected_not_coerced(document: str) -> Non
     # rather than letting a non-finite value (or a null) into a float field.
     with pytest.raises(ValidationError):
         Network.model_validate_json(document)
+
+
+# --- PiecewiseCost.points bound (review Security FLAG) --------------------------------------------
+# Every breakpoint adds one epigraph row to opf.dc_opf's LP; jobs.run's opf.dc kind takes the
+# network inline, so an unbounded points list is caller-reachable unbounded work.
+
+
+def test_piecewise_cost_over_the_bound_is_rejected_at_construction() -> None:
+    with pytest.raises(ValidationError):
+        PiecewiseCost(points=[(float(i), float(i)) for i in range(201)])
+
+
+def test_piecewise_cost_at_the_bound_is_accepted() -> None:
+    cost = PiecewiseCost(points=[(float(i), float(i)) for i in range(200)])
+    assert len(cost.points) == 200

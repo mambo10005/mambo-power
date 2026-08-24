@@ -5,7 +5,8 @@ body of an HTTP request *is* a :class:`SolveRequest` and the body of the respons
 :class:`SolveResult` — no translation layer.
 
 **How ``SolveResult.result`` is typed.** Its annotation is the closed union of the registered
-kinds' result models (``AcPowerFlowResult | DcPowerFlowResult`` in M2). The type is *not*
+kinds' result models (``AcPowerFlowResult | DcPowerFlowResult`` in M2, widened to add
+``OpfDcResult | N1Result`` in M3). The type is *not*
 inferred from the payload's shape: a ``model_validator(mode="before")`` looks the request
 ``kind`` up in :data:`~mambo_power.jobs.KINDS` and validates a dict ``result`` with exactly that
 kind's ``result_model``; a second validator (``mode="after"``) then checks that the instance
@@ -25,9 +26,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mambo_power.jobs.registry import KINDS
 from mambo_power.model import Network, ValidationIssue
-from mambo_power.results import AcPowerFlowResult, DcPowerFlowResult, ResultProvenance
+from mambo_power.results import (
+    AcPowerFlowResult,
+    DcPowerFlowResult,
+    N1Result,
+    OpfDcResult,
+    ResultProvenance,
+)
 
-ResultModel = AcPowerFlowResult | DcPowerFlowResult
+ResultModel = AcPowerFlowResult | DcPowerFlowResult | OpfDcResult | N1Result
 """The closed union of result types a ``SolveResult`` can carry (one per registered kind)."""
 
 FailureCode = Literal[
@@ -37,9 +44,11 @@ FailureCode = Literal[
     "VALIDATION",
     "NO_SLACK_GENERATOR",
     "UNSOLVABLE_NETWORK",
+    "INFEASIBLE_LP",
+    "UNBOUNDED_LP",
     "INTERNAL",
 ]
-"""The codes :func:`mambo_power.jobs.run` / :func:`mambo_power.jobs.run_json` emit (M2)."""
+"""The codes :func:`mambo_power.jobs.run` / :func:`mambo_power.jobs.run_json` emit (M2, M3)."""
 
 
 class StructuredError(BaseModel):
