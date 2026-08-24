@@ -1,15 +1,18 @@
-"""W6 / AC-6: the stateless ``jobs`` surface — ``SolveRequest`` → ``run`` → ``SolveResult``.
+"""W6/W7 / AC-6/AC-8: the stateless ``jobs`` surface — ``SolveRequest`` → ``run`` → ``SolveResult``.
 
-Contract under test (wave M2 design item 6; ADR-004):
+Contract under test (wave M2 design item 6, wave M3 design item 7; ADR-004):
 
-* ``KINDS`` lists exactly ``pf.ac`` and ``pf.dc``; every spec's models are importable pydantic
-  models and its runner is callable;
+* ``KINDS`` lists exactly ``pf.ac``, ``pf.dc``, ``opf.dc``, ``n1``; every spec's models are
+  importable pydantic models and its runner is callable;
 * ``run`` is pure: two calls on the same request give equal results modulo provenance timing;
 * requests and results round-trip through JSON (``run_json`` is JSON in, JSON out);
 * every failure — unknown kind, bad options, invalid network, slack without a generator, a
   runner bug — is a ``status="failed"`` result with a stable code; nothing raises across the
   boundary;
-* non-convergence is *not* a failure: ``status="ok"`` with ``result.converged == False``;
+* non-convergence is *not* a failure: ``status="ok"`` with ``result.converged == False`` — but
+  an infeasible/unbounded ``opf.dc`` LP/QP *is* a failure (``INFEASIBLE_LP``/``UNBOUNDED_LP``,
+  not ``INTERNAL``), a deliberate M3 distinction (wave spec W7): an infeasible LP has no
+  dispatch at all, unlike a non-converged AC iterate;
 * warnings emitted inside the solve (``SetpointConflictWarning``) are attached as strings.
 """
 
@@ -24,6 +27,7 @@ from pydantic import BaseModel, ValidationError
 
 import mambo_power
 from mambo_power import jobs
+from mambo_power.contingency import N1Options
 from mambo_power.io import matpower
 from mambo_power.jobs import (
     KINDS,
@@ -38,12 +42,20 @@ from mambo_power.jobs import (
 )
 from mambo_power.model import Network
 from mambo_power.numerics import SetpointConflictWarning
+from mambo_power.opf import OpfDcOptions
 from mambo_power.pf import AcOptions, solve_ac, solve_dc
-from mambo_power.results import AcPowerFlowResult, DcPowerFlowResult, ResultProvenance
+from mambo_power.results import (
+    AcPowerFlowResult,
+    DcPowerFlowResult,
+    N1Result,
+    OpfDcResult,
+    ResultProvenance,
+)
 from tests._fixtures import FIXTURES_DIR
 
 DERIVED_DIR = FIXTURES_DIR / "derived"
 TIMING = {"provenance": {"started_at", "elapsed_s"}}
+KNOWN_KINDS = {"pf.ac", "pf.dc", "opf.dc", "n1"}
 
 
 def _network(name: str = "case14") -> Network:
@@ -56,10 +68,19 @@ def case14() -> Network:
     return _network("case14")
 
 
+def _infeasible_net(case14: Network) -> Network:
+    """``case14`` with every generator's capacity collapsed far below its own load — no
+    dispatch can possibly satisfy the balance constraint (AC-8's ``INFEASIBLE_LP`` case)."""
+    generators = [
+        g.model_copy(update={"p_max_mw": 0.01, "p_min_mw": 0.0}) for g in case14.generators
+    ]
+    return case14.model_copy(update={"generators": generators})
+
+
 # --- KINDS contract -------------------------------------------------------------------------------
-def test_kinds_lists_exactly_the_m2_kinds() -> None:
-    assert set(KINDS) == {"pf.ac", "pf.dc"}
-    assert kinds() == ["pf.ac", "pf.dc"]
+def test_kinds_lists_exactly_the_m3_kinds() -> None:
+    assert set(KINDS) == KNOWN_KINDS
+    assert kinds() == sorted(KNOWN_KINDS)
     assert jobs.KINDS is KINDS
 
 
@@ -74,6 +95,10 @@ def test_every_kind_has_models_and_a_callable_runner() -> None:
     assert KINDS["pf.ac"].result_model is AcPowerFlowResult
     assert KINDS["pf.dc"].options_model is None
     assert KINDS["pf.dc"].result_model is DcPowerFlowResult
+    assert KINDS["opf.dc"].options_model is OpfDcOptions
+    assert KINDS["opf.dc"].result_model is OpfDcResult
+    assert KINDS["n1"].options_model is N1Options
+    assert KINDS["n1"].result_model is N1Result
 
 
 def test_register_adds_a_kind_and_refuses_duplicates() -> None:
@@ -87,7 +112,7 @@ def test_register_adds_a_kind_and_refuses_duplicates() -> None:
             register(spec)
     finally:
         KINDS.pop("test.echo", None)
-    assert set(KINDS) == {"pf.ac", "pf.dc"}
+    assert set(KINDS) == KNOWN_KINDS
 
 
 # --- happy path -----------------------------------------------------------------------------------
@@ -120,6 +145,28 @@ def test_run_pf_dc_on_case14_is_ok_with_typed_result_and_provenance(case14: Netw
     assert out.provenance.options == {}
 
 
+def test_run_opf_dc_on_case14_is_ok_with_typed_result_and_provenance(case14: Network) -> None:
+    out = run(SolveRequest(kind="opf.dc", network=case14))
+    assert out.status == "ok"
+    assert out.error is None
+    assert isinstance(out.result, OpfDcResult)
+    assert out.result.status == "Optimal"
+    assert out.result.generators
+    assert out.provenance is not None
+    assert out.provenance.kind == "opf.dc"
+    assert out.provenance == out.result.provenance
+
+
+def test_run_n1_on_case14_is_ok_with_typed_result_and_provenance(case14: Network) -> None:
+    out = run(SolveRequest(kind="n1", network=case14))
+    assert out.status == "ok"
+    assert out.error is None
+    assert isinstance(out.result, N1Result)
+    assert out.provenance is not None
+    assert out.provenance.kind == "n1"
+    assert out.provenance == out.result.provenance
+
+
 def test_options_are_validated_and_passed_to_the_runner(case14: Network) -> None:
     out = run(
         SolveRequest(kind="pf.ac", network=case14, options={"q_limits": False, "init": "flat"})
@@ -137,8 +184,9 @@ def test_run_matches_the_module_level_entry_points(case14: Network) -> None:
     assert dc.model_dump(exclude=TIMING) == solve_dc(case14).model_dump(exclude=TIMING)
 
 
-def test_run_is_pure_equal_results_modulo_timing(case14: Network) -> None:
-    req = SolveRequest(kind="pf.ac", network=case14)
+@pytest.mark.parametrize("kind", ["pf.ac", "pf.dc", "opf.dc", "n1"])
+def test_run_is_pure_equal_results_modulo_timing(kind: str, case14: Network) -> None:
+    req = SolveRequest(kind=kind, network=case14)
     first, second = run(req), run(req)
     assert first.result is not None and second.result is not None
     assert first.result.model_dump(exclude=TIMING) == second.result.model_dump(exclude=TIMING)
@@ -158,7 +206,12 @@ def test_request_round_trips_through_json(case14: Network) -> None:
 
 
 def test_result_round_trips_through_json_with_the_kinds_result_type(case14: Network) -> None:
-    for kind, result_type in (("pf.ac", AcPowerFlowResult), ("pf.dc", DcPowerFlowResult)):
+    for kind, result_type in (
+        ("pf.ac", AcPowerFlowResult),
+        ("pf.dc", DcPowerFlowResult),
+        ("opf.dc", OpfDcResult),
+        ("n1", N1Result),
+    ):
         out = run(SolveRequest(kind=kind, network=case14))
         again = SolveResult.model_validate_json(out.model_dump_json())
         assert again == out
@@ -217,11 +270,11 @@ def _assert_failed(out: SolveResult, code: str) -> StructuredError:
 
 
 def test_unknown_kind_is_a_failed_result(case14: Network) -> None:
-    out = run(SolveRequest(kind="opf.dc", network=case14, job_id="u"))
+    out = run(SolveRequest(kind="market.nodal", network=case14, job_id="u"))
     error = _assert_failed(out, "UNKNOWN_KIND")
-    assert out.kind == "opf.dc"
+    assert out.kind == "market.nodal"
     assert out.job_id == "u"
-    assert "opf.dc" in error.message
+    assert "market.nodal" in error.message
     assert "pf.ac" in error.message and "pf.dc" in error.message
 
 
@@ -314,6 +367,16 @@ def test_slack_without_generator_is_a_failed_result() -> None:
         error = _assert_failed(out, "NO_SLACK_GENERATOR")
         assert "bus-1" in error.message
         assert error.issues is None
+
+
+def test_infeasible_opf_dc_is_infeasible_lp_not_internal(case14: Network) -> None:
+    """AC-8: a hand-built infeasible LP (contradictory generator bounds, load unreachable)
+    fails as ``INFEASIBLE_LP`` — a structured job failure, not ``INTERNAL`` and not a
+    "successful" ``status="ok"`` result carrying a non-Optimal status (unlike ``pf.ac``'s
+    non-convergence, see ``test_non_convergence_is_ok_with_converged_false``)."""
+    out = run(SolveRequest(kind="opf.dc", network=_infeasible_net(case14)))
+    error = _assert_failed(out, "INFEASIBLE_LP")
+    assert "Infeasible" in error.message
 
 
 def test_runner_exception_is_a_failed_internal_result(
