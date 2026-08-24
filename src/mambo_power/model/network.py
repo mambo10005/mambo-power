@@ -195,6 +195,29 @@ def validate_network(net: Network) -> list[ValidationIssue]:
                     f"generators[{index}].cost.points",
                     f'generator "{gen.id}": piecewise cost p_mw values must be strictly increasing',
                 )
+    for index, load in enumerate(net.loads):
+        if load.bid is not None and load.bid.kind == "polynomial" and not load.bid.coefficients:
+            add(
+                "BAD_RANGE",
+                f"loads[{index}].bid.coefficients",
+                f'load "{load.id}": polynomial bid needs at least one coefficient',
+            )
+        if load.bid is not None and load.bid.kind == "piecewise":
+            p_values = [p for p, _ in load.bid.points]
+            if len(p_values) < 2:
+                add(
+                    "BAD_RANGE",
+                    f"loads[{index}].bid.points",
+                    f'load "{load.id}": piecewise bid needs at least two points',
+                )
+            elif any(
+                later <= earlier for earlier, later in zip(p_values, p_values[1:], strict=False)
+            ):
+                add(
+                    "BAD_RANGE",
+                    f"loads[{index}].bid.points",
+                    f'load "{load.id}": piecewise bid p_mw values must be strictly increasing',
+                )
     for index, unit in enumerate(net.storage):
         if not 0.0 <= unit.soc_initial <= 1.0:
             add(
