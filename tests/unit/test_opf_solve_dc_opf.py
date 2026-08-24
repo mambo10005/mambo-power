@@ -89,13 +89,23 @@ def test_solve_dc_opf_treats_a_costless_generator_as_free() -> None:
     assert by_id["g0"].p_mw == pytest.approx(40.0, abs=1e-6)  # free generator takes it all
 
 
-def test_solve_dc_opf_raises_not_implemented_for_piecewise_cost() -> None:
+def test_solve_dc_opf_solves_a_piecewise_cost_generator() -> None:
+    """Wave M3 slice S3 replaced the ``NotImplementedError`` seam S2 left here (this test used
+    to assert that seam) with the real convex segment/epigraph LP encoding — see
+    ``tests/unit/test_opf_dc_pwl.py``/``test_opf_dc_case14_pwl.py`` for the encoding's own
+    correctness proof; this test only confirms ``solve_dc_opf``'s wiring reaches it (g0's PWL
+    curve, $10/MWh up to 20 MW then $30/MWh after, is cheaper than g1's flat $20/MWh only for the
+    first 20 MW of the 40 MW load, so g0 should take exactly 20 MW and g1 the remaining 20)."""
     net = _net(
-        PiecewiseCost(points=[(0.0, 0.0), (40.0, 400.0)]),
+        PiecewiseCost(points=[(0.0, 0.0), (20.0, 200.0), (40.0, 800.0)]),  # slopes 10, 30
         PolynomialCost(coefficients=[20.0, 0.0]),
     )
-    with pytest.raises(NotImplementedError, match="piecewise"):
-        solve_dc_opf(net, OpfDcOptions())
+    result = solve_dc_opf(net, OpfDcOptions())
+    assert result.status == "Optimal"
+    by_id = {g.id: g for g in result.generators}
+    assert by_id["g0"].p_mw == pytest.approx(20.0, abs=1e-6)
+    assert by_id["g1"].p_mw == pytest.approx(20.0, abs=1e-6)
+    assert result.objective_cost == pytest.approx(200.0 + 20.0 * 20.0, abs=1e-4)
 
 
 def test_solve_dc_opf_defaults_options_when_none_given() -> None:

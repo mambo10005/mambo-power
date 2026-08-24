@@ -2,10 +2,12 @@
 
 :func:`solve_dc_opf` is the thin ``Network``-facing wrapper around the array-level
 :func:`mambo_power.opf.dc_opf.dc_opf` (mirrors :func:`mambo_power.pf.solve_dc` /
-:func:`mambo_power.pf.dc.solve`): derives ``cost_coeffs`` from each generator's
-:class:`~mambo_power.model.PolynomialCost`, calls ``dc_opf``, decomposes the duals into LMPs
-(:func:`mambo_power.opf.dc_opf.lmp_decomposition`) and builds a typed
-:class:`~mambo_power.results.OpfDcResult`.
+:func:`mambo_power.pf.dc.solve`): derives ``cost_coeffs``/``pwl_costs`` from each generator's
+:class:`~mambo_power.model.PolynomialCost` or :class:`~mambo_power.model.PiecewiseCost` (raising
+:class:`~mambo_power.opf.dc_opf.NonConvexCostError` up front for a non-convex piecewise cost,
+spec design item 4 — re-exported here as :data:`NonConvexCostError`), calls ``dc_opf``,
+decomposes the duals into LMPs (:func:`mambo_power.opf.dc_opf.lmp_decomposition`) and builds a
+typed :class:`~mambo_power.results.OpfDcResult`.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from mambo_power.model import Network
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import pf_shift
 from mambo_power.numerics.ptdf import ptdf as compute_ptdf
-from mambo_power.opf.dc_opf import OpfDcOptions, dc_opf, lmp_decomposition
+from mambo_power.opf.dc_opf import NonConvexCostError, OpfDcOptions, dc_opf, lmp_decomposition
 from mambo_power.pf import solve_ac
 from mambo_power.results import (
     BusLmpResult,
@@ -32,32 +34,35 @@ from mambo_power.results import (
     feasibility_report,
 )
 
-__all__ = ["OpfDcOptions", "solve_dc_opf"]
+__all__ = ["NonConvexCostError", "OpfDcOptions", "solve_dc_opf"]
 
 FloatArray = npt.NDArray[np.float64]
+PwlCosts = dict[int, list[tuple[float, float]]]
 
 
-def _cost_coeffs(net: Network, arr: NetworkArrays) -> FloatArray:
-    """Per-generator ``[c2, c1, c0]``, ``NetworkArrays`` generator order, from ``Generator.cost``.
+def _cost_coeffs(net: Network, arr: NetworkArrays) -> tuple[FloatArray, PwlCosts]:
+    """Per-generator ``[c2, c1, c0]`` (``NetworkArrays`` generator order) plus any PWL costs,
+    both from ``Generator.cost``.
 
-    A generator with no cost (``cost is None``) is free — an all-zero row, dispatched purely by
-    the network constraints, never preferred or avoided on cost. A
-    :class:`~mambo_power.model.PiecewiseCost` generator raises ``NotImplementedError``: wave M3
-    slice S3 adds the convex segment/epigraph LP encoding (spec design item 4) — this slice does
-    not silently misread a piecewise cost as polynomial.
+    Returns ``(coeffs, pwl_costs)``: ``coeffs`` is ``(n_gen, 3)``; a generator with no cost
+    (``cost is None``) or a :class:`~mambo_power.model.PiecewiseCost` gets an all-zero row — free
+    in the first case, and in the second because its cost is captured entirely by the epigraph
+    rows :func:`~mambo_power.opf.dc_opf.dc_opf` builds from ``pwl_costs`` instead (spec design
+    item 4). ``pwl_costs`` maps generator index to that generator's raw
+    ``PiecewiseCost.points``; :func:`dc_opf` raises ``NonConvexCostError`` (re-exported as
+    :data:`NonConvexCostError` on this module) if any entry's breakpoint slopes are not
+    non-decreasing, before any solve is attempted.
     """
     gens_by_id = {g.id: g for g in net.generators}
     coeffs = np.zeros((len(arr.gen_ids), 3))
+    pwl_costs: PwlCosts = {}
     for i, gen_id in enumerate(arr.gen_ids):
         cost = gens_by_id[gen_id].cost
         if cost is None:
             continue
         if cost.kind == "piecewise":
-            raise NotImplementedError(
-                f'generator "{gen_id}" has a piecewise-linear cost; opf.solve_dc_opf does not '
-                "support PiecewiseCost yet (wave M3 slice S3 adds the convex segment/epigraph "
-                "LP encoding — see wave-03-opf-n1.spec.md design item 4)"
-            )
+            pwl_costs[i] = list(cost.points)
+            continue
         values = list(cost.coefficients)
         if len(values) > 3:
             raise NotImplementedError(
@@ -65,7 +70,7 @@ def _cost_coeffs(net: Network, arr: NetworkArrays) -> FloatArray:
                 "opf.solve_dc_opf supports polynomial costs up to quadratic only"
             )
         coeffs[i, 3 - len(values) :] = values  # right-align: [c1, c0] -> [0, c1, c0], etc.
-    return coeffs
+    return coeffs, pwl_costs
 
 
 def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResult:
@@ -73,10 +78,11 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
 
     Never raises for an infeasible or unbounded LP/QP — reported through
     ``OpfDcResult.status``/``message``, mirroring :func:`mambo_power.pf.solve_ac`'s
-    never-raise-on-non-convergence convention. Raises ``NotImplementedError`` up front for a
-    generator with a :class:`~mambo_power.model.PiecewiseCost` (see :func:`_cost_coeffs`). The
-    network is not modified. ``OpfDcResult.ac_check`` stays ``None`` unless ``options.ac_check``
-    is true and the LP/QP solved to ``"Optimal"``; when it fires (W6), a fresh deep copy of
+    never-raise-on-non-convergence convention. Raises :class:`NonConvexCostError` up front for a
+    generator whose :class:`~mambo_power.model.PiecewiseCost` is not convex (see
+    :func:`_cost_coeffs`). The network is not modified. ``OpfDcResult.ac_check`` stays ``None``
+    unless ``options.ac_check`` is true and the LP/QP solved to ``"Optimal"``; when it fires
+    (W6), a fresh deep copy of
     ``net`` has each in-service generator's ``p_mw`` overwritten from the dispatch (id-keyed),
     :func:`mambo_power.pf.solve_ac` re-solves that copy, and
     :func:`mambo_power.results.feasibility_report` builds the report from that solved state plus
@@ -86,8 +92,8 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
     started_at = datetime.now(UTC)
     clock = time.perf_counter()
     arr = NetworkArrays.from_network(net)
-    cost_coeffs = _cost_coeffs(net, arr)
-    solution = dc_opf(arr, cost_coeffs, opts)
+    cost_coeffs, pwl_costs = _cost_coeffs(net, arr)
+    solution = dc_opf(arr, cost_coeffs, opts, pwl_costs=pwl_costs or None)
     elapsed_s = time.perf_counter() - clock
     provenance = ResultProvenance(
         engine="mambo-power",

@@ -49,18 +49,40 @@ model them either.
 directly — proven generically in ``record/m3-research.md`` §1, and re-verified here for both the
 pure-LP and the QP path. No PTDF-reconstruction fallback is needed.
 
-**PWL costs.** Out of scope for this slice (wave M3 slice S3); ``cost_coeffs`` with more than 3
-columns, or a caller wanting a piecewise-linear formulation, is not this module's job —
-:func:`mambo_power.opf.solve_dc_opf` raises ``NotImplementedError`` up front for a
-:class:`~mambo_power.model.PiecewiseCost` generator rather than silently misreading it as
-polynomial. There is no PWL-specific branch inside :func:`dc_opf` to leave a seam for; the clean
-extension point is ``cost_coeffs``'s own shape and the row-building block below, both untouched
-by this slice.
+**PWL costs (W4, spec design item 4).** A generator with a convex piecewise-linear cost is
+passed via ``dc_opf``'s optional ``pwl_costs`` argument — a ``{generator_index:
+[(p_mw, cost), ...]}`` mapping (``PiecewiseCost.points``, verbatim) — instead of through
+``cost_coeffs`` (that generator's ``cost_coeffs`` row is all-zero: its cost is captured entirely
+by the rows built here, reusing the existing "no cost -> all-zero row -> free" convention rather
+than adding a second one). The standard convex **segment/epigraph LP encoding** (research §2.1):
+for each PWL generator ``g`` with breakpoints ``(p_0,c_0)...(p_n,c_n)``, one new free decision
+variable ``cost_g`` is added with objective coefficient ``1`` (so minimising the LP pulls it down
+to the tightest bound), plus one inequality row per segment ``i``:
+``cost_g >= slope_i * p_g + intercept_i`` where ``slope_i = (c_{i+1}-c_i)/(p_{i+1}-p_i)`` and
+``intercept_i = c_i - slope_i * p_i``. Because the segment slopes are non-decreasing (convex —
+enforced below), the upper envelope of these lines equals the true piecewise cost exactly on
+``[p_0, p_n]``, so at the LP optimum ``cost_g`` is pinned to ``cost(p_g)`` exactly — the standard
+epigraph trick; it composes with the QP path above unchanged (a network may mix quadratic and
+PWL generators in the same solve — exercised by this wave's own ``case14_pwl.m`` fixture).
+**Only valid when the breakpoints span the generator's own ``[p_min, p_max]``** (true of every
+PWL generator this wave's own fixture uses); outside that range the epigraph rows extrapolate
+along the boundary segments' slopes, which is not necessarily the caller's intent — not checked
+here, since no caller in this codebase currently violates it.
+
+A non-convex breakpoint sequence (a decreasing segment slope) is rejected by
+:class:`NonConvexCostError`, raised by :func:`dc_opf` itself before any HiGHS object is created
+(fail fast, not a wrong-but-optimal-looking LP answer — research §2.1: an LP built from a
+non-convex PWL curve silently produces the wrong dispatch, since the encoding above is only valid
+for convex costs). This is deliberately an ``opf``-local check, not a retroactive change to
+:class:`~mambo_power.model.PiecewiseCost`'s own validation (which checks only strictly-increasing
+``p_mw`` — record/m3-research.md §2.3; a carry-over for a later wave, not silently dropped).
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 
 import highspy
 import numpy as np
@@ -151,6 +173,40 @@ class LmpBreakdown:
     """``flow_limit_duals @ ptdf``: each bus's exposure to every binding flow-limit row."""
 
 
+class NonConvexCostError(ValueError):
+    """A :class:`~mambo_power.model.PiecewiseCost`'s breakpoint slopes are not non-decreasing.
+
+    Raised by :func:`dc_opf` before any HiGHS object is created (module docstring, "PWL costs"):
+    the convex segment/epigraph LP encoding is only valid for a convex cost, and silently solving
+    a non-convex one would give a wrong-but-optimal-looking dispatch rather than fail loudly
+    (research §2.1). ``opf``-local — :class:`~mambo_power.model.PiecewiseCost` itself validates
+    only strictly-increasing ``p_mw``, not convexity (record/m3-research.md §2.3).
+    """
+
+
+def _convex_pwl_segments(points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    """``(slope, intercept)`` per segment of a convex PWL cost's breakpoints, for the epigraph
+    encoding (module docstring): ``cost >= slope * p + intercept`` on each segment.
+
+    Raises :class:`NonConvexCostError` if any segment's slope is less than the previous segment's
+    (a decreasing marginal cost) — the one check this encoding depends on, done once, up front.
+    """
+    segments: list[tuple[float, float]] = []
+    prev_slope: float | None = None
+    for (p0, c0), (p1, c1) in pairwise(points):
+        slope = (c1 - c0) / (p1 - p0)
+        if prev_slope is not None and slope < prev_slope:
+            raise NonConvexCostError(
+                f"non-convex piecewise-linear cost: segment slope {slope!r} following breakpoint "
+                f"({p0!r}, {c0!r}) is less than the previous segment's slope {prev_slope!r} — "
+                "breakpoints must have non-decreasing marginal cost for the convex "
+                "segment/epigraph LP encoding to be valid (module docstring)"
+            )
+        segments.append((slope, c0 - slope * p0))
+        prev_slope = slope
+    return segments
+
+
 def lmp_decomposition(duals: OpfDuals, ptdf: FloatArray) -> LmpBreakdown:
     """Per-bus LMP = balance dual (energy) + Σ(flow-limit-row duals × that bus's PTDF column).
 
@@ -164,10 +220,19 @@ def lmp_decomposition(duals: OpfDuals, ptdf: FloatArray) -> LmpBreakdown:
     return LmpBreakdown(lmp=energy + congestion, energy=energy, congestion=congestion)
 
 
-def dc_opf(arr: NetworkArrays, cost_coeffs: FloatArray, options: OpfDcOptions) -> OpfSolution:
+def dc_opf(
+    arr: NetworkArrays,
+    cost_coeffs: FloatArray,
+    options: OpfDcOptions,
+    pwl_costs: Mapping[int, Sequence[tuple[float, float]]] | None = None,
+) -> OpfSolution:
     """Solve the DC-OPF LP/QP of ``arr`` (module docstring): minimise Σ cost(p_g) subject to one
     system-wide nodal-balance row and one PTDF-based flow-limit row per branch, over generator
-    bounds. ``cost_coeffs`` is ``(n_gen, 3)``, columns ``[c2, c1, c0]``, generator order. Never
+    bounds. ``cost_coeffs`` is ``(n_gen, 3)``, columns ``[c2, c1, c0]``, generator order.
+    ``pwl_costs`` (module docstring, "PWL costs") is an optional ``{generator_index: points}``
+    map for any generator whose cost is convex piecewise-linear instead of polynomial — that
+    generator's own ``cost_coeffs`` row should be all-zero. Raises :class:`NonConvexCostError`
+    up front (before any HiGHS object exists) if a breakpoint sequence is non-convex. Never
     raises for an infeasible or unbounded model — reported through ``status``/``message``.
     """
     del options  # no tunable fields yet (OpfDcOptions docstring)
@@ -179,6 +244,13 @@ def dc_opf(arr: NetworkArrays, cost_coeffs: FloatArray, options: OpfDcOptions) -
             f"got {coeffs.shape}"
         )
     c2, c1, c0 = coeffs[:, 0], coeffs[:, 1], coeffs[:, 2]
+
+    # PWL segments are validated (convexity) before anything else is built — fail fast, per
+    # NonConvexCostError's own docstring.
+    pwl_costs_ = pwl_costs or {}
+    pwl_gen_idxs = sorted(pwl_costs_)
+    segments_by_gen = {i: _convex_pwl_segments(pwl_costs_[i]) for i in pwl_gen_idxs}
+    n_pwl = len(pwl_gen_idxs)
 
     h = highspy.Highs()  # type: ignore[no-untyped-call]  # highspy ships no type stubs
     h.setOptionValue("output_flag", False)
@@ -200,6 +272,16 @@ def dc_opf(arr: NetworkArrays, cost_coeffs: FloatArray, options: OpfDcOptions) -
             hess.index_ = nz.tolist()
             hess.value_ = (2.0 * c2[nz]).tolist()
             h.passHessian(hess)
+
+    # PWL cost columns: one free "cost_g" variable per PWL generator, appended after the n_gen
+    # dispatch columns (module docstring, "PWL costs"). Objective coefficient 1 — minimising the
+    # LP pulls each cost_g down to the tightest epigraph bound, i.e. exactly cost(p_g).
+    cost_col_of: dict[int, int] = {}
+    if n_pwl:
+        cost_cols = np.arange(n_gen, n_gen + n_pwl, dtype=np.int32)
+        h.addVars(n_pwl, np.full(n_pwl, -highspy.kHighsInf), np.full(n_pwl, highspy.kHighsInf))
+        h.changeColsCost(n_pwl, cost_cols, np.ones(n_pwl))
+        cost_col_of = dict(zip(pwl_gen_idxs, cost_cols.tolist(), strict=True))
 
     # --- nodal balance: Σ p_g == Σ p_load + Σ g_shunt (module docstring; phase shifts cancel
     # system-wide because Σ_bus p_shift == Σ_branch (pf_shift_k − pf_shift_k) == 0 identically).
@@ -237,6 +319,32 @@ def dc_opf(arr: NetworkArrays, cost_coeffs: FloatArray, options: OpfDcOptions) -
         row_starts = np.zeros(n_rows + 1, dtype=np.int32)
         h.addRows(n_rows, lower, upper, 0, row_starts, np.zeros(0, dtype=np.int32), np.zeros(0))
 
+    # --- PWL epigraph rows: cost_g >= slope_i * p_g + intercept_i, one per segment, per PWL
+    # generator (module docstring, "PWL costs"). Appended as extra rows after balance/flow-limit,
+    # so those rows' indices (0 and 1..n_branch, read below) are unaffected.
+    if segments_by_gen:
+        epi_lower: list[float] = []
+        epi_indices: list[int] = []
+        epi_values: list[float] = []
+        epi_row_starts = [0]
+        for gen_idx in pwl_gen_idxs:
+            p_col, cost_col = gen_idx, cost_col_of[gen_idx]
+            for slope, intercept in segments_by_gen[gen_idx]:
+                epi_lower.append(intercept)
+                epi_indices.extend([p_col, cost_col])
+                epi_values.extend([-slope, 1.0])
+                epi_row_starts.append(len(epi_indices))
+        n_epi = len(epi_lower)
+        h.addRows(
+            n_epi,
+            np.asarray(epi_lower, dtype=np.float64),
+            np.full(n_epi, highspy.kHighsInf),
+            len(epi_indices),
+            np.asarray(epi_row_starts, dtype=np.int32),
+            np.asarray(epi_indices, dtype=np.int32),
+            np.asarray(epi_values, dtype=np.float64),
+        )
+
     h.run()
     status = h.modelStatusToString(h.getModelStatus())
     if status != _OPTIMAL:
@@ -249,11 +357,14 @@ def dc_opf(arr: NetworkArrays, cost_coeffs: FloatArray, options: OpfDcOptions) -
         )
 
     sol = h.getSolution()
-    dispatch_mw = np.asarray(sol.col_value, dtype=np.float64)
+    # only the first n_gen columns/rows are the generator dispatch / balance+flow-limit rows this
+    # wave's callers know about — PWL cost_g columns and epigraph rows (if any) are appended
+    # after them and are an internal encoding detail, not part of OpfSolution/OpfDuals's shape.
+    dispatch_mw = np.asarray(sol.col_value[:n_gen], dtype=np.float64)
     duals = OpfDuals(
         balance=float(sol.row_dual[0]) if n_rows else 0.0,
-        flow_limit=np.asarray(sol.row_dual[1:], dtype=np.float64),
-        gen_bound=np.asarray(sol.col_dual, dtype=np.float64),
+        flow_limit=np.asarray(sol.row_dual[1:n_rows], dtype=np.float64),
+        gen_bound=np.asarray(sol.col_dual[:n_gen], dtype=np.float64),
     )
     objective_cost = float(h.getInfo().objective_function_value + np.sum(c0))
     return OpfSolution(
