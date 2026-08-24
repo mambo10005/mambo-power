@@ -6,6 +6,9 @@ flows + provenance), the PiecewiseCost seam, and the free-generator (no cost) co
 
 from __future__ import annotations
 
+import importlib
+from typing import Any
+
 import pytest
 
 from mambo_power.model import Branch, Bus, Generator, Load, Network, PiecewiseCost, PolynomialCost
@@ -117,6 +120,37 @@ def test_solve_dc_opf_defaults_options_when_none_given() -> None:
 def test_solve_dc_opf_ac_check_defaults_to_off() -> None:
     net = _net(PolynomialCost(coefficients=[10.0, 0.0]), PolynomialCost(coefficients=[20.0, 0.0]))
     assert solve_dc_opf(net, OpfDcOptions()).ac_check is None
+
+
+def test_solve_dc_opf_computes_ptdf_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review Performance FLAG: dc_opf and solve_dc_opf each independently called
+    numerics.ptdf.ptdf(arr) on the same arr (~62% of a warm solve_dc_opf call on case300,
+    m3-review-6axis.md §5) — dc_opf now returns the PTDF matrix it already built
+    (OpfSolution.ptdf) and solve_dc_opf reuses it instead of recomputing."""
+    # mambo_power.opf's own __init__ does `from .dc_opf import ..., dc_opf, ...`, which shadows
+    # the `dc_opf` submodule attribute on the package with the function of the same name — so the
+    # real module object must come from importlib, not `mambo_power.opf.dc_opf`.
+    dc_opf_module = importlib.import_module("mambo_power.opf.dc_opf")
+    opf_pkg = importlib.import_module("mambo_power.opf")
+    calls: list[Any] = []
+
+    def spy(arr: Any, *, _real: Any = dc_opf_module.compute_ptdf) -> Any:
+        calls.append(arr)
+        return _real(arr)
+
+    # Patch every module-level name this call path could reach ptdf(arr) through: dc_opf.py's own
+    # (the one remaining legitimate call site) and, only if it still exists, opf/__init__.py's own
+    # separate alias — the redundant second call site this fix removes. hasattr is False on the
+    # fixed code (the import is gone), so this is a no-op there and a real second patch target on
+    # the pre-fix code, making this test RED against the bug and GREEN against the fix alike.
+    monkeypatch.setattr(dc_opf_module, "compute_ptdf", spy)
+    if hasattr(opf_pkg, "compute_ptdf"):
+        monkeypatch.setattr(opf_pkg, "compute_ptdf", spy)
+
+    net = _net(PolynomialCost(coefficients=[10.0, 0.0]), PolynomialCost(coefficients=[20.0, 0.0]))
+    result = solve_dc_opf(net, OpfDcOptions())
+    assert result.status == "Optimal"
+    assert len(calls) == 1, f"ptdf(arr) computed {len(calls)} times in one solve_dc_opf call"
     assert solve_dc_opf(net).ac_check is None
 
 

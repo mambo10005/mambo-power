@@ -39,12 +39,25 @@ own printed numbers, though they land in the same range): case14/case_ieee30/cas
 worst relative cost residual is ``1.27e-12`` (case118) and worst absolute dispatch residual is
 ``1.87e-03`` MW (case118) — ``TIGHT_COST_REL_TOL``/``TIGHT_DISPATCH_ABS_TOL_MW`` below are pinned
 with margin above both. case300 does not fit that band — its residual is a real, separate
-``7.37e-05`` relative cost gap (~0.0074%, matching the diagnostic's own ~0.007% finding) and
-``0.082`` MW worst dispatch gap; not chased further here either (plausibly related to case300's
-non-contiguous bus numbering causing a minor index-alignment difference somewhere in one of the
-two independent importers — named as a still-open carry-over, not forced into the tight band).
-``WIDE_COST_REL_TOL``/``WIDE_DISPATCH_ABS_TOL_MW`` cover case300 alone, pinned with margin above
-what is actually measured, so a case300-specific regression would still be caught.
+``7.37e-05`` relative cost gap (~0.0074%) and ``0.082`` MW worst dispatch gap.
+
+**case300's root cause, closed (m3-critic.md Issue 1, re-verified here).** case300 is the only
+one of the 5 OPF fixtures with nonzero MATPOWER bus ``GS`` (shunt conductance): 17 buses summing
+to exactly 1.3 MW (checked directly against the fixture's raw ``bus`` matrix, column 5). This
+module's own balance row correctly includes it (``Σ p_g == Σ p_load + Σ g_shunt``,
+``opf/dc_opf.py``'s own derivation) — ``solve_dc_opf``'s total case300 dispatch, 23527.15 MW,
+matches the fixture's true load-plus-shunt total exactly. PyPSA's ``import_from_pypower_ppc``/
+DC-LOPF silently drops bus shunt conductance from its own power balance: its total case300
+dispatch, 23525.85 MW, equals only the raw ``PD`` (load) column with zero ``GS`` contribution
+(``n.loads["p_set"].sum() == raw bus PD sum``, checked directly). The gap between the two totals
+is exactly 1.3 MW, redistributed thinly across 68 of case300's 69 generators by the QP's
+marginal-cost weighting — not a bus-numbering/index-alignment artifact, which would produce a
+handful of large, lumpy per-generator discrepancies without changing either dispatch total.
+``dc_opf`` is provably *more* complete than this oracle on this one point, not less; nothing in
+``dc_opf`` needs to change. ``WIDE_COST_REL_TOL``/``WIDE_DISPATCH_ABS_TOL_MW`` cover case300
+alone, pinned with margin above what is actually measured, so a case300-specific regression would
+still be caught. A future PyPSA-oracle fixture with nonzero bus shunts will need this same
+accounting, not a wider tolerance band.
 """
 
 from __future__ import annotations

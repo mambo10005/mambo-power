@@ -22,7 +22,6 @@ import mambo_power
 from mambo_power.model import Network
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import pf_shift
-from mambo_power.numerics.ptdf import ptdf as compute_ptdf
 from mambo_power.opf.dc_opf import NonConvexCostError, OpfDcOptions, dc_opf, lmp_decomposition
 from mambo_power.pf import solve_ac
 from mambo_power.results import (
@@ -107,7 +106,9 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
     if solution.status != "Optimal" or solution.duals is None:
         return OpfDcResult(provenance=provenance, status=solution.status, message=solution.message)
 
-    ptdf_matrix = compute_ptdf(arr)
+    # solve_dc_opf reuses the PTDF matrix dc_opf already built (OpfSolution.ptdf docstring)
+    # instead of recomputing it — review Performance FLAG, ~62% of a warm solve_dc_opf call.
+    ptdf_matrix = solution.ptdf
     lmp = lmp_decomposition(solution.duals, ptdf_matrix)
 
     # branch flows at the found dispatch: flow = PTDF @ (net injection) + phase-shift injection,

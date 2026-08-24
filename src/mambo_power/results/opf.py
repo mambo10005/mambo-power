@@ -76,5 +76,6 @@ class OpfDcResult(BaseModel):
     branches: list[OpfBranchFlowResult] = Field(default_factory=list)
     ac_check: FeasibilityReport | None = Field(
         default=None,
-        description="AC-feasibility check of the dispatch; always None until wave M3 slice S5.",
+        description="AC-feasibility check of the dispatch; None unless options.ac_check is true "
+        "and the LP/QP solved to Optimal.",
     )

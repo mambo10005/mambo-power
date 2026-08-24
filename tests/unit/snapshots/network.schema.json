@@ -384,7 +384,7 @@
           "type": "string"
         },
         "points": {
-          "description": "(p_mw, cost) breakpoints, at least two; p_mw must be strictly increasing.",
+          "description": "(p_mw, cost) breakpoints, at least two and at most 200 (each adds one epigraph row to opf.dc_opf's LP); p_mw must be strictly increasing.",
           "items": {
             "maxItems": 2,
             "minItems": 2,
@@ -398,6 +398,7 @@
             ],
             "type": "array"
           },
+          "maxItems": 200,
           "title": "Points",
           "type": "array"
         },

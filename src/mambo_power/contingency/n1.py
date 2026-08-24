@@ -1,4 +1,4 @@
-"""N-1 branch-contingency screening: LODF fast screen -> confirming DC re-solve (wave M3 W5).
+"""N-1 branch-contingency screening: LODF fast screen -> confirming DC re-solve.
 
 Two stages, mirroring ``pf.ac_newton``/``pf.dc``'s array-level split. :func:`screen_n1` is the
 *estimate*: for every non-bridge branch outage ``k`` (:func:`mambo_power.numerics.bridges`

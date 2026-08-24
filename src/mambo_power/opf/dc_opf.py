@@ -150,6 +150,13 @@ class OpfSolution:
     options can trigger one."""
     dispatch_mw: FloatArray
     """Per-generator dispatch, MW, generator order; all-zero when ``status != "Optimal"``."""
+    ptdf: FloatArray
+    """The PTDF matrix ``dc_opf`` already built to construct its flow-limit rows (module
+    docstring), returned so callers (:func:`mambo_power.opf.solve_dc_opf`) can reuse it instead
+    of recomputing — :func:`~mambo_power.numerics.ptdf.ptdf` is ~31% of a warm ``solve_dc_opf``
+    call on case300, so computing it twice was ~62% of that call's runtime (review Performance
+    FLAG). Present regardless of ``status``: it is built before ``Highs.run()`` and does not
+    depend on the solve's outcome."""
     objective_cost: float
     """Total generation cost, $/h — ``Σ (c2·p² + c1·p + c0)`` at the found dispatch, including
     every generator's constant term (HiGHS's own objective value omits it, since a constant
@@ -351,6 +358,7 @@ def dc_opf(
         return OpfSolution(
             status=status,
             dispatch_mw=np.zeros(n_gen),
+            ptdf=ptdf_matrix,
             objective_cost=0.0,
             duals=None,
             message=f"dc_opf: HiGHS reported model status {status!r}",
@@ -370,6 +378,7 @@ def dc_opf(
     return OpfSolution(
         status=status,
         dispatch_mw=dispatch_mw,
+        ptdf=ptdf_matrix,
         objective_cost=objective_cost,
         duals=duals,
         message=None,
