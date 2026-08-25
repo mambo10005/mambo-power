@@ -9,9 +9,19 @@ from __future__ import annotations
 
 import pytest
 
+from mambo_power import opf
 from mambo_power.io.matpower import load
 from mambo_power.model import PolynomialBid
-from tests._bids import VOLL_PER_MWH, bid_for_load, fleet_max_marginal_cost, with_bids
+from tests._bids import (
+    INTERIOR_FLOOR_MULTIPLE,
+    INTERIOR_TOP_MULTIPLE,
+    VOLL_PER_MWH,
+    baseline_clearing_price,
+    bid_for_load,
+    fleet_max_marginal_cost,
+    interior_bid_for_load,
+    with_bids,
+)
 from tests._fixtures import FIXTURES_DIR
 
 
@@ -86,3 +96,67 @@ def test_with_bids_honors_an_explicit_subset() -> None:
     by_id = {ld.id: ld.bid for ld in bid_net.loads}
     assert by_id["load-9"] is not None
     assert all(bid is None for lid, bid in by_id.items() if lid != "load-9")
+
+
+def test_baseline_clearing_price_is_the_fixed_load_market_price() -> None:
+    """case14 rates no branch, so its fixed-load solve clears at one uniform price system-wide
+    -- the value interior_bid_for_load brackets. Pinned against a direct fixed-load solve, not
+    a remembered number."""
+    net = _case14()
+    baseline = baseline_clearing_price(net)
+    direct = opf.solve_dc_opf(net)
+    assert direct.status == "Optimal"
+    assert baseline == pytest.approx(max(b.lmp for b in direct.buses), abs=1e-9)
+    # strictly between the cheapest generator's marginal cost and the fleet ceiling: a real
+    # clearing price, not a bound artifact.
+    assert 0.0 < baseline < fleet_max_marginal_cost(net)
+
+
+def test_interior_bid_for_load_brackets_the_baseline_clearing_price() -> None:
+    """The property the whole rule exists for: marginal value starts strictly above the baseline
+    price and ends strictly below it, so the load's own optimality condition is met strictly
+    inside [0, p_mw] instead of at a bound."""
+    net = _case14()
+    load_id = "load-9"
+    baseline = baseline_clearing_price(net)
+    bid = interior_bid_for_load(net, load_id)
+    assert isinstance(bid, PolynomialBid)
+    v2, v1, v0 = bid.coefficients
+    assert v0 == 0.0
+    p_anchor = next(ld for ld in net.loads if ld.id == load_id).p_mw
+
+    mv_at_zero = v1
+    mv_at_anchor = v1 + 2.0 * v2 * p_anchor
+    assert mv_at_zero == pytest.approx(INTERIOR_TOP_MULTIPLE * baseline, abs=1e-6)
+    assert mv_at_anchor == pytest.approx(INTERIOR_FLOOR_MULTIPLE * baseline, abs=1e-6)
+    assert mv_at_anchor < baseline < mv_at_zero  # the bracket, stated as the assertion
+
+
+def test_interior_bid_for_load_is_genuinely_concave() -> None:
+    net = _case14()
+    v2, _v1, _v0 = interior_bid_for_load(net, "load-9").coefficients
+    assert v2 < 0.0  # strictly decreasing marginal value across the whole domain
+
+
+def test_interior_bid_for_load_rejects_an_unknown_load() -> None:
+    net = _case14()
+    with pytest.raises(ValueError, match="no load with id"):
+        interior_bid_for_load(net, "load-nope")
+
+
+def test_with_bids_applies_the_interior_rule_only_to_the_named_subset() -> None:
+    net = _case14()
+    out = with_bids(net, interior_load_ids=["load-9"])
+    by_id = {ld.id: ld.bid for ld in out.loads}
+    assert by_id["load-9"] == interior_bid_for_load(net, "load-9")
+    for load_id, bid in by_id.items():
+        if load_id != "load-9":
+            assert bid == bid_for_load(net, load_id)
+
+
+def test_with_bids_rejects_an_interior_id_outside_the_bid_set() -> None:
+    """A typo here would silently return the all-price-taking fixture the caller was trying to
+    avoid -- the exact failure the parity test's power depends on not happening quietly."""
+    net = _case14()
+    with pytest.raises(ValueError, match="not in this call's bid set"):
+        with_bids(net, load_ids=["load-2"], interior_load_ids=["load-9"])

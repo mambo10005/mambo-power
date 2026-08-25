@@ -250,6 +250,11 @@ Optimal
 See [`09_nodal_market.py`](../examples/index.md#9-nodal-market) for the full printout: dispatch,
 bound duals, per-bus LMP split into energy/congestion, and the settlement identity check.
 
+`Load.bid` covers a load's entire `p_mw` -- there is no per-load partial-capacity split. To bid
+only part of a load's demand while the rest stays must-serve, split it into two `Load` entities
+at the same bus: one with `bid=None` for the fixed portion, one bid-carrying for the elastic
+remainder (`market.nodal` sums both onto that bus like any other two loads).
+
 ## Jobs API
 
 `market.nodal` is a registered [jobs](jobs.md) kind: `jobs.run(jobs.SolveRequest(kind=

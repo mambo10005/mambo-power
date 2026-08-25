@@ -46,10 +46,27 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from mambo_power.model import Network, PolynomialBid
+from mambo_power import opf
+from mambo_power.model import Load, Network, PolynomialBid
 
 VOLL_PER_MWH = 10_000.0
 """Marginal value at ``p=0`` for every derived bid (module docstring)."""
+
+
+def _load_or_raise(net: Network, load_id: str) -> Load:
+    """``net``'s load with ``load_id``, rejecting the two inputs neither derivation rule below
+    can anchor against: an id that doesn't resolve, and a non-positive ``p_mw`` (both rules
+    divide by it)."""
+    try:
+        load = next(ld for ld in net.loads if ld.id == load_id)
+    except StopIteration:
+        raise ValueError(f'no load with id "{load_id}" in this network') from None
+    if load.p_mw <= 0.0:
+        raise ValueError(
+            f'load "{load_id}" has p_mw={load.p_mw!r} -- a derived bid needs a strictly '
+            "positive anchor to derive a curve against"
+        )
+    return load
 
 
 def fleet_max_marginal_cost(net: Network) -> float:
@@ -89,15 +106,7 @@ def bid_for_load(net: Network, load_id: str) -> PolynomialBid:
     (the anchor rule divides by it), or :data:`VOLL_PER_MWH` doesn't clearly exceed the fleet's
     own ceiling (the invariant a valid concave curve depends on -- module docstring).
     """
-    try:
-        load = next(ld for ld in net.loads if ld.id == load_id)
-    except StopIteration:
-        raise ValueError(f'no load with id "{load_id}" in this network') from None
-    if load.p_mw <= 0.0:
-        raise ValueError(
-            f'load "{load_id}" has p_mw={load.p_mw!r} -- bid_for_load needs a strictly '
-            "positive anchor to derive a curve against"
-        )
+    load = _load_or_raise(net, load_id)
     fleet_mc = fleet_max_marginal_cost(net)
     if not VOLL_PER_MWH > fleet_mc:
         raise ValueError(
@@ -110,14 +119,105 @@ def bid_for_load(net: Network, load_id: str) -> PolynomialBid:
     return PolynomialBid(coefficients=[v2, v1, 0.0])
 
 
-def with_bids(net: Network, load_ids: Iterable[str] | None = None) -> Network:
+INTERIOR_TOP_MULTIPLE = 2.0
+"""Marginal value at ``p=0`` for an interior-anchored bid, as a multiple of
+:func:`baseline_clearing_price` (see :func:`interior_bid_for_load`)."""
+INTERIOR_FLOOR_MULTIPLE = 0.5
+"""Marginal value at ``p = load.p_mw`` for an interior-anchored bid, same units as
+:data:`INTERIOR_TOP_MULTIPLE`."""
+
+
+def baseline_clearing_price(net: Network) -> float:
+    """The highest bus LMP a plain **fixed-load** :func:`mambo_power.opf.solve_dc_opf` produces
+    on ``net`` -- the price an interior-anchored bid is bracketed around
+    (:func:`interior_bid_for_load`).
+
+    ``solve_dc_opf`` ignores ``Load.bid`` entirely (``Load.bid``'s own field description), so
+    this is well-defined whether or not ``net`` already carries bids; it is the market price
+    that *would* clear if every load were must-serve. Raises ``ValueError`` if that solve does
+    not reach ``Optimal`` (nothing to anchor against).
+    """
+    result = opf.solve_dc_opf(net)
+    if result.status != "Optimal":
+        raise ValueError(
+            f"fixed-load solve_dc_opf on this network returned status={result.status!r} -- "
+            "no baseline clearing price to anchor an interior bid against"
+        )
+    return max(bus.lmp for bus in result.buses)
+
+
+def interior_bid_for_load(net: Network, load_id: str) -> PolynomialBid:
+    """A concave quadratic bid for ``load_id`` whose marginal value **crosses** ``net``'s own
+    :func:`baseline_clearing_price` strictly inside ``[0, load.p_mw]``, so the load clears at an
+    **interior** quantity instead of at its own bound.
+
+    :func:`bid_for_load`'s fleet-ceiling anchor rule is deliberately price-taking by
+    construction -- its low end (:func:`fleet_max_marginal_cost`) upper-bounds the achievable
+    market price, so every load it derives is pinned at its full ``p_mw`` (that module
+    docstring's "mathematical consequence"). That makes it the right rule for exercising the
+    quadratic QP path, and the wrong one for exercising *dispatch quantity*: on a fixture where
+    every bid load sits at its own bound, a dispatch-quantity check cannot distinguish a correct
+    solve from one whose demand columns are double-counted, because the bound pins the answer
+    either way (M4 critic Issue 1, and ``m4-audit.md`` §2/§3 before it).
+
+    This rule brackets the baseline price instead: marginal value descends linearly from
+    ``INTERIOR_TOP_MULTIPLE * baseline`` at ``p=0`` to ``INTERIOR_FLOOR_MULTIPLE * baseline`` at
+    ``p = load.p_mw``. Since the floor is strictly below the baseline price and the top strictly
+    above it, the load's own optimality condition (marginal value == its bus LMP) is met at a
+    quantity strictly inside its domain, and that quantity moves whenever the balance RHS moves
+    -- which is exactly the sensitivity a double-counting bug would show up in.
+
+    Raises ``ValueError`` on the same unusable inputs :func:`bid_for_load` rejects (unknown id,
+    non-positive ``p_mw``), or if the multiples above do not actually bracket the baseline price.
+    """
+    load = _load_or_raise(net, load_id)
+    baseline = baseline_clearing_price(net)
+    top = INTERIOR_TOP_MULTIPLE * baseline
+    floor = INTERIOR_FLOOR_MULTIPLE * baseline
+    if not floor < baseline < top:
+        raise ValueError(
+            f"interior anchor does not bracket this network's baseline clearing price "
+            f"{baseline!r} (floor={floor!r}, top={top!r}) -- the derived bid would clear at a "
+            "bound, not an interior quantity"
+        )
+    v1 = top
+    v2 = (floor - top) / (2.0 * load.p_mw)
+    return PolynomialBid(coefficients=[v2, v1, 0.0])
+
+
+def with_bids(
+    net: Network,
+    load_ids: Iterable[str] | None = None,
+    *,
+    interior_load_ids: Iterable[str] | None = None,
+) -> Network:
     """A copy of ``net`` with :func:`bid_for_load`'s derivation set on each id in ``load_ids``
     (default: every load in ``net``). Mirrors ``tests/_rated.py``'s ``rated_network`` -- does
     not mutate ``net``, returns a fresh :class:`~mambo_power.model.Network` via
     ``model_copy(deep=True)``.
+
+    ``interior_load_ids`` names the subset that gets :func:`interior_bid_for_load`'s
+    baseline-bracketing derivation instead of the default fleet-ceiling one -- the loads that
+    clear at an interior quantity rather than pinned at their own bound. Ids outside ``load_ids``
+    are rejected rather than silently ignored, since a typo there would quietly return the
+    all-price-taking fixture the caller was trying to avoid.
     """
     targets = set(load_ids) if load_ids is not None else {ld.id for ld in net.loads}
-    bids = {load_id: bid_for_load(net, load_id) for load_id in targets}
+    interior = set(interior_load_ids or ())
+    stray = interior - targets
+    if stray:
+        raise ValueError(
+            f"interior_load_ids {sorted(stray)} are not in this call's bid set -- they would "
+            "carry no bid at all"
+        )
+    bids = {
+        load_id: (
+            interior_bid_for_load(net, load_id)
+            if load_id in interior
+            else bid_for_load(net, load_id)
+        )
+        for load_id in targets
+    }
     out = net.model_copy(deep=True)
     for ld in out.loads:
         if ld.id in bids:

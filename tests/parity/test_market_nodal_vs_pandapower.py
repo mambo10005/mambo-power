@@ -31,17 +31,31 @@ or a curious reader doesn't have to rediscover it via ``git log -S``; this wave 
 via ``sgen`` rather than root-causing it (spec "Not Doing").
 
 **Fixture and tolerance**: case14 (module docstring "at least one real multi-bus fixture"),
-every one of its 11 loads bid via ``tests/_bids.with_bids`` (VOLL=10,000 $/MWh, linear marginal
-value descending to the fleet's own max marginal cost -- ``tests/_bids.py``'s own module
-docstring). By that anchor rule's own mathematical consequence (documented there), every load on
-this fixture ends up fully price-taking (dispatched at its own committed ``p_mw``) -- this test
-still proves genuine oracle parity on the *quadratic* elastic-demand QP path (``dc_opf``'s
-Hessian sign-flip for a nonzero ``v2``), a code path AC-5's own price-taker test does not
-exercise (its bid is purely linear, ``v2=0``, an LP not a QP). Tolerances below are measured
-directly (worst case across all 11 loads, ``<scratchpad>/probe_bid_oracle_all.py``: dispatch
-7.14e-10 MW, LMP 1.94e-5 $/MWh) and pinned a comfortable margin above, per this wave's own AC-6
-and the repo's established parity-tolerance discipline (measure and record, don't assume a round
-number).
+all 11 loads bid via ``tests/_bids.with_bids`` -- ten by the default fleet-ceiling anchor rule
+(VOLL=10,000 $/MWh, linear marginal value descending to the fleet's own max marginal cost) and
+:data:`INTERIOR_LOAD_ID` by ``tests/_bids.interior_bid_for_load``'s baseline-bracketing rule.
+
+**Why one load is anchored differently (M4 critic Issue 1).** The fleet-ceiling rule is
+price-taking *by construction* -- its low end upper-bounds the achievable clearing price, so
+every load it derives is pinned at its own committed ``p_mw`` (``tests/_bids.py``'s "mathematical
+consequence"). That is the right rule for exercising the *quadratic* elastic-demand QP path
+(``dc_opf``'s Hessian sign-flip for a nonzero ``v2``), which AC-5's own purely linear
+(``v2=0``, LP-not-QP) price-taker test does not reach. It is the wrong rule for exercising
+*dispatch quantity*: with every bid load sitting at its bound, the bound pins the answer whether
+or not the solve is correct, so the dispatch-quantity checks below could not distinguish a
+correct solve from one whose demand columns are double-counted. Measured directly, by stubbing
+out ``dc_opf``'s own double-counting subtraction and re-running: with every load fleet-anchored,
+the worst dispatch residual stayed at 7.14e-10 MW (undetected); with one load interior-anchored
+it goes to **1.569 MW**, ~1,570x the tolerance pinned below. The single interior load is what
+gives every dispatch-quantity check on this fixture its power, against an independent oracle
+engine rather than only against ``dc_opf``'s own arithmetic (which is AC-4's hand-built network).
+
+Tolerances are measured directly (worst case across all 11 loads, scratchpad probe): dispatch
+1.01e-5 MW, LMP 1.80e-5 $/MWh -- both now dominated by the interior load's genuinely solved
+quantity rather than by a bound-pinned one, so the dispatch tolerance is looser than the
+all-price-taking fixture needed (7.14e-10 MW) and is re-pinned here accordingly. Both are set a
+comfortable margin above the measurement, per this wave's own AC-6 and the repo's established
+parity-tolerance discipline (measure and record, don't assume a round number).
 """
 
 from __future__ import annotations
@@ -62,12 +76,18 @@ from tests._fixtures import FIXTURES_DIR
 from tests.parity._mpc_reader import read_mpc_numpy
 from tests.parity.test_matpower_vs_pandapower import pandapower_from_raw
 
-DISPATCH_ABS_TOL_MW = 1e-6
-"""Margin over the measured worst absolute per-load dispatch residual, 7.14e-10 MW."""
+DISPATCH_ABS_TOL_MW = 1e-3
+"""Margin over the measured worst absolute per-load dispatch residual, 1.01e-5 MW (module
+docstring: set by the interior-anchored load's genuinely solved quantity, ~100x margin)."""
 LMP_ABS_TOL = 1e-3
-"""Margin over the measured worst absolute per-bus LMP residual, 1.94e-5 $/MWh."""
+"""Margin over the measured worst absolute per-bus LMP residual, 1.80e-5 $/MWh."""
 
 CASE = "case14"
+INTERIOR_LOAD_ID = "load-9"
+"""The one load given ``tests/_bids.interior_bid_for_load``'s baseline-bracketing derivation, so
+it clears strictly inside its own [0, p_mw] bound (module docstring). Any load on this fixture
+would do -- load-9 (29.5 MW) is simply large enough that its interior quantity is comfortably
+clear of both ends."""
 
 
 @dataclass
@@ -125,7 +145,7 @@ def case() -> Case:
     path = FIXTURES_DIR / f"{CASE}.m"
     raw = read_mpc_numpy(path)
     net = matpower.load(path)
-    bid_net = with_bids(net)  # every load, tests/_bids.py's own module docstring
+    bid_net = with_bids(net, interior_load_ids=[INTERIOR_LOAD_ID])  # module docstring
     ours = solve_nodal(Scenario(network=bid_net), MarketNodalOptions())
     pp_net, sgen_bus, sgen_idx = _build_sgen_oracle(raw, bid_net)
     return Case(ours=ours, pp=pp_net, sgen_bus=sgen_bus, sgen_idx=sgen_idx)
@@ -161,13 +181,39 @@ def test_lmp_matches_the_sgen_oracle_on_every_bid_load_s_bus(case: Case) -> None
     assert worst <= LMP_ABS_TOL, detail
 
 
-def test_every_bid_load_is_fully_price_taking_on_this_fixture(case: Case) -> None:
-    """The mathematical consequence tests/_bids.py's own module docstring documents: this
-    anchor rule's low end upper-bounds the achievable market price, so every derived bid is
-    dispatched at its own full p_mw on this fixture -- confirmed against both engines, not just
-    ours."""
-    ours_by_id = {ld.id: ld.p_mw for ld in case.ours.loads if ld.id in case.sgen_idx}
+def test_every_fleet_anchored_bid_load_is_fully_price_taking_on_this_fixture(case: Case) -> None:
+    """The mathematical consequence tests/_bids.py's own module docstring documents: the
+    fleet-ceiling anchor rule's low end upper-bounds the achievable market price, so every bid
+    it derives is dispatched at its own full p_mw on this fixture -- confirmed against both
+    engines, not just ours. INTERIOR_LOAD_ID is excluded: it is deliberately anchored by the
+    other rule and is asserted interior by the test below, which is the whole point of it
+    (module docstring)."""
+    ours_by_id = {
+        ld.id: ld.p_mw
+        for ld in case.ours.loads
+        if ld.id in case.sgen_idx and ld.id != INTERIOR_LOAD_ID
+    }
+    assert len(ours_by_id) == len(case.sgen_idx) - 1, "only the interior load may be excluded"
     net = matpower.load(FIXTURES_DIR / f"{CASE}.m")
     p_mw_by_id = {ld.id: ld.p_mw for ld in net.loads}
     for load_id, p_mw in ours_by_id.items():
         assert p_mw == pytest.approx(p_mw_by_id[load_id], abs=1e-6)
+
+
+def test_the_interior_anchored_load_clears_strictly_inside_its_own_bound(case: Case) -> None:
+    """The condition that gives every dispatch-quantity check above its power (module
+    docstring): INTERIOR_LOAD_ID's quantity is genuinely solved, not pinned at either end of its
+    own [0, p_mw] domain, so it moves whenever the balance RHS moves. Asserted three ways --
+    strictly inside both ends, a zero bound dual (neither bound is active), and agreement with
+    the independent sgen oracle on that same interior quantity."""
+    net = matpower.load(FIXTURES_DIR / f"{CASE}.m")
+    cap = next(ld.p_mw for ld in net.loads if ld.id == INTERIOR_LOAD_ID)
+    row = next(ld for ld in case.ours.loads if ld.id == INTERIOR_LOAD_ID)
+
+    assert 0.0 < row.p_mw < cap, (row.p_mw, cap)
+    # a comfortable margin from either end, not merely "not exactly equal" to one of them
+    assert min(row.p_mw, cap - row.p_mw) > 0.05 * cap, (row.p_mw, cap)
+    assert row.bound_dual == pytest.approx(0.0, abs=1e-9), row.bound_dual
+
+    pp_p_mw = -float(case.pp.res_sgen.at[case.sgen_idx[INTERIOR_LOAD_ID], "p_mw"])
+    assert abs(row.p_mw - pp_p_mw) <= DISPATCH_ABS_TOL_MW, (row.p_mw, pp_p_mw)

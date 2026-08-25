@@ -145,7 +145,13 @@ class Load(_Entity):
     p_mw: float = Field(description="Active demand, MW.")
     q_mvar: float = Field(description="Reactive demand, MVAr.")
     in_service: bool = True
-    bid: LoadBid | None = None
+    bid: LoadBid | None = Field(
+        default=None,
+        description="Elastic-demand bid covering this Load's entire p_mw; market.nodal reads "
+        "it, opf.solve_dc_opf does not. There is no per-Load partial-capacity split -- bidding "
+        "only part of a load's capacity, with the rest must-serve, means splitting it into two "
+        "Load entities at the same bus (one bid=None fixed, one bid-carrying).",
+    )
 
 
 class Shunt(_Entity):

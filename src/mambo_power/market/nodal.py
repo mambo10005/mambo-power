@@ -14,13 +14,12 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 
-import numpy as np
-import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict
 
 import mambo_power
 from mambo_power.model import Network, Scenario
 from mambo_power.numerics.arrays import NetworkArrays
+from mambo_power.opf import gen_cost_coeffs
 from mambo_power.opf.dc_opf import (
     NonConcaveBidError,
     NonConvexCostError,
@@ -38,8 +37,6 @@ from mambo_power.results import (
 
 __all__ = ["MarketNodalOptions", "NonConcaveBidError", "NonConvexCostError", "solve_nodal"]
 
-FloatArray = npt.NDArray[np.float64]
-PwlCosts = dict[int, list[tuple[float, float]]]
 PolyBidCoeffs = dict[int, tuple[float, float, float]]
 PwlBids = dict[int, list[tuple[float, float]]]
 
@@ -56,38 +53,11 @@ class MarketNodalOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-def _gen_cost_coeffs(net: Network, arr: NetworkArrays) -> tuple[FloatArray, PwlCosts]:
-    """Per-generator ``[c2, c1, c0]`` plus any PWL costs, from ``Generator.cost``.
-
-    The same extraction :func:`mambo_power.opf._cost_coeffs` performs, mirrored here rather than
-    imported (that name is module-private) since ``market.nodal`` needs the identical pattern
-    for the demand side too (:func:`_load_bid_coeffs`, below).
-    """
-    gens_by_id = {g.id: g for g in net.generators}
-    coeffs = np.zeros((len(arr.gen_ids), 3))
-    pwl_costs: PwlCosts = {}
-    for i, gen_id in enumerate(arr.gen_ids):
-        cost = gens_by_id[gen_id].cost
-        if cost is None:
-            continue
-        if cost.kind == "piecewise":
-            pwl_costs[i] = list(cost.points)
-            continue
-        values = list(cost.coefficients)
-        if len(values) > 3:
-            raise NotImplementedError(
-                f'generator "{gen_id}" has a degree-{len(values) - 1} polynomial cost; '
-                "market.nodal supports polynomial costs up to quadratic only"
-            )
-        coeffs[i, 3 - len(values) :] = values
-    return coeffs, pwl_costs
-
-
 def _load_bid_coeffs(net: Network, arr: NetworkArrays) -> tuple[PolyBidCoeffs, PwlBids]:
     """Per-load ``(v2, v1, v0)`` plus any PWL bids, from ``Load.bid`` -- the demand-side mirror
-    of :func:`_gen_cost_coeffs`. A load with no bid (``bid is None``) contributes to neither
-    mapping, so :func:`~mambo_power.opf.dc_opf.dc_opf` leaves it purely on the fixed-RHS side
-    (its module docstring, "Elastic demand").
+    of :func:`mambo_power.opf.gen_cost_coeffs`. A load with no bid (``bid is None``) contributes
+    to neither mapping, so :func:`~mambo_power.opf.dc_opf.dc_opf` leaves it purely on the
+    fixed-RHS side (its module docstring, "Elastic demand").
     """
     loads_by_id = {ld.id: ld for ld in net.loads}
     demand_bid_coeffs: PolyBidCoeffs = {}
@@ -126,7 +96,7 @@ def solve_nodal(scenario: Scenario, options: MarketNodalOptions | None = None) -
     clock = time.perf_counter()
     net = scenario.network
     arr = NetworkArrays.from_network(net)
-    cost_coeffs, pwl_costs = _gen_cost_coeffs(net, arr)
+    cost_coeffs, pwl_costs = gen_cost_coeffs(net, arr)
     demand_bid_coeffs, demand_pwl_bids = _load_bid_coeffs(net, arr)
     solution = dc_opf(
         arr,

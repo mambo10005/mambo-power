@@ -260,6 +260,35 @@ def test_demand_pwl_bid_stops_at_the_breakpoint_where_marginal_value_drops_below
     np.testing.assert_allclose(solution.dispatch_mw, [30.0], atol=1e-6)
 
 
+def test_demand_pwl_bid_with_three_segments_lands_at_an_interior_optimum() -> None:
+    """Every other PWL demand-bid test in this suite uses exactly 2 segments (3 points) --
+    ``_concave_pwl_segments`` (the hypograph mirror of ``_convex_pwl_segments``) is a literal
+    sign-mirror of the generator-side epigraph builder with no special-casing of segment count,
+    but nothing committed had exercised it past 2 segments (M4 review Correctness flag T1). This
+    is that review's own probe, turned into a committed test.
+
+    1-bus network, g0 linear ($15/MWh, effectively unbounded), a genuine 3-segment concave demand
+    bid: slopes 30, 20, 10 $/MWh over ``[0,10], [10,20], [20,30]`` (points ``(0,0), (10,300),
+    (20,500), (30,600)``). Welfare-maximizing: take segment 1 (slope 30 > 15, take all 10 MW),
+    take segment 2 (slope 20 > 15, take all 10 MW, total 20), stop before segment 3 (slope
+    10 < 15) -- expected optimum ``d = 20`` exactly, at an interior point of the bid's own domain
+    (neither endpoint), balance dual pinned to the marginal generator's own cost (15.0)."""
+    arr = _one_bus_arrays(p_max=1000.0)
+    d0 = arr.load_ids.index("d0")
+    coeffs = np.array([[0.0, 15.0, 0.0]])
+    bid_points = [(0.0, 0.0), (10.0, 300.0), (20.0, 500.0), (30.0, 600.0)]  # slopes 30, 20, 10
+
+    solution = dc_opf(arr, coeffs, OpfDcOptions(), demand_pwl_bids={d0: bid_points})
+
+    assert solution.status == "Optimal"
+    assert solution.duals is not None
+    np.testing.assert_allclose(solution.demand_dispatch_mw, [20.0], atol=1e-6)
+    np.testing.assert_allclose(solution.dispatch_mw, [20.0], atol=1e-6)
+    # interior optimum, not pinned at either end of its own [0, 30] bid domain
+    assert solution.demand_bound[0] == pytest.approx(0.0, abs=1e-6)
+    assert solution.duals.balance == pytest.approx(15.0, abs=1e-6)
+
+
 # --- backward compatibility: demand params default to None = today's exact fixed-load behavior --
 
 
