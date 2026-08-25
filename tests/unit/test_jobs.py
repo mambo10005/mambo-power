@@ -1,9 +1,17 @@
 """W6/W7 / AC-6/AC-8: the stateless ``jobs`` surface — ``SolveRequest`` → ``run`` → ``SolveResult``.
 
-Contract under test (wave M2 design item 6, wave M3 design item 7; ADR-004):
+Wave M4 W5/AC-7 extends this file (rather than duplicating it) for ``market.nodal``: a fifth
+kind, whose runner takes the same ``(Network, options)`` shape as every other kind but wraps the
+``Network`` into a ``Scenario`` itself (``Scenario`` is genuinely just ``network: Network`` this
+wave, per ``model/scenario.py`` — no widening of ``SolveRequest``/``ResultModel``'s *request*
+side is needed, only ``SolveResult.result``'s union, same mechanical step every prior kind took);
+and a shared non-Optimal-status-translation helper both ``opf.dc`` and ``market.nodal``'s runners
+call (wave spec Design item 6), proved genuinely shared, not duplicated.
 
-* ``KINDS`` lists exactly ``pf.ac``, ``pf.dc``, ``opf.dc``, ``n1``; every spec's models are
-  importable pydantic models and its runner is callable;
+Contract under test (wave M2 design item 6, wave M3 design item 7, wave M4 design item 6; ADR-004):
+
+* ``KINDS`` lists exactly ``pf.ac``, ``pf.dc``, ``opf.dc``, ``n1``, ``market.nodal``; every
+  spec's models are importable pydantic models and its runner is callable;
 * ``run`` is pure: two calls on the same request give equal results modulo provenance timing;
 * requests and results round-trip through JSON (``run_json`` is JSON in, JSON out);
 * every failure — unknown kind, bad options, invalid network, slack without a generator, a
@@ -20,7 +28,7 @@ from __future__ import annotations
 
 import json
 import warnings
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -40,6 +48,8 @@ from mambo_power.jobs import (
     run,
     run_json,
 )
+from mambo_power.jobs import registry as jobs_registry
+from mambo_power.market import MarketNodalOptions
 from mambo_power.model import Network
 from mambo_power.numerics import SetpointConflictWarning
 from mambo_power.opf import OpfDcOptions
@@ -47,6 +57,7 @@ from mambo_power.pf import AcOptions, solve_ac, solve_dc
 from mambo_power.results import (
     AcPowerFlowResult,
     DcPowerFlowResult,
+    MarketNodalResult,
     N1Result,
     OpfDcResult,
     ResultProvenance,
@@ -55,7 +66,7 @@ from tests._fixtures import FIXTURES_DIR
 
 DERIVED_DIR = FIXTURES_DIR / "derived"
 TIMING = {"provenance": {"started_at", "elapsed_s"}}
-KNOWN_KINDS = {"pf.ac", "pf.dc", "opf.dc", "n1"}
+KNOWN_KINDS = {"pf.ac", "pf.dc", "opf.dc", "n1", "market.nodal"}
 
 
 def _network(name: str = "case14") -> Network:
@@ -70,7 +81,9 @@ def case14() -> Network:
 
 def _infeasible_net(case14: Network) -> Network:
     """``case14`` with every generator's capacity collapsed far below its own load — no
-    dispatch can possibly satisfy the balance constraint (AC-8's ``INFEASIBLE_LP`` case)."""
+    dispatch can possibly satisfy the balance constraint (AC-8's/AC-7's ``INFEASIBLE_LP`` case;
+    ``case14``'s loads carry no bid, so this is infeasible for ``market.nodal`` the identical
+    way it is for ``opf.dc`` — the welfare LP reduces to the same fixed-load balance row)."""
     generators = [
         g.model_copy(update={"p_max_mw": 0.01, "p_min_mw": 0.0}) for g in case14.generators
     ]
@@ -99,6 +112,8 @@ def test_every_kind_has_models_and_a_callable_runner() -> None:
     assert KINDS["opf.dc"].result_model is OpfDcResult
     assert KINDS["n1"].options_model is N1Options
     assert KINDS["n1"].result_model is N1Result
+    assert KINDS["market.nodal"].options_model is MarketNodalOptions
+    assert KINDS["market.nodal"].result_model is MarketNodalResult
 
 
 def test_register_adds_a_kind_and_refuses_duplicates() -> None:
@@ -167,6 +182,22 @@ def test_run_n1_on_case14_is_ok_with_typed_result_and_provenance(case14: Network
     assert out.provenance == out.result.provenance
 
 
+def test_run_market_nodal_on_case14_is_ok_with_typed_result_and_provenance(case14: Network) -> None:
+    """``case14``'s loads carry no bid, so ``market.nodal`` reduces to plain fixed-load
+    clearing (AC-5's price-taker reduction) — this is a jobs-boundary smoke test, not a
+    re-proof of AC-4/AC-5's settlement math (that's ``test_market_nodal.py``'s job)."""
+    out = run(SolveRequest(kind="market.nodal", network=case14))
+    assert out.status == "ok"
+    assert out.error is None
+    assert isinstance(out.result, MarketNodalResult)
+    assert out.result.status == "Optimal"
+    assert out.result.generators
+    assert out.result.loads
+    assert out.provenance is not None
+    assert out.provenance.kind == "market.nodal"
+    assert out.provenance == out.result.provenance
+
+
 def test_options_are_validated_and_passed_to_the_runner(case14: Network) -> None:
     out = run(
         SolveRequest(kind="pf.ac", network=case14, options={"q_limits": False, "init": "flat"})
@@ -184,7 +215,7 @@ def test_run_matches_the_module_level_entry_points(case14: Network) -> None:
     assert dc.model_dump(exclude=TIMING) == solve_dc(case14).model_dump(exclude=TIMING)
 
 
-@pytest.mark.parametrize("kind", ["pf.ac", "pf.dc", "opf.dc", "n1"])
+@pytest.mark.parametrize("kind", ["pf.ac", "pf.dc", "opf.dc", "n1", "market.nodal"])
 def test_run_is_pure_equal_results_modulo_timing(kind: str, case14: Network) -> None:
     req = SolveRequest(kind=kind, network=case14)
     first, second = run(req), run(req)
@@ -211,6 +242,7 @@ def test_result_round_trips_through_json_with_the_kinds_result_type(case14: Netw
         ("pf.dc", DcPowerFlowResult),
         ("opf.dc", OpfDcResult),
         ("n1", N1Result),
+        ("market.nodal", MarketNodalResult),
     ):
         out = run(SolveRequest(kind=kind, network=case14))
         again = SolveResult.model_validate_json(out.model_dump_json())
@@ -270,11 +302,14 @@ def _assert_failed(out: SolveResult, code: str) -> StructuredError:
 
 
 def test_unknown_kind_is_a_failed_result(case14: Network) -> None:
-    out = run(SolveRequest(kind="market.nodal", network=case14, job_id="u"))
+    # "market.zonal" (spec Not Doing: zonal clearing is M6, not this wave) — genuinely unknown,
+    # unlike "market.nodal" which this wave (S6) registers; a still-unregistered example was
+    # needed after S6 landed.
+    out = run(SolveRequest(kind="market.zonal", network=case14, job_id="u"))
     error = _assert_failed(out, "UNKNOWN_KIND")
-    assert out.kind == "market.nodal"
+    assert out.kind == "market.zonal"
     assert out.job_id == "u"
-    assert "market.nodal" in error.message
+    assert "market.zonal" in error.message
     assert "pf.ac" in error.message and "pf.dc" in error.message
 
 
@@ -377,6 +412,37 @@ def test_infeasible_opf_dc_is_infeasible_lp_not_internal(case14: Network) -> Non
     out = run(SolveRequest(kind="opf.dc", network=_infeasible_net(case14)))
     error = _assert_failed(out, "INFEASIBLE_LP")
     assert "Infeasible" in error.message
+
+
+def test_infeasible_market_nodal_is_infeasible_lp_not_internal(case14: Network) -> None:
+    """AC-7: the same hand-built infeasible LP (contradictory generator bounds), routed through
+    ``market.nodal`` instead of ``opf.dc`` — ``case14``'s loads carry no bid, so the welfare LP
+    reduces to the identical fixed-load infeasibility, and it must land as ``INFEASIBLE_LP``,
+    not ``INTERNAL``, via the shared status-translation helper (wave spec Design item 6)."""
+    out = run(SolveRequest(kind="market.nodal", network=_infeasible_net(case14)))
+    error = _assert_failed(out, "INFEASIBLE_LP")
+    assert "Infeasible" in error.message
+
+
+def test_opf_dc_and_market_nodal_share_the_same_status_translation_function(
+    case14: Network, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-7/wave spec Design item 6: the non-Optimal-status-to-structured-failure translation is
+    genuinely shared, not duplicated a second time — proved by spying on the one function object
+    both ``_run_opf_dc`` and ``_run_market_nodal`` call, confirming both runners' infeasible-LP
+    paths exercise it (not two copies of the same ~15 lines)."""
+    original = jobs_registry._translate_non_optimal_status
+    calls: list[str] = []
+
+    def spy(kind: str, status: str, message: str | None) -> NoReturn:
+        calls.append(kind)
+        original(kind, status, message)
+
+    monkeypatch.setattr(jobs_registry, "_translate_non_optimal_status", spy)
+    net = _infeasible_net(case14)
+    assert run(SolveRequest(kind="opf.dc", network=net)).error is not None
+    assert run(SolveRequest(kind="market.nodal", network=net)).error is not None
+    assert calls == ["opf.dc", "market.nodal"]
 
 
 def test_runner_exception_is_a_failed_internal_result(

@@ -6,7 +6,7 @@ body of an HTTP request *is* a :class:`SolveRequest` and the body of the respons
 
 **How ``SolveResult.result`` is typed.** Its annotation is the closed union of the registered
 kinds' result models (``AcPowerFlowResult | DcPowerFlowResult`` in M2, widened to add
-``OpfDcResult | N1Result`` in M3). The type is *not*
+``OpfDcResult | N1Result`` in M3, ``MarketNodalResult`` in M4). The type is *not*
 inferred from the payload's shape: a ``model_validator(mode="before")`` looks the request
 ``kind`` up in :data:`~mambo_power.jobs.KINDS` and validates a dict ``result`` with exactly that
 kind's ``result_model``; a second validator (``mode="after"``) then checks that the instance
@@ -29,12 +29,13 @@ from mambo_power.model import Network, ValidationIssue
 from mambo_power.results import (
     AcPowerFlowResult,
     DcPowerFlowResult,
+    MarketNodalResult,
     N1Result,
     OpfDcResult,
     ResultProvenance,
 )
 
-ResultModel = AcPowerFlowResult | DcPowerFlowResult | OpfDcResult | N1Result
+ResultModel = AcPowerFlowResult | DcPowerFlowResult | OpfDcResult | N1Result | MarketNodalResult
 """The closed union of result types a ``SolveResult`` can carry (one per registered kind)."""
 
 FailureCode = Literal[

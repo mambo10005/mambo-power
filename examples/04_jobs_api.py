@@ -48,7 +48,7 @@ print("round trip gives", type(typed.result).__name__, end="; ")
 print("equal to the direct run:", typed.result.buses == dc.result.buses)
 
 # --- 3. Failures are structured results ----------------------------------------------------
-unknown = jobs.run(jobs.SolveRequest(kind="market.nodal", network=net))
+unknown = jobs.run(jobs.SolveRequest(kind="market.zonal", network=net))  # not registered yet
 assert unknown.error is not None
 print("\nunknown kind ->", unknown.status, unknown.error.code, "|", unknown.error.message)
 
