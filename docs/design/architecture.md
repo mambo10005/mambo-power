@@ -12,19 +12,20 @@ later waves add (their dependencies are already fixed by the epic design).
 
 ```mermaid
 flowchart TB
-    subgraph present["Shipped (M1-M3)"]
-        model["model<br/>Network, entities, validation errors,<br/>ImportIssue, repair_islands"]
+    subgraph present["Shipped (M1-M4)"]
+        model["model<br/>Network, entities, validation errors,<br/>ImportIssue, repair_islands, Scenario"]
         io["io<br/>matpower, native, ImportReport"]
         numerics["numerics<br/>NetworkArrays, ybus, bbus, ptdf, lodf,<br/>effective_roles"]
         pf["pf<br/>solve_dc, solve_ac, dc.solve"]
         ac["pf.ac_newton<br/>AcOptions, newton"]
         opf["opf<br/>solve_dc_opf, dc_opf, lmp_decomposition"]
         contingency["contingency<br/>n1, screen_n1, confirm_n1"]
+        market["market<br/>solve_nodal (nodal LMP clearing)"]
         results["results<br/>BusResult, BranchResult, GenResult,<br/>ResultProvenance, from_arrays"]
         jobs["jobs<br/>SolveRequest, SolveResult, KINDS, run"]
     end
     subgraph later["Later waves"]
-        market["market (M4-M7)"]
+        marketlater["market: zonal, multiperiod,<br/>agents (M5-M7)"]
         formats["io: pandapower_json, pypsa,<br/>psse_raw, csv_bundle (M8)"]
     end
 
@@ -43,13 +44,18 @@ flowchart TB
     contingency --> numerics
     contingency --> pf
     contingency --> results
+    market --> model
+    market --> numerics
+    market --> opf
+    market --> results
     jobs --> pf
     jobs --> opf
     jobs --> contingency
+    jobs --> market
     jobs --> results
     jobs --> model
     jobs --> numerics
-    market -.-> opf
+    marketlater -.-> market
     formats -.-> model
 ```
 
@@ -59,14 +65,18 @@ Rules the diagram encodes:
   solvers.
 - `numerics` is the **only** module that holds positional indices and the **single** site
   where physical units are divided by `base_mva`.
-- Solvers (`pf`, `opf`, `contingency`; later `market`) consume `NetworkArrays`, never a
-  `Network` directly, and hand plain arrays to `results.from_arrays`, which walks back to ids
-  and multiplies by `base_mva` on the way out. `opf` also calls `pf.solve_ac` directly for its
+- Solvers (`pf`, `opf`, `contingency`, `market`) consume `NetworkArrays`, never a `Network`
+  directly, and hand plain arrays to `results.from_arrays`, which walks back to ids and
+  multiplies by `base_mva` on the way out. `opf` also calls `pf.solve_ac` directly for its
   post-dispatch AC-feasibility check; `contingency` calls `pf.dc.solve` for its confirming
   re-solve — neither reimplements power flow.
-- `market` composes `opf`; it never reimplements it.
+- `market` composes `opf.dc_opf`/`opf.lmp_decomposition` directly (its `Scenario`-facing
+  wrapper over the same welfare LP, extended for elastic demand); it never reimplements them.
+  Later market modes (zonal, multiperiod, agents) build on `market.nodal` in turn, not on
+  `opf` directly.
 - `jobs` is the outermost layer: it validates a request, calls a solver entry point (`pf`,
-  `opf` or `contingency`, by kind), times it and wraps any exception into a structured failure.
+  `opf`, `contingency` or `market`, by kind), times it and wraps any exception into a
+  structured failure.
 - pandapower and PyPSA appear nowhere in this graph. They are development dependencies used
   by the parity test tier only.
 
@@ -124,7 +134,8 @@ src/mambo_power/
   pf/               __init__.py (solve_dc), dc.py (solve, DcSolution)
   opf/              __init__.py (solve_dc_opf), dc_opf.py (dc_opf, lmp_decomposition)
   contingency/      __init__.py (n1), n1.py (screen_n1, confirm_n1)
-  results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, n1.py, feasibility.py
+  market/           __init__.py (solve_nodal), nodal.py (solve_nodal, MarketNodalOptions)
+  results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, n1.py, feasibility.py, market.py
 ```
 
 The test suite mirrors the boundaries: `tests/unit` exercises each module hermetically,

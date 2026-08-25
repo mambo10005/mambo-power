@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 
 DOCS_API = Path(__file__).parents[2] / "docs" / "api"
-PACKAGES = ("model", "io", "numerics", "pf", "opf", "contingency", "results", "jobs")
+PACKAGES = ("model", "io", "numerics", "pf", "opf", "contingency", "market", "results", "jobs")
 DIRECTIVE_RE = re.compile(r"^:::\s+(mambo_power(?:\.\w+)*)\s*$")
 
 

@@ -103,6 +103,7 @@ nav:
       - Power flow: manual/power-flow.md
       - DC-OPF: manual/opf.md
       - N-1 screening: manual/n1.md
+      - Nodal market: manual/market.md
       - Results: manual/results.md
       - Jobs API: manual/jobs.md
   - Examples: examples/index.md
@@ -114,6 +115,7 @@ nav:
       - mambo_power.pf: api/pf.md
       - mambo_power.opf: api/opf.md
       - mambo_power.contingency: api/contingency.md
+      - mambo_power.market: api/market.md
       - mambo_power.results: api/results.md
       - mambo_power.jobs: api/jobs.md
   - Design:
