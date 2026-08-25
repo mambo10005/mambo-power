@@ -296,6 +296,32 @@
           ],
           "default": null,
           "title": "Cost"
+        },
+        "ramp_up_mw": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Max increase from the previous period, MW; None = none.",
+          "title": "Ramp Up Mw"
+        },
+        "ramp_down_mw": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Max decrease from the previous period, MW; None = none.",
+          "title": "Ramp Down Mw"
         }
       },
       "required": [

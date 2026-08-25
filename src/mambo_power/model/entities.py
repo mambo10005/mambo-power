@@ -135,6 +135,12 @@ class Generator(_Entity):
     v_set_pu: float = Field(description="Voltage setpoint, per unit.")
     in_service: bool = True
     cost: GeneratorCost | None = None
+    ramp_up_mw: float | None = Field(
+        default=None, description="Max increase from the previous period, MW; None = none."
+    )
+    ramp_down_mw: float | None = Field(
+        default=None, description="Max decrease from the previous period, MW; None = none."
+    )
 
 
 class Load(_Entity):

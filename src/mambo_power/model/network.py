@@ -173,6 +173,14 @@ def validate_network(net: Network) -> list[ValidationIssue]:
                 f"generators[{index}].q_min_mvar",
                 f'generator "{gen.id}": q_min_mvar {gen.q_min_mvar} > q_max_mvar {gen.q_max_mvar}',
             )
+        for field in ("ramp_up_mw", "ramp_down_mw"):
+            ramp: float | None = getattr(gen, field)
+            if ramp is not None and not ramp > 0:
+                add(
+                    "BAD_RANGE",
+                    f"generators[{index}].{field}",
+                    f'generator "{gen.id}": {field} must be > 0 when given, got {ramp}',
+                )
         if gen.cost is not None and gen.cost.kind == "polynomial" and not gen.cost.coefficients:
             add(
                 "BAD_RANGE",
