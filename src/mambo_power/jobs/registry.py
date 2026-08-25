@@ -7,7 +7,7 @@ a service publishes, and the contract test (AC-6/AC-8, AC-7) asserts every entry
 importable and its runner callable. Later waves add kinds with :func:`register`; nothing else in
 the package changes.
 
-``market.nodal`` (wave M4 W5) is the first kind whose subject is not a bare ``Network``:
+``market.nodal`` is the first kind whose subject is not a bare ``Network``:
 :func:`mambo_power.market.nodal.solve_nodal` takes a ``Scenario``. ``SolveRequest`` stays
 ``network``-shaped rather than growing a parallel ``scenario`` field — ``Scenario`` is, this
 wave, genuinely just ``network: Network`` and nothing else (``model/scenario.py``), so

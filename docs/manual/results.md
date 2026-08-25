@@ -85,6 +85,17 @@ Both extend `PowerFlowResultBase` (provenance, `converged`, the three tables, `t
   `max_mismatch_mva` (final power-mismatch ∞-norm in MVA) and `q_limit_rounds` (outer rounds
   run). When `converged` is `False` the tables hold the last iterate.
 
+## `MarketNodalResult`
+
+`market.nodal` clearing (see [Manual › Nodal market](market.md)) returns its own result shape,
+`MarketNodalResult`, rather than reusing `DcPowerFlowResult`/`AcPowerFlowResult` — it adds
+per-load dispatch (`LoadDispatchResult`, alongside the reused `GenDispatchResult`), per-bus LMPs
+(`BusLmpResult`, reused verbatim from `opf.solve_dc_opf`) and settlement fields
+(`total_load_payment`, `total_generator_receipts`, `congestion_rent`). It carries the same
+`ResultProvenance` every result does and is a frozen value, never stored on the `Network`, same
+as every other result on this page. See the nodal-market manual page for the full field
+reference and the settlement identity these fields satisfy.
+
 ## JSON round-trip
 
 Results serialise with the standard pydantic surface and come back equal:

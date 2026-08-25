@@ -1,5 +1,5 @@
-"""``market.nodal`` clearing result: dispatch (generators and loads), per-bus LMP, settlement
-(spec design item 5; wave M4 W4). Mirrors the ``results/opf.py`` pattern: id-keyed rows plus
+"""``market.nodal`` clearing result: dispatch (generators and loads), per-bus LMP, settlement.
+Mirrors the ``results/opf.py`` pattern: id-keyed rows plus
 :class:`~mambo_power.results.provenance.ResultProvenance`, never attached to a
 :class:`~mambo_power.model.Network`. Reuses :class:`~mambo_power.results.opf.GenDispatchResult`/
 :class:`~mambo_power.results.opf.BusLmpResult` verbatim for the generator-dispatch and LMP rows
@@ -21,9 +21,8 @@ class LoadDispatchResult(BaseModel):
     (:attr:`~mambo_power.opf.dc_opf.OpfSolution.demand_dispatch_mw`); for a load with no bid,
     its own fixed historical ``Load.p_mw`` (it never became an LP column, so it has no reduced
     cost -- ``bound_dual`` is ``0.0``). Every load in the network gets a row, bid or not, since
-    the settlement identity (record/m4-research.md §4.1) sums ``LMP·p_d`` over *every* load, not
-    just the elastic ones -- the identity's own derivation never assumes ``p_d`` is a decision
-    variable.
+    the settlement identity sums ``LMP·p_d`` over *every* load, not just the elastic ones -- the
+    identity's own derivation never assumes ``p_d`` is a decision variable.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
@@ -61,8 +60,8 @@ class MarketNodalResult(BaseModel):
         default=0.0,
         description="Sum over every load of LMP(bus_d)*p_d, $/h -- computed directly from "
         "dispatch and LMPs, not asserted equal to the settlement identity's other side by "
-        "construction (record/m4-research.md §4.1; proved, not assumed, in "
-        "tests/unit/test_market_nodal.py). 0.0 when not Optimal.",
+        "construction (proved, not assumed, in tests/unit/test_market_nodal.py). 0.0 when not "
+        "Optimal.",
     )
     total_generator_receipts: float = Field(
         default=0.0,
@@ -71,6 +70,5 @@ class MarketNodalResult(BaseModel):
     congestion_rent: float = Field(
         default=0.0,
         description="total_load_payment - total_generator_receipts, $/h -- equals "
-        "-sum_k(mu_k * flow_k) at the optimum (the settlement identity, record/"
-        "m4-research.md §4.1); 0.0 when not Optimal.",
+        "-sum_k(mu_k * flow_k) at the optimum (the settlement identity); 0.0 when not Optimal.",
     )

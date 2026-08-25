@@ -3,11 +3,10 @@
 What this shows:
 
 * ``market.solve_nodal(scenario)`` on a hand-built 2-bus network -- the same fixture-free style
-  as the wave's own AC-1 hand-KKT test (record/m4-research.md §4.1): a cheap slack generator, an
-  expensive generator behind a rated branch, one load that bids a 2-segment piecewise-linear
-  demand curve and one that stays fixed (unbid). ``MarketNodalResult`` reports every load, bid
-  or fixed (wave spec design item 5) -- the unbid load still gets a dispatch/LMP row, just no
-  reduced cost.
+  as the wave's own AC-1 hand-KKT test: a cheap slack generator, an expensive generator behind a
+  rated branch, one load that bids a 2-segment piecewise-linear demand curve and one that stays
+  fixed (unbid). ``MarketNodalResult`` reports every load, bid or fixed -- the unbid load still
+  gets a dispatch/LMP row, just no reduced cost.
 * The binding branch rating splits the LMP into energy + congestion, the identical decomposition
   ``opf.lmp_decomposition`` gives ``opf.solve_dc_opf`` (reused verbatim -- ADR-006, now exercised
   by its intended second consumer).
@@ -74,7 +73,7 @@ net = Network(
             p_mw=100.0,
             q_mvar=0.0,
             # 2-segment concave PWL bid: marginal value 45 $/MWh on [0, 50], 20 $/MWh on
-            # [50, 100] (record/m4-research.md §4.1's hand-KKT example).
+            # [50, 100] (the wave's own hand-KKT example, see AC-1 in the wave spec).
             bid=PiecewiseBid(points=[(0.0, 0.0), (50.0, 2250.0), (100.0, 3250.0)]),
         ),
     ],

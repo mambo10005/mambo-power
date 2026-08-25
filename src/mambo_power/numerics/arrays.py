@@ -91,9 +91,9 @@ class NetworkArrays:
     load_bus: IntArray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
     load_p_min_pu: FloatArray = field(default_factory=lambda: np.zeros(0))
     load_p_max_pu: FloatArray = field(default_factory=lambda: np.zeros(0))
-    """Per-load ``[0, p_mw]`` bound in pu (M4 W3): the natural bound for a bid-load's demand
-    dispatch is zero up to its own fixed historical ``p_mw`` (record/m4-research.md §4.2).
-    Built uniformly for every in-service load regardless of ``Load.bid`` — ``Load`` carries no
+    """Per-load ``[0, p_mw]`` bound in pu: the natural bound for a bid-load's demand
+    dispatch is zero up to its own fixed historical ``p_mw``. Built uniformly for every
+    in-service load regardless of ``Load.bid`` — ``Load`` carries no
     ``p_min_mw``/``p_max_mw`` fields to mirror the generator-side source data, and this bound
     formula does not depend on bid presence; whether/how a given load's bound is actually used
     by ``opf.dc_opf`` is decided per-load elsewhere, not here. ``p_load_pu``/``q_load_pu`` (the

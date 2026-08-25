@@ -1,4 +1,4 @@
-"""The :class:`Scenario` model — a self-contained market scenario (wave M4 W2)."""
+"""The :class:`Scenario` model — a self-contained market scenario."""
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -9,8 +9,8 @@ class Scenario(BaseModel):
     """A market scenario to clear: the network to clear it against, and nothing else yet.
 
     Embeds ``network: Network`` directly, mirroring ``jobs.models.SolveRequest``'s
-    self-contained pattern (research record/m4-research.md §6.2) rather than an id/path
-    cross-reference — no such resolution mechanism exists anywhere else in this codebase.
+    self-contained pattern rather than an id/path cross-reference — no such resolution
+    mechanism exists anywhere else in this codebase.
     ``Network``'s own ``model_validator(mode="after")`` runs while ``Scenario`` is being
     constructed (it is a nested pydantic model field), so every invariant ``Network`` already
     checks — including dangling references — is checked here too, with no separate pass needed.

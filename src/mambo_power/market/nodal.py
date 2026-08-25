@@ -1,11 +1,12 @@
-"""``market.nodal`` clearing (spec design item 5; wave M4 W4): the ``Scenario``-facing welfare-
-maximizing DC-OPF wrapper. :func:`solve_nodal` mirrors :func:`mambo_power.opf.solve_dc_opf`
-(same provenance/PTDF-reuse/id-keyed-result shape) but pulls both generator costs
-(``Generator.cost``) and load bids (``Load.bid``) from ``scenario.network``, calls the extended
+"""``market.nodal`` clearing: the ``Scenario``-facing welfare-maximizing DC-OPF wrapper.
+:func:`solve_nodal` mirrors :func:`mambo_power.opf.solve_dc_opf` (same provenance/PTDF-reuse/
+id-keyed-result shape) but pulls both generator costs (``Generator.cost``) and load bids
+(``Load.bid``) from ``scenario.network``, calls the extended
 :func:`mambo_power.opf.dc_opf.dc_opf` with both, and decomposes the result into per-bus LMPs
 (:func:`mambo_power.opf.dc_opf.lmp_decomposition`, M3's, reused verbatim per ADR-006) plus
-settlement (payments, receipts, congestion rent -- the identity proved in ``record/
-m4-research.md`` §4.1).
+settlement (payments, receipts, congestion rent): total load payment minus total generator
+receipts equals the congestion rent, i.e. ``-sum(mu_k * flow_k)`` over the binding branches
+(see the wave spec's AC-4 for the exact identity and its proof).
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ PwlBids = dict[int, list[tuple[float, float]]]
 
 
 class MarketNodalOptions(BaseModel):
-    """Options of a ``market.nodal`` clearing (wave M4 W4).
+    """Options of a ``market.nodal`` clearing.
 
     No fields yet: mirrors :class:`~mambo_power.opf.dc_opf.OpfDcOptions`'s own precedent (a
     solver-tuning field is added the first time a caller actually needs one, not invented
@@ -196,7 +197,7 @@ def solve_nodal(scenario: Scenario, options: MarketNodalOptions | None = None) -
         for i, bus_id in enumerate(arr.bus_ids)
     ]
 
-    # Settlement (module docstring; record/m4-research.md §4.1): total_load_payment and
+    # Settlement (module docstring): total_load_payment and
     # total_generator_receipts are each computed directly from dispatch and LMPs, as their own
     # independently meaningful quantities -- not asserted equal to the identity's other
     # (flow-based) side by construction. tests/unit/test_market_nodal.py's AC-4 test proves the
