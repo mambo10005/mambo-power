@@ -87,6 +87,18 @@ class NetworkArrays:
     gen_q_max_pu: FloatArray = field(default_factory=lambda: np.zeros(0))
     gen_v_set: FloatArray = field(default_factory=lambda: np.zeros(0))
 
+    load_ids: list[str] = field(default_factory=list)
+    load_bus: IntArray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    load_p_min_pu: FloatArray = field(default_factory=lambda: np.zeros(0))
+    load_p_max_pu: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Per-load ``[0, p_mw]`` bound in pu: the natural bound for a bid-load's demand
+    dispatch is zero up to its own fixed historical ``p_mw``. Built uniformly for every
+    in-service load regardless of ``Load.bid`` — ``Load`` carries no
+    ``p_min_mw``/``p_max_mw`` fields to mirror the generator-side source data, and this bound
+    formula does not depend on bid presence; whether/how a given load's bound is actually used
+    by ``opf.dc_opf`` is decided per-load elsewhere, not here. ``p_load_pu``/``q_load_pu`` (the
+    bus aggregate) are untouched by this addition."""
+
     @classmethod
     def from_network(cls, net: Network) -> NetworkArrays:
         """Build the in-service positional view; the one pu-conversion site."""
@@ -145,6 +157,12 @@ class NetworkArrays:
         loads = [ld for ld in net.loads if ld.in_service and ld.bus in bus_index]
         p_load_pu = per_bus([(bus_index[ld.bus], ld.p_mw) for ld in loads])
         q_load_pu = per_bus([(bus_index[ld.bus], ld.q_mvar) for ld in loads])
+
+        n_load = len(loads)
+        load_bus = np.fromiter((bus_index[ld.bus] for ld in loads), np.int64, n_load)
+
+        def per_load(values: list[float]) -> FloatArray:
+            return np.fromiter(values, np.float64, n_load) / base
 
         shunts = [sh for sh in net.shunts if sh.in_service and sh.bus in bus_index]
         g_shunt_pu = per_bus([(bus_index[sh.bus], sh.g_mw) for sh in shunts])
@@ -208,4 +226,8 @@ class NetworkArrays:
             gen_q_min_pu=per_gen([g.q_min_mvar for g in gens]),
             gen_q_max_pu=per_gen([g.q_max_mvar for g in gens]),
             gen_v_set=np.fromiter((g.v_set_pu for g in gens), np.float64, n_gen),
+            load_ids=[ld.id for ld in loads],
+            load_bus=load_bus,
+            load_p_min_pu=np.zeros(n_load),
+            load_p_max_pu=per_load([ld.p_mw for ld in loads]),
         )

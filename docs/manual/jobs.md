@@ -199,7 +199,7 @@ def solve(body: jobs.SolveRequest) -> jobs.SolveResult:
 ### Failures are data
 
 ```python
-bad_kind = jobs.run(jobs.SolveRequest(kind="market.nodal", network=net))
+bad_kind = jobs.run(jobs.SolveRequest(kind="market.zonal", network=net))  # not registered yet
 print(bad_kind.status, bad_kind.error.code, "|", bad_kind.error.message)
 
 bad_opts = jobs.run(jobs.SolveRequest(kind="pf.ac", network=net, options={"tol": "x"}))
@@ -216,7 +216,7 @@ print(noslack.status, noslack.error.code, "|", noslack.error.message)
 ```
 
 ```text
-failed UNKNOWN_KIND | unknown kind "market.nodal"; registered kinds: n1, opf.dc, pf.ac, pf.dc
+failed UNKNOWN_KIND | unknown kind "market.zonal"; registered kinds: market.nodal, n1, opf.dc, pf.ac, pf.dc
 failed BAD_OPTIONS | [{'type': 'float_parsing', 'loc': ['tol'], 'msg': 'Input should be a valid number, unable to parse string as a number'}]
 failed VALIDATION | ['DANGLING_REF at branches[0].to_bus: branch "branch-1": to_bus references missing bus "bus-999"']
 failed NO_SLACK_GENERATOR | slack bus "bus-1" (position 0) has no in-service generator; a power flow cannot close the balance

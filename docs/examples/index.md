@@ -1,6 +1,6 @@
 # Examples
 
-Eight runnable scripts live under `examples/` in the repository. Each one is self-contained,
+Nine runnable scripts live under `examples/` in the repository. Each one is self-contained,
 reads only files under `fixtures/`, prints a short deterministic summary and exits 0 in about a
 second. They are executed on every push — by `tests/unit/test_examples_run.py` inside the test
 matrix and by the dedicated `examples` CI job — and this page embeds them with
@@ -22,6 +22,7 @@ uv run python examples/02_ac_power_flow.py
 | [`06_network_matrices.py`](#6-network-matrices) | `NetworkArrays`, Ybus sparsity, PTDF, LODF with the bridge `NaN` column, a 3-bus case in full | [Numerics](../manual/numerics.md) |
 | [`07_results_and_export.py`](#7-results-and-export) | JSON round trip, `to_arrays()`, CSV export | [Results](../manual/results.md) |
 | [`08_opf_and_n1.py`](#8-opf-and-n-1) | `solve_dc_opf` dispatch/duals/LMP, `ac_check`, congestion, `contingency.n1` screen-then-confirm | [DC-OPF](../manual/opf.md), [N-1 screening](../manual/n1.md) |
+| [`09_nodal_market.py`](#9-nodal-market) | `market.solve_nodal` on a `Scenario`: elastic-demand dispatch, LMPs split by congestion, settlement | [Nodal market](../manual/market.md) |
 
 ## 1. Load and validate
 
@@ -97,6 +98,17 @@ confirming DC re-solve on a flagged outage.
 
 ``` { .python }
 --8<-- "examples/08_opf_and_n1.py"
+```
+
+## 9. Nodal market
+
+`market.solve_nodal` on a hand-built 2-bus network wrapped in a `Scenario`: a bid load whose
+elastic response is capped by a binding branch rating, a fixed load with no bid, the LMP split
+into energy and congestion, and the settlement identity between load payment, generator
+receipts, and congestion rent.
+
+``` { .python }
+--8<-- "examples/09_nodal_market.py"
 ```
 
 ## Conventions for examples

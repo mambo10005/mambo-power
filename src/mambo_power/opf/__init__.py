@@ -33,13 +33,13 @@ from mambo_power.results import (
     feasibility_report,
 )
 
-__all__ = ["NonConvexCostError", "OpfDcOptions", "solve_dc_opf"]
+__all__ = ["NonConvexCostError", "OpfDcOptions", "gen_cost_coeffs", "solve_dc_opf"]
 
 FloatArray = npt.NDArray[np.float64]
 PwlCosts = dict[int, list[tuple[float, float]]]
 
 
-def _cost_coeffs(net: Network, arr: NetworkArrays) -> tuple[FloatArray, PwlCosts]:
+def gen_cost_coeffs(net: Network, arr: NetworkArrays) -> tuple[FloatArray, PwlCosts]:
     """Per-generator ``[c2, c1, c0]`` (``NetworkArrays`` generator order) plus any PWL costs,
     both from ``Generator.cost``.
 
@@ -51,6 +51,11 @@ def _cost_coeffs(net: Network, arr: NetworkArrays) -> tuple[FloatArray, PwlCosts
     ``PiecewiseCost.points``; :func:`dc_opf` raises ``NonConvexCostError`` (re-exported as
     :data:`NonConvexCostError` on this module) if any entry's breakpoint slopes are not
     non-decreasing, before any solve is attempted.
+
+    Exported (not module-private) because :func:`mambo_power.market.nodal.solve_nodal` needs the
+    identical generator-cost extraction and imports this rather than carrying its own copy
+    (M4 review Duplication FLAG) — the demand-bid-side mirror
+    (:func:`mambo_power.market.nodal._load_bid_coeffs`) has no prior-wave analog to share.
     """
     gens_by_id = {g.id: g for g in net.generators}
     coeffs = np.zeros((len(arr.gen_ids), 3))
@@ -91,7 +96,7 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
     started_at = datetime.now(UTC)
     clock = time.perf_counter()
     arr = NetworkArrays.from_network(net)
-    cost_coeffs, pwl_costs = _cost_coeffs(net, arr)
+    cost_coeffs, pwl_costs = gen_cost_coeffs(net, arr)
     solution = dc_opf(arr, cost_coeffs, opts, pwl_costs=pwl_costs or None)
     elapsed_s = time.perf_counter() - clock
     provenance = ResultProvenance(

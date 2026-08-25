@@ -228,3 +228,103 @@ def test_pu_conversion_scales_with_base() -> None:
     assert arr.p_load_pu[2] == 50.0 / 50.0
     assert arr.rating_pu[1] == 150.0 / 50.0
     assert arr.gen_p_max_pu[0] == 300.0 / 50.0
+
+
+def test_aggregate_load_arrays_unchanged_by_per_load_identity(arr: NetworkArrays) -> None:
+    """M4 W3 regression: the per-load identity fields are additive.
+
+    ``p_load_pu``/``q_load_pu`` (the bus aggregate M1-M3 callers read) must be byte-identical
+    to what the pre-M4 ``per_bus`` bincount alone produces — not merely "close", exact, since
+    no new code path may touch them.
+    """
+    net = four_bus()
+    loads = [ld for ld in net.loads if ld.in_service and ld.bus in arr.bus_index]
+    expected_p = (
+        np.bincount(
+            [arr.bus_index[ld.bus] for ld in loads],
+            weights=[ld.p_mw for ld in loads],
+            minlength=arr.n_bus,
+        )
+        / net.base_mva
+    )
+    expected_q = (
+        np.bincount(
+            [arr.bus_index[ld.bus] for ld in loads],
+            weights=[ld.q_mvar for ld in loads],
+            minlength=arr.n_bus,
+        )
+        / net.base_mva
+    )
+    np.testing.assert_array_equal(arr.p_load_pu, expected_p)
+    np.testing.assert_array_equal(arr.q_load_pu, expected_q)
+
+
+def multi_load_network() -> Network:
+    """Mirrors ``four_bus``'s multi-generator-per-bus case, but for loads: bus-2 carries two
+    in-service loads and one out-of-service load; bus-3 carries one. Exercises per-load
+    identity, exclusion, and per-bus aggregation with more than one load at a bus — the load
+    equivalent of ``four_bus``'s bus-2 (three generators, one excluded).
+    """
+    return Network(
+        base_mva=BASE,
+        buses=[
+            Bus(id="bus-1", base_kv=132.0, type="slack"),
+            Bus(id="bus-2", base_kv=132.0, type="pq"),
+            Bus(id="bus-3", base_kv=33.0, type="pq"),
+        ],
+        branches=[
+            Branch(id="branch-1", from_bus="bus-1", to_bus="bus-2", r=0.01, x=0.1, b=0.0),
+            Branch(id="branch-2", from_bus="bus-2", to_bus="bus-3", r=0.01, x=0.1, b=0.0),
+        ],
+        generators=[
+            Generator(
+                id="gen-1",
+                bus="bus-1",
+                p_mw=0.0,
+                q_mvar=0.0,
+                p_min_mw=0.0,
+                p_max_mw=300.0,
+                q_min_mvar=-100.0,
+                q_max_mvar=100.0,
+                v_set_pu=1.0,
+            ),
+        ],
+        loads=[
+            Load(id="load-2a", bus="bus-2", p_mw=30.0, q_mvar=5.0),
+            Load(id="load-2b", bus="bus-2", p_mw=15.0, q_mvar=2.0),
+            Load(id="load-2-off", bus="bus-2", p_mw=999.0, q_mvar=999.0, in_service=False),
+            Load(id="load-3", bus="bus-3", p_mw=8.0, q_mvar=1.0),
+        ],
+    )
+
+
+@pytest.fixture(scope="module")
+def marr() -> NetworkArrays:
+    return NetworkArrays.from_network(multi_load_network())
+
+
+def test_per_load_identity(marr: NetworkArrays) -> None:
+    assert marr.load_ids == ["load-2a", "load-2b", "load-3"]
+    np.testing.assert_array_equal(marr.load_bus, [1, 1, 2])
+    assert marr.load_bus.dtype.kind == "i"
+
+
+def test_per_load_bounds_are_zero_to_own_demand(marr: NetworkArrays) -> None:
+    """W3's derived rule: ``[0, p_mw]`` in pu for every load, regardless of ``Load.bid``.
+
+    A generator's ``gen_p_min_pu``/``gen_p_max_pu`` come straight off two entity fields
+    (``p_min_mw``/``p_max_mw``); ``Load`` has no such fields (only ``p_mw``), and the bound
+    that matters for a bid-load is ``[0, p_mw]`` (record/m4-research.md §4.2, "up to its own
+    fixed historical demand"). Since nothing in that rule turns on whether ``Load.bid`` is
+    set, arrays.py builds this bound uniformly for every load — bid-having or not; S3 decides
+    whether/how ``dc_opf`` actually uses it for a given load. ``load-2a``/``load-2b``/
+    ``load-3`` here stand in for "a load with a bid" and "a load without" precisely because
+    the bound formula does not distinguish them.
+    """
+    np.testing.assert_allclose(marr.load_p_min_pu, [0.0, 0.0, 0.0])
+    np.testing.assert_allclose(marr.load_p_max_pu, [30.0 / BASE, 15.0 / BASE, 8.0 / BASE])
+
+
+def test_per_load_sums_agree_with_aggregate(marr: NetworkArrays) -> None:
+    summed = np.bincount(marr.load_bus, weights=marr.load_p_max_pu, minlength=marr.n_bus)
+    np.testing.assert_allclose(summed, marr.p_load_pu, rtol=0, atol=1e-15)

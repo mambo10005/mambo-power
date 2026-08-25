@@ -336,7 +336,7 @@
     },
     "Load": {
       "additionalProperties": false,
-      "description": "Fixed demand at a bus.",
+      "description": "Fixed demand at a bus. ``bid`` is model-present; only ``market.nodal`` reads it.",
       "properties": {
         "id": {
           "description": "Unique within loads.",
@@ -362,6 +362,33 @@
           "default": true,
           "title": "In Service",
           "type": "boolean"
+        },
+        "bid": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "piecewise": "#/$defs/PiecewiseBid",
+                  "polynomial": "#/$defs/PolynomialBid"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/PolynomialBid"
+                },
+                {
+                  "$ref": "#/$defs/PiecewiseBid"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Elastic-demand bid covering this Load's entire p_mw; market.nodal reads it, opf.solve_dc_opf does not. There is no per-Load partial-capacity split -- bidding only part of a load's capacity, with the rest must-serve, means splitting it into two Load entities at the same bus (one bid=None fixed, one bid-carrying).",
+          "title": "Bid"
         }
       },
       "required": [
@@ -371,6 +398,42 @@
         "q_mvar"
       ],
       "title": "Load",
+      "type": "object"
+    },
+    "PiecewiseBid": {
+      "additionalProperties": false,
+      "description": "Demand-side mirror of :class:`PiecewiseCost`: piecewise-linear (p_mw, value) breakpoints.\n\nOnly the same structural checks :class:`PiecewiseCost` gets (at least two points,\nstrictly increasing ``p_mw``) apply here; the concavity *direction* of the value curve is\nchecked at solve time, not here (see :class:`PolynomialBid`).",
+      "properties": {
+        "kind": {
+          "const": "piecewise",
+          "default": "piecewise",
+          "title": "Kind",
+          "type": "string"
+        },
+        "points": {
+          "description": "(p_mw, value) breakpoints, at least two and at most 200 (each adds one hypograph row to opf.dc_opf's LP); p_mw must be strictly increasing.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "maxItems": 200,
+          "title": "Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "points"
+      ],
+      "title": "PiecewiseBid",
       "type": "object"
     },
     "PiecewiseCost": {
@@ -419,6 +482,31 @@
         "points"
       ],
       "title": "PiecewiseCost",
+      "type": "object"
+    },
+    "PolynomialBid": {
+      "additionalProperties": false,
+      "description": "Demand-side mirror of :class:`PolynomialCost`: value(p_mw) = sum(c_k * p_mw**k).\n\nMarginal value must be non-increasing (concave value) for a valid market clearing; that\nconvexity-*direction* check is ``opf.dc_opf``'s job at solve time\n(:class:`~mambo_power.opf.NonConcaveBidError`), not construction-time here \u2014 mirrors how\n:class:`PolynomialCost` also has no construction-time convexity check.",
+      "properties": {
+        "kind": {
+          "const": "polynomial",
+          "default": "polynomial",
+          "title": "Kind",
+          "type": "string"
+        },
+        "coefficients": {
+          "description": "Polynomial coefficients (at least one), highest order first, value per hour.",
+          "items": {
+            "type": "number"
+          },
+          "title": "Coefficients",
+          "type": "array"
+        }
+      },
+      "required": [
+        "coefficients"
+      ],
+      "title": "PolynomialBid",
       "type": "object"
     },
     "PolynomialCost": {

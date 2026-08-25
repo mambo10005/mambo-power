@@ -76,12 +76,61 @@ non-convex PWL curve silently produces the wrong dispatch, since the encoding ab
 for convex costs). This is deliberately an ``opf``-local check, not a retroactive change to
 :class:`~mambo_power.model.PiecewiseCost`'s own validation (which checks only strictly-increasing
 ``p_mw`` — record/m3-research.md §2.3; a carry-over for a later wave, not silently dropped).
+:func:`dc_opf` also rejects a quadratic generator cost with ``c2 < 0`` (non-convex) the same way,
+closing a gap that predates this wave (M4 research §1.2) — both checks raise
+:class:`NonConvexCostError`, the same error family, since they are the same underlying failure
+mode (a non-convex cost fed to a convex-cost-only LP/QP encoding).
+
+**Elastic demand (M4 W1, design item 1).** :func:`dc_opf` gains two optional parameters,
+``demand_bid_coeffs`` and ``demand_pwl_bids``, both defaulting to ``None`` — every M2/M3 caller is
+completely unaffected (the code paths below are additive; with no elastic loads, every new array
+has length 0 and the LP is byte-for-byte the pre-M4 one). Both are keyed by **load index** in
+``NetworkArrays.load_ids`` order (mirroring how ``pwl_costs`` is keyed by generator index) — a
+load index appearing in either mapping becomes an elastic-demand LP column; a load index appearing
+in neither stays represented only through the fixed balance/flow-row RHS, exactly as today.
+``demand_bid_coeffs`` maps a load index to ``(v2, v1, v0)`` (mirrors ``cost_coeffs``' ``[c2, c1,
+c0]`` row, highest order first) for a polynomial (linear/quadratic) marginal-value curve;
+``demand_pwl_bids`` maps a load index to ``[(p_mw, value), ...]`` breakpoints (mirrors
+``pwl_costs``) for a piecewise-linear one. A load index must not appear in both.
+
+Each elastic load gets one new decision variable, bounded ``[load_p_min_mw, load_p_max_mw]`` (from
+``NetworkArrays.load_p_min_pu``/``load_p_max_pu``, W3) — **no sign flip**: unlike the rejected
+pseudo-generator trick (research §2.2, Option A), a bid-load's own dispatch is a non-negative
+quantity in its own right. The nodal-balance row gains a ``−1``-signed term per elastic-load
+column (``Σp_g − Σp_d == fixed_load + shunt``) and each flow-limit row gains a
+``−PTDF[k, load_bus[d]]``-signed term, the exact mirror of the ``+PTDF[k, gen_bus[g]]`` generator
+term (so ``flow_k = Σ_g PTDF[k,gen_bus]·p_g − Σ_d PTDF[k,load_bus]·p_d + const_k`` — the same
+convention M4 research §4.1 hand-derives and this module's own AC-1 test reproduces exactly).
+
+A polynomial bid's marginal value is ``v1 + 2·v2·p``; concavity (non-increasing marginal value)
+requires ``v2 <= 0`` — the literal sign mirror of the generator-side ``c2 >= 0`` requirement above.
+A piecewise-linear bid's breakpoints must have **non-increasing** segment slopes — the mirror of
+the convex epigraph's non-decreasing requirement. Either violation raises
+:class:`NonConcaveBidError` before any HiGHS object is created, the demand-side twin of
+:class:`NonConvexCostError`. The PWL encoding itself is a **hypograph** (concave "min of
+supporting lines"), the sign-mirror of the epigraph above: one free ``val_d`` variable per PWL
+bid-load with objective coefficient ``−1`` (so minimising ``Σcost_g − Σval_d`` pulls ``val_d`` up
+to its tightest bound), plus one row per segment, ``val_d <= slope_i·p_d + intercept_i``.
+
+**Double-counting contract.** ``NetworkArrays.p_load_pu`` is the *aggregate* fixed load at each
+bus, built from every in-service load's own ``p_mw`` regardless of whether it later turns out to
+be elastic (W3's own docstring is explicit that this is unconditional). Rather than requiring the
+caller to pre-subtract each bid-load's contribution from ``p_load_pu`` before calling ``dc_opf``
+(a fragile, easy-to-get-wrong contract, since the caller would need to reconstruct exactly which
+per-bus amount to remove), :func:`dc_opf` does this subtraction itself: for every load index
+appearing in ``demand_bid_coeffs``/``demand_pwl_bids``, it reads that load's own contribution
+directly off ``arr.load_p_max_pu[idx]`` (which W3 built from the identical ``ld.p_mw`` source the
+``p_load_pu`` aggregate itself sums — the two are provably in sync, not merely assumed to be) and
+removes exactly that amount, at that load's own bus, from the fixed RHS before adding the load's
+new LP column. A caller therefore passes ``arr`` **unmodified** — the same ``NetworkArrays`` it
+would pass for a plain fixed-load solve — and supplies bid data only for whichever loads are
+actually meant to be elastic; :func:`dc_opf` guarantees no double-counting on its own.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import pairwise
 
 import highspy
@@ -166,6 +215,17 @@ class OpfSolution:
     """``None`` exactly when ``status != "Optimal"``."""
     message: str | None = None
     """Diagnostic when ``status != "Optimal"``; ``None`` otherwise."""
+    demand_dispatch_mw: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Per-elastic-load dispatch, MW (M4 W1) — never overloads ``dispatch_mw``, which stays
+    generator-only. Order: ``sorted(set(demand_bid_coeffs or {}) | set(demand_pwl_bids or {}))``,
+    i.e. the caller's own bid-index set (into ``NetworkArrays.load_ids``), ascending — the caller
+    already has this set (it built the bid mappings), so no extra id list is threaded through
+    here, mirroring how ``dispatch_mw`` itself relies on the caller already knowing
+    ``arr.gen_ids``. Length 0 (not all-zero at generator length) when no bid was supplied for any
+    load — including when ``status != "Optimal"``."""
+    demand_bound: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Per-elastic-load reduced cost of its ``[load_p_min_mw, load_p_max_mw]`` bound, same order
+    as :attr:`demand_dispatch_mw`; 0 unless that load is pinned at a bound."""
 
 
 @dataclass(frozen=True)
@@ -181,13 +241,27 @@ class LmpBreakdown:
 
 
 class NonConvexCostError(ValueError):
-    """A :class:`~mambo_power.model.PiecewiseCost`'s breakpoint slopes are not non-decreasing.
+    """A generator cost is non-convex: either a :class:`~mambo_power.model.PiecewiseCost`'s
+    breakpoint slopes are not non-decreasing, or a quadratic cost has ``c2 < 0``.
 
-    Raised by :func:`dc_opf` before any HiGHS object is created (module docstring, "PWL costs"):
-    the convex segment/epigraph LP encoding is only valid for a convex cost, and silently solving
-    a non-convex one would give a wrong-but-optimal-looking dispatch rather than fail loudly
-    (research §2.1). ``opf``-local — :class:`~mambo_power.model.PiecewiseCost` itself validates
-    only strictly-increasing ``p_mw``, not convexity (record/m3-research.md §2.3).
+    Raised by :func:`dc_opf` before any HiGHS object is created (module docstring, "PWL costs" /
+    "Elastic demand"): the convex segment/epigraph LP encoding, and the QP Hessian's positive
+    semi-definiteness, are only valid for a convex cost, and silently solving a non-convex one
+    would give a wrong-but-optimal-looking dispatch rather than fail loudly (research §2.1, §1.2).
+    ``opf``-local — :class:`~mambo_power.model.PiecewiseCost` itself validates only
+    strictly-increasing ``p_mw``, not convexity (record/m3-research.md §2.3).
+    """
+
+
+class NonConcaveBidError(ValueError):
+    """A demand bid is non-concave: either a piecewise-linear bid's breakpoint slopes are not
+    non-increasing, or a quadratic (polynomial) bid has ``v2 > 0``.
+
+    The demand-side mirror of :class:`NonConvexCostError` (module docstring, "Elastic demand"),
+    raised by :func:`dc_opf` before any HiGHS object is created: the concave segment/hypograph LP
+    encoding, and the QP Hessian's positive semi-definiteness (built from ``−v2``), are only valid
+    for a concave value curve — silently solving a non-concave one would give a
+    wrong-but-optimal-looking dispatch rather than fail loudly (research §1.1, §1.2).
     """
 
 
@@ -214,6 +288,30 @@ def _convex_pwl_segments(points: Sequence[tuple[float, float]]) -> list[tuple[fl
     return segments
 
 
+def _concave_pwl_segments(points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    """``(slope, intercept)`` per segment of a concave PWL demand bid's breakpoints, for the
+    hypograph encoding (module docstring, "Elastic demand"): ``val <= slope * p + intercept`` on
+    each segment — the mirror image of :func:`_convex_pwl_segments`.
+
+    Raises :class:`NonConcaveBidError` if any segment's slope is greater than the previous
+    segment's (an increasing marginal value).
+    """
+    segments: list[tuple[float, float]] = []
+    prev_slope: float | None = None
+    for (p0, v0), (p1, v1) in pairwise(points):
+        slope = (v1 - v0) / (p1 - p0)
+        if prev_slope is not None and slope > prev_slope:
+            raise NonConcaveBidError(
+                f"non-concave piecewise-linear demand bid: segment slope {slope!r} following "
+                f"breakpoint ({p0!r}, {v0!r}) is greater than the previous segment's slope "
+                f"{prev_slope!r} — breakpoints must have non-increasing marginal value for the "
+                "concave segment/hypograph LP encoding to be valid (module docstring)"
+            )
+        segments.append((slope, v0 - slope * p0))
+        prev_slope = slope
+    return segments
+
+
 def lmp_decomposition(duals: OpfDuals, ptdf: FloatArray) -> LmpBreakdown:
     """Per-bus LMP = balance dual (energy) + Σ(flow-limit-row duals × that bus's PTDF column).
 
@@ -232,18 +330,26 @@ def dc_opf(
     cost_coeffs: FloatArray,
     options: OpfDcOptions,
     pwl_costs: Mapping[int, Sequence[tuple[float, float]]] | None = None,
+    demand_bid_coeffs: Mapping[int, tuple[float, float, float]] | None = None,
+    demand_pwl_bids: Mapping[int, Sequence[tuple[float, float]]] | None = None,
 ) -> OpfSolution:
-    """Solve the DC-OPF LP/QP of ``arr`` (module docstring): minimise Σ cost(p_g) subject to one
-    system-wide nodal-balance row and one PTDF-based flow-limit row per branch, over generator
-    bounds. ``cost_coeffs`` is ``(n_gen, 3)``, columns ``[c2, c1, c0]``, generator order.
-    ``pwl_costs`` (module docstring, "PWL costs") is an optional ``{generator_index: points}``
-    map for any generator whose cost is convex piecewise-linear instead of polynomial — that
-    generator's own ``cost_coeffs`` row should be all-zero. Raises :class:`NonConvexCostError`
-    up front (before any HiGHS object exists) if a breakpoint sequence is non-convex. Never
-    raises for an infeasible or unbounded model — reported through ``status``/``message``.
+    """Solve the DC-OPF/welfare LP/QP of ``arr`` (module docstring): minimise Σ cost(p_g) −
+    Σ value(p_d) subject to one system-wide nodal-balance row and one PTDF-based flow-limit row
+    per branch, over generator and elastic-load bounds. ``cost_coeffs`` is ``(n_gen, 3)``, columns
+    ``[c2, c1, c0]``, generator order. ``pwl_costs`` (module docstring, "PWL costs") is an
+    optional ``{generator_index: points}`` map for any generator whose cost is convex
+    piecewise-linear instead of polynomial — that generator's own ``cost_coeffs`` row should be
+    all-zero. ``demand_bid_coeffs``/``demand_pwl_bids`` (module docstring, "Elastic demand") are
+    optional ``{load_index: ...}`` maps, both defaulting to ``None`` (no elastic demand — every
+    M2/M3 caller's exact behavior); a load index must not appear in both. Raises
+    :class:`NonConvexCostError` up front (before any HiGHS object exists) for a non-convex
+    generator cost (piecewise-linear or ``c2 < 0`` quadratic), and :class:`NonConcaveBidError` for
+    a non-concave demand bid (piecewise-linear or ``v2 > 0`` quadratic). Never raises for an
+    infeasible or unbounded model — reported through ``status``/``message``.
     """
     del options  # no tunable fields yet (OpfDcOptions docstring)
     n_gen = len(arr.gen_ids)
+    n_load = len(arr.load_ids)
     coeffs = np.asarray(cost_coeffs, dtype=np.float64)
     if coeffs.shape != (n_gen, 3):
         raise ValueError(
@@ -252,12 +358,66 @@ def dc_opf(
         )
     c2, c1, c0 = coeffs[:, 0], coeffs[:, 1], coeffs[:, 2]
 
-    # PWL segments are validated (convexity) before anything else is built — fail fast, per
-    # NonConvexCostError's own docstring.
+    # PWL segments are validated (convexity/concavity) before anything else is built — fail
+    # fast, per NonConvexCostError's/NonConcaveBidError's own docstrings.
     pwl_costs_ = pwl_costs or {}
     pwl_gen_idxs = sorted(pwl_costs_)
     segments_by_gen = {i: _convex_pwl_segments(pwl_costs_[i]) for i in pwl_gen_idxs}
     n_pwl = len(pwl_gen_idxs)
+
+    demand_bid_coeffs_ = demand_bid_coeffs or {}
+    demand_pwl_bids_ = demand_pwl_bids or {}
+    overlap = set(demand_bid_coeffs_) & set(demand_pwl_bids_)
+    if overlap:
+        raise ValueError(
+            f"load index(es) {sorted(overlap)} appear in both demand_bid_coeffs and "
+            "demand_pwl_bids — a load's bid must be either polynomial or piecewise-linear, "
+            "not both"
+        )
+    elastic_load_idxs = sorted(set(demand_bid_coeffs_) | set(demand_pwl_bids_))
+    for idx in elastic_load_idxs:
+        if not (0 <= idx < n_load):
+            raise ValueError(
+                f"demand bid load index {idx} out of range for {n_load} loads "
+                "(NetworkArrays.load_ids)"
+            )
+    n_demand = len(elastic_load_idxs)
+    demand_col_of = {idx: n_gen + j for j, idx in enumerate(elastic_load_idxs)}
+    demand_pwl_idxs = sorted(demand_pwl_bids_)
+    demand_segments_by_load = {
+        i: _concave_pwl_segments(demand_pwl_bids_[i]) for i in demand_pwl_idxs
+    }
+    n_demand_pwl = len(demand_pwl_idxs)
+
+    # polynomial demand-bid coefficients, dense over elastic_load_idxs order (PWL bid-loads get an
+    # all-zero row here — their value is captured entirely by the hypograph rows below, mirroring
+    # how a PWL generator's cost_coeffs row is all-zero).
+    v2 = np.zeros(n_demand)
+    v1 = np.zeros(n_demand)
+    v0 = np.zeros(n_demand)
+    for j, idx in enumerate(elastic_load_idxs):
+        if idx in demand_bid_coeffs_:
+            v2[j], v1[j], v0[j] = demand_bid_coeffs_[idx]
+
+    # convexity/concavity guards on the polynomial coefficients (module docstring): generator
+    # c2 >= 0, demand v2 <= 0 — the sign mirror.
+    neg_c2 = np.flatnonzero(c2 < 0)
+    if neg_c2.size:
+        bad = int(neg_c2[0])
+        raise NonConvexCostError(
+            f"non-convex quadratic generator cost: generator index {bad} has c2={c2[bad]!r} < 0 "
+            "— a quadratic cost must have c2 >= 0 for the QP's Hessian to be convex "
+            "(module docstring, generator-side convexity guard)"
+        )
+    pos_v2 = np.flatnonzero(v2 > 0)
+    if pos_v2.size:
+        bad = int(pos_v2[0])
+        bad_idx = elastic_load_idxs[bad]
+        raise NonConcaveBidError(
+            f"non-concave quadratic demand bid: load index {bad_idx} has v2={v2[bad]!r} > 0 — "
+            "a quadratic value curve must have v2 <= 0 for the welfare QP's Hessian to stay "
+            "convex (module docstring, mirror of the generator-side c2 >= 0 guard)"
+        )
 
     h = highspy.Highs()  # type: ignore[no-untyped-call]  # highspy ships no type stubs
     h.setOptionValue("output_flag", False)
@@ -267,39 +427,83 @@ def dc_opf(
     if n_gen:
         h.addVars(n_gen, p_min, p_max)
         h.changeColsCost(n_gen, np.arange(n_gen, dtype=np.int32), c1)
-        nz = np.flatnonzero(c2)
+
+    elastic_idx_arr = np.asarray(elastic_load_idxs, dtype=np.int64)
+    if n_demand:
+        demand_p_min = arr.load_p_min_pu[elastic_idx_arr] * arr.base_mva
+        demand_p_max = arr.load_p_max_pu[elastic_idx_arr] * arr.base_mva
+        h.addVars(n_demand, demand_p_min, demand_p_max)
+        # minimising Σcost_g − Σvalue_d means the demand column's linear objective coefficient is
+        # −v1 (module docstring, "Elastic demand").
+        h.changeColsCost(n_demand, np.arange(n_gen, n_gen + n_demand, dtype=np.int32), -v1)
+
+    # combined Hessian over both dispatch blocks (generator [0, n_gen), demand [n_gen,
+    # n_dispatch)), built and passed once, before any free-var (PWL cost_g/val_d) column is
+    # appended — the same ordering already proven safe against later addVars calls by the
+    # existing case14_pwl fixture test (quadratic + PWL generators mixed in one solve).
+    n_dispatch = n_gen + n_demand
+    if n_dispatch:
+        hess_diag = np.zeros(n_dispatch)
+        hess_diag[:n_gen] = 2.0 * c2
+        hess_diag[n_gen:] = -2.0 * v2
+        nz = np.flatnonzero(hess_diag)
         if nz.size:
             hess = highspy.HighsHessian()
-            hess.dim_ = n_gen
+            hess.dim_ = n_dispatch
             hess.format_ = highspy.HessianFormat.kTriangular
-            starts = np.zeros(n_gen + 1, dtype=np.int32)
+            starts = np.zeros(n_dispatch + 1, dtype=np.int32)
             starts[nz + 1] = 1
             starts = np.cumsum(starts).astype(np.int32)
             hess.start_ = starts.tolist()
             hess.index_ = nz.tolist()
-            hess.value_ = (2.0 * c2[nz]).tolist()
+            hess.value_ = hess_diag[nz].tolist()
             h.passHessian(hess)
 
-    # PWL cost columns: one free "cost_g" variable per PWL generator, appended after the n_gen
-    # dispatch columns (module docstring, "PWL costs"). Objective coefficient 1 — minimising the
-    # LP pulls each cost_g down to the tightest epigraph bound, i.e. exactly cost(p_g).
+    # PWL cost columns: one free "cost_g" variable per PWL generator, appended after the
+    # n_dispatch generator+demand columns (module docstring, "PWL costs"). Objective coefficient
+    # 1 — minimising the LP pulls each cost_g down to the tightest epigraph bound, i.e. exactly
+    # cost(p_g).
     cost_col_of: dict[int, int] = {}
     if n_pwl:
-        cost_cols = np.arange(n_gen, n_gen + n_pwl, dtype=np.int32)
+        cost_cols = np.arange(n_dispatch, n_dispatch + n_pwl, dtype=np.int32)
         h.addVars(n_pwl, np.full(n_pwl, -highspy.kHighsInf), np.full(n_pwl, highspy.kHighsInf))
         h.changeColsCost(n_pwl, cost_cols, np.ones(n_pwl))
         cost_col_of = dict(zip(pwl_gen_idxs, cost_cols.tolist(), strict=True))
 
-    # --- nodal balance: Σ p_g == Σ p_load + Σ g_shunt (module docstring; phase shifts cancel
-    # system-wide because Σ_bus p_shift == Σ_branch (pf_shift_k − pf_shift_k) == 0 identically).
+    # PWL demand columns: one free "val_d" variable per PWL bid-load, appended after the PWL cost
+    # columns (module docstring, "Elastic demand"). Objective coefficient −1 — minimising
+    # −Σval_d pulls each val_d up to the tightest hypograph bound, i.e. exactly value(p_d).
+    demand_val_col_of: dict[int, int] = {}
+    if n_demand_pwl:
+        val_cols = np.arange(n_dispatch + n_pwl, n_dispatch + n_pwl + n_demand_pwl, dtype=np.int32)
+        h.addVars(
+            n_demand_pwl,
+            np.full(n_demand_pwl, -highspy.kHighsInf),
+            np.full(n_demand_pwl, highspy.kHighsInf),
+        )
+        h.changeColsCost(n_demand_pwl, val_cols, -np.ones(n_demand_pwl))
+        demand_val_col_of = dict(zip(demand_pwl_idxs, val_cols.tolist(), strict=True))
+
+    # --- nodal balance: Σ p_g − Σ p_d == Σ p_load_fixed + Σ g_shunt (module docstring; phase
+    # shifts cancel system-wide because Σ_bus p_shift == Σ_branch (pf_shift_k − pf_shift_k) == 0
+    # identically). p_load_fixed excludes every elastic load's own contribution (double-counting
+    # contract, module docstring, "Elastic demand") — each elastic load's own historical p_mw
+    # (== arr.load_p_max_pu at its index, by construction, W3) is removed from the bus it sits on
+    # before the fixed aggregate is used anywhere below.
     p_load_mw = arr.p_load_pu * arr.base_mva
+    if n_demand:
+        elastic_bus = arr.load_bus[elastic_idx_arr]
+        elastic_own_mw = arr.load_p_max_pu[elastic_idx_arr] * arr.base_mva
+        p_load_mw = p_load_mw - np.bincount(
+            elastic_bus, weights=elastic_own_mw, minlength=arr.n_bus
+        )
     g_shunt_mw = arr.g_shunt_pu * arr.base_mva
     total_fixed = float(np.sum(p_load_mw) + np.sum(g_shunt_mw))
 
-    # --- flow-limit rows: flow_k = Σ_g PTDF[k, gen_bus[g]]·p_g + const_k, where
-    # const_k = pf_shift_mw_k − Σ_bus PTDF[k, bus]·(p_load_mw[bus] + g_shunt_mw[bus]) folds in
-    # every *fixed* contribution to branch k's flow (derivation: module docstring above).
-    # Row bounds: −rating_k − const_k <= row_expr_k <= rating_k − const_k.
+    # --- flow-limit rows: flow_k = Σ_g PTDF[k, gen_bus[g]]·p_g − Σ_d PTDF[k, load_bus[d]]·p_d +
+    # const_k, where const_k = pf_shift_mw_k − Σ_bus PTDF[k, bus]·(p_load_fixed_mw[bus] +
+    # g_shunt_mw[bus]) folds in every *fixed* contribution to branch k's flow (derivation: module
+    # docstring above). Row bounds: −rating_k − const_k <= row_expr_k <= rating_k − const_k.
     ptdf_matrix = compute_ptdf(arr)
     pf_shift_mw = pf_shift(arr) * arr.base_mva
     fixed_bus_mw = p_load_mw + g_shunt_mw
@@ -314,12 +518,23 @@ def dc_opf(
     lower[1:] = -rating_mw - const
     upper[1:] = rating_mw - const
 
-    if n_gen:
-        balance_row = np.ones((1, n_gen))
-        flow_rows = ptdf_matrix[:, arr.gen_bus] if arr.n_branch else np.zeros((0, n_gen))
+    if n_dispatch:
+        gen_balance = np.ones((1, n_gen))
+        demand_balance = -np.ones((1, n_demand))
+        balance_row = np.hstack([gen_balance, demand_balance])
+        if arr.n_branch:
+            gen_flow = ptdf_matrix[:, arr.gen_bus] if n_gen else np.zeros((arr.n_branch, 0))
+            demand_flow = (
+                -ptdf_matrix[:, arr.load_bus[elastic_idx_arr]]
+                if n_demand
+                else np.zeros((arr.n_branch, 0))
+            )
+            flow_rows = np.hstack([gen_flow, demand_flow])
+        else:
+            flow_rows = np.zeros((0, n_dispatch))
         dense = np.vstack([balance_row, flow_rows])
-        row_starts = np.arange(0, n_gen * n_rows + 1, n_gen, dtype=np.int32)
-        col_indices = np.tile(np.arange(n_gen, dtype=np.int32), n_rows)
+        row_starts = np.arange(0, n_dispatch * n_rows + 1, n_dispatch, dtype=np.int32)
+        col_indices = np.tile(np.arange(n_dispatch, dtype=np.int32), n_rows)
         values = dense.ravel()
         h.addRows(n_rows, lower, upper, col_indices.size, row_starts, col_indices, values)
     else:
@@ -352,6 +567,31 @@ def dc_opf(
             np.asarray(epi_values, dtype=np.float64),
         )
 
+    # --- demand hypograph rows: val_d <= slope_i * p_d + intercept_i, one per segment, per PWL
+    # bid-load (module docstring, "Elastic demand") — the mirror of the epigraph rows above.
+    if demand_segments_by_load:
+        hyp_upper: list[float] = []
+        hyp_indices: list[int] = []
+        hyp_values: list[float] = []
+        hyp_row_starts = [0]
+        for load_idx in demand_pwl_idxs:
+            p_col, val_col = demand_col_of[load_idx], demand_val_col_of[load_idx]
+            for slope, intercept in demand_segments_by_load[load_idx]:
+                hyp_upper.append(intercept)
+                hyp_indices.extend([p_col, val_col])
+                hyp_values.extend([-slope, 1.0])
+                hyp_row_starts.append(len(hyp_indices))
+        n_hyp = len(hyp_upper)
+        h.addRows(
+            n_hyp,
+            np.full(n_hyp, -highspy.kHighsInf),
+            np.asarray(hyp_upper, dtype=np.float64),
+            len(hyp_indices),
+            np.asarray(hyp_row_starts, dtype=np.int32),
+            np.asarray(hyp_indices, dtype=np.int32),
+            np.asarray(hyp_values, dtype=np.float64),
+        )
+
     h.run()
     status = h.modelStatusToString(h.getModelStatus())
     if status != _OPTIMAL:
@@ -362,19 +602,32 @@ def dc_opf(
             objective_cost=0.0,
             duals=None,
             message=f"dc_opf: HiGHS reported model status {status!r}",
+            demand_dispatch_mw=np.zeros(n_demand),
+            demand_bound=np.zeros(n_demand),
         )
 
     sol = h.getSolution()
-    # only the first n_gen columns/rows are the generator dispatch / balance+flow-limit rows this
-    # wave's callers know about — PWL cost_g columns and epigraph rows (if any) are appended
-    # after them and are an internal encoding detail, not part of OpfSolution/OpfDuals's shape.
+    # only the first n_dispatch columns/rows are the generator+demand dispatch / balance+flow-
+    # limit rows this wave's callers know about — PWL cost_g/val_d columns and epigraph/hypograph
+    # rows (if any) are appended after them and are an internal encoding detail, not part of
+    # OpfSolution/OpfDuals's shape.
     dispatch_mw = np.asarray(sol.col_value[:n_gen], dtype=np.float64)
+    demand_dispatch_mw = np.asarray(sol.col_value[n_gen:n_dispatch], dtype=np.float64)
     duals = OpfDuals(
         balance=float(sol.row_dual[0]) if n_rows else 0.0,
         flow_limit=np.asarray(sol.row_dual[1:n_rows], dtype=np.float64),
         gen_bound=np.asarray(sol.col_dual[:n_gen], dtype=np.float64),
     )
-    objective_cost = float(h.getInfo().objective_function_value + np.sum(c0))
+    demand_bound = np.asarray(sol.col_dual[n_gen:n_dispatch], dtype=np.float64)
+
+    # objective_cost stays "total generation cost only" (unchanged M2/M3 semantics, docstring on
+    # OpfSolution.objective_cost) even with elastic demand in the same solve — computed directly
+    # from generator dispatch + PWL cost_g values rather than HiGHS's own combined objective
+    # (which, with demand columns present, also nets in the negated demand value). Algebraically
+    # identical to the pre-M4 formula (`objective_function_value + Σc0`) whenever n_demand == 0.
+    poly_gen_cost = float(np.sum(c2 * dispatch_mw**2 + c1 * dispatch_mw + c0))
+    pwl_gen_cost = float(sum(sol.col_value[cost_col_of[i]] for i in pwl_gen_idxs))
+    objective_cost = poly_gen_cost + pwl_gen_cost
     return OpfSolution(
         status=status,
         dispatch_mw=dispatch_mw,
@@ -382,4 +635,6 @@ def dc_opf(
         objective_cost=objective_cost,
         duals=duals,
         message=None,
+        demand_dispatch_mw=demand_dispatch_mw,
+        demand_bound=demand_bound,
     )

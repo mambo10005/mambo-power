@@ -87,6 +87,40 @@ class PiecewiseCost(_Entity):
 GeneratorCost = Annotated[PolynomialCost | PiecewiseCost, Field(discriminator="kind")]
 
 
+class PolynomialBid(_Entity):
+    """Demand-side mirror of :class:`PolynomialCost`: value(p_mw) = sum(c_k * p_mw**k).
+
+    Marginal value must be non-increasing (concave value) for a valid market clearing; that
+    convexity-*direction* check is ``opf.dc_opf``'s job at solve time
+    (:class:`~mambo_power.opf.NonConcaveBidError`), not construction-time here — mirrors how
+    :class:`PolynomialCost` also has no construction-time convexity check.
+    """
+
+    kind: Literal["polynomial"] = "polynomial"
+    coefficients: list[float] = Field(
+        description="Polynomial coefficients (at least one), highest order first, value per hour."
+    )
+
+
+class PiecewiseBid(_Entity):
+    """Demand-side mirror of :class:`PiecewiseCost`: piecewise-linear (p_mw, value) breakpoints.
+
+    Only the same structural checks :class:`PiecewiseCost` gets (at least two points,
+    strictly increasing ``p_mw``) apply here; the concavity *direction* of the value curve is
+    checked at solve time, not here (see :class:`PolynomialBid`).
+    """
+
+    kind: Literal["piecewise"] = "piecewise"
+    points: list[tuple[float, float]] = Field(
+        max_length=200,
+        description="(p_mw, value) breakpoints, at least two and at most 200 (each adds one "
+        "hypograph row to opf.dc_opf's LP); p_mw must be strictly increasing.",
+    )
+
+
+LoadBid = Annotated[PolynomialBid | PiecewiseBid, Field(discriminator="kind")]
+
+
 class Generator(_Entity):
     """Dispatchable injection. ``cost`` is model-present and solver-ignored until M3."""
 
@@ -104,13 +138,20 @@ class Generator(_Entity):
 
 
 class Load(_Entity):
-    """Fixed demand at a bus."""
+    """Fixed demand at a bus. ``bid`` is model-present; only ``market.nodal`` reads it."""
 
     id: str = Field(description="Unique within loads.")
     bus: str = Field(description="Bus id.")
     p_mw: float = Field(description="Active demand, MW.")
     q_mvar: float = Field(description="Reactive demand, MVAr.")
     in_service: bool = True
+    bid: LoadBid | None = Field(
+        default=None,
+        description="Elastic-demand bid covering this Load's entire p_mw; market.nodal reads "
+        "it, opf.solve_dc_opf does not. There is no per-Load partial-capacity split -- bidding "
+        "only part of a load's capacity, with the rest must-serve, means splitting it into two "
+        "Load entities at the same bus (one bid=None fixed, one bid-carrying).",
+    )
 
 
 class Shunt(_Entity):
