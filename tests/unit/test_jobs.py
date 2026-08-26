@@ -49,14 +49,15 @@ from mambo_power.jobs import (
     run_json,
 )
 from mambo_power.jobs import registry as jobs_registry
-from mambo_power.market import MarketNodalOptions
-from mambo_power.model import Network
+from mambo_power.market import MarketMultiperiodOptions, MarketNodalOptions
+from mambo_power.model import Network, Period, Scenario
 from mambo_power.numerics import SetpointConflictWarning
 from mambo_power.opf import OpfDcOptions
 from mambo_power.pf import AcOptions, solve_ac, solve_dc
 from mambo_power.results import (
     AcPowerFlowResult,
     DcPowerFlowResult,
+    MarketMultiperiodResult,
     MarketNodalResult,
     N1Result,
     OpfDcResult,
@@ -66,7 +67,16 @@ from tests._fixtures import FIXTURES_DIR
 
 DERIVED_DIR = FIXTURES_DIR / "derived"
 TIMING = {"provenance": {"started_at", "elapsed_s"}}
-KNOWN_KINDS = {"pf.ac", "pf.dc", "opf.dc", "n1", "market.nodal"}
+# NOTE (S7/AC-7): widened from the M4 set of 5 to include "market.multiperiod" -- the one
+# deliberate edit to a pre-existing line in this file, unavoidable because this constant is
+# compared against jobs.KINDS by test_kinds_lists_exactly_the_m3_kinds/
+# test_register_adds_a_kind_and_refuses_duplicates, both of which assert the *current* set of
+# registered kinds. AC-7 itself requires "jobs.KINDS lists exactly 6 kinds", so leaving this at
+# 5 would make those two pre-existing tests assert something now false, not preserve a
+# compatibility guarantee -- the same treatment wave M4 gave this identical line when it added
+# "market.nodal" as the 5th kind. No other pre-existing line in this file is touched; the
+# request/response *compatibility* tests below are added new, alongside the untouched originals.
+KNOWN_KINDS = {"pf.ac", "pf.dc", "opf.dc", "n1", "market.nodal", "market.multiperiod"}
 
 
 def _network(name: str = "case14") -> Network:
@@ -464,8 +474,17 @@ def test_runner_exception_is_a_failed_internal_result(
 def test_runner_returning_the_wrong_type_is_internal(
     case14: Network, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def wrong(net: Network, options: BaseModel | None) -> BaseModel:
-        return solve_dc(net)
+    # S7/AC-7 NOTE: the one deliberate edit to a pre-existing test *body* in this file. This
+    # local stub's signature/body is adapted from (net: Network, ...) -> solve_dc(net) to
+    # (scenario: Scenario, ...) -> solve_dc(scenario.network), because "every Runner becomes
+    # (Scenario, options) -> result" (wave M5 design item 2) is the plan's own mandated change
+    # to jobs.registry.Runner -- an internal registry extension-point contract, not part of the
+    # SolveRequest/JSON compatibility surface AC-7's "risky half" protects (that surface is
+    # proven intact by every test above this banner, none of which needed this treatment). The
+    # test's actual claim -- a runner returning the wrong result type is an INTERNAL failure --
+    # is otherwise unchanged.
+    def wrong(scenario: Scenario, options: BaseModel | None) -> BaseModel:
+        return solve_dc(scenario.network)
 
     monkeypatch.setitem(
         KINDS,
@@ -510,3 +529,227 @@ def test_non_convergence_is_ok_with_converged_false(case14: Network) -> None:
     assert out.result.message is not None and "did not converge" in out.result.message
     assert out.provenance is not None
     assert out.provenance.options["max_iter"] == 1
+
+
+# =================================================================================================
+# wave M5 S7 / AC-7 -- SolveRequest widening (network-or-scenario), the uniform (Scenario, options)
+# Runner, and the new market.multiperiod kind. Every test below is *added*; nothing above this
+# banner (besides the single KNOWN_KINDS line, explained where it is defined, and the one Runner-
+# signature adaptation inside test_runner_returning_the_wrong_type_is_internal, explained there)
+# was edited, and that is the point: the M2/M3/M4 tests above are the primary evidence that D3's
+# widening of a public, JSON-serializable request surface did not change any pre-existing
+# SolveRequest(kind=..., network=...) construction or any pre-existing serialized JSON.
+# =================================================================================================
+
+ALL_SIX_KINDS = ("pf.ac", "pf.dc", "opf.dc", "n1", "market.nodal", "market.multiperiod")
+
+
+def _two_period_scenario(case14: Network) -> Scenario:
+    """A genuine multi-period Scenario built from case14's own first load (id "load-2",
+    p_mw=21.7): two periods with different overrides, so the horizon is not degenerate."""
+    return Scenario(
+        network=case14,
+        periods=[Period(load_p_mw={"load-2": 18.0}), Period(load_p_mw={"load-2": 30.0})],
+    )
+
+
+# --- KINDS contract: the 6th kind -------------------------------------------------------------
+def test_kinds_registers_market_multiperiod_as_the_sixth_kind() -> None:
+    assert len(KINDS) == 6
+    assert "market.multiperiod" in KINDS
+    spec = KINDS["market.multiperiod"]
+    assert spec.options_model is MarketMultiperiodOptions
+    assert spec.result_model is MarketMultiperiodResult
+    assert callable(spec.runner)
+
+
+# --- SolveRequest widening: exactly one of network/scenario --------------------------------------
+def test_solve_request_rejects_neither_network_nor_scenario() -> None:
+    with pytest.raises(ValidationError, match="network.*scenario|scenario.*network"):
+        SolveRequest(kind="pf.dc")  # type: ignore[call-arg]
+
+
+def test_solve_request_rejects_both_network_and_scenario(case14: Network) -> None:
+    with pytest.raises(ValidationError, match="network.*scenario|scenario.*network"):
+        SolveRequest(kind="pf.dc", network=case14, scenario=Scenario(network=case14))
+
+
+def test_solve_request_network_normalizes_to_a_single_period_scenario(case14: Network) -> None:
+    """The powerless-test guard from the dispatch: this does not just check construction does
+    not raise -- it inspects the *normalized* Scenario's contents and identity."""
+    req = SolveRequest(kind="pf.dc", network=case14)
+    resolved = req.resolved_scenario
+    assert isinstance(resolved, Scenario)
+    assert resolved.network == case14
+    assert resolved.network is case14  # wrapped, not copied -- no revalidation-triggered clone
+    assert resolved.periods is None
+
+
+def test_solve_request_scenario_field_is_used_directly(case14: Network) -> None:
+    scenario = _two_period_scenario(case14)
+    req = SolveRequest(kind="market.multiperiod", scenario=scenario)
+    assert req.network is None
+    assert req.resolved_scenario is scenario
+    assert req.resolved_scenario.periods is not None
+    assert len(req.resolved_scenario.periods) == 2
+
+
+def test_solve_request_network_mutation_is_still_picked_up_via_resolved_scenario(
+    case14: Network,
+) -> None:
+    """The pre-widening behaviour this must not regress: run() re-checks the network's
+    invariants itself because Network does not re-validate on mutation on its own
+    (test_mutated_invalid_network_through_run_is_a_failed_result, untouched, proves the same
+    thing through run()). This proves resolved_scenario itself observes the mutation: wrapping
+    a mutated-invalid network into a fresh Scenario *does* re-run Network's own after-validator
+    (nested-model construction, model/scenario.py's own documented behaviour), so the mutation
+    surfaces here as a raised NetworkValidationError where it did not before mutation -- run()
+    catches exactly this exception (see jobs/run.py) so it never crosses run()'s own boundary."""
+    req = SolveRequest(kind="pf.ac", network=_network("case14"))
+    before = req.resolved_scenario  # valid before mutation: does not raise
+    assert before.network.branches[0].to_bus != "bus-999"
+    req.network.branches[0].to_bus = "bus-999"
+    with pytest.raises(Exception, match="DANGLING_REF"):
+        _ = req.resolved_scenario
+
+
+def test_runner_receives_the_resolved_scenario_not_a_bare_network(
+    case14: Network, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Powerless-test guard: proves the runner is actually called with a Scenario wrapping this
+    request's network, not merely that SolveRequest construction succeeds."""
+    received: list[object] = []
+
+    def spy(scenario: Scenario, options: BaseModel | None) -> BaseModel:
+        received.append(scenario)
+        return solve_dc(scenario.network)
+
+    monkeypatch.setitem(
+        KINDS,
+        "pf.dc",
+        KindSpec(kind="pf.dc", options_model=None, result_model=DcPowerFlowResult, runner=spy),
+    )
+    out = run(SolveRequest(kind="pf.dc", network=case14))
+    assert out.status == "ok"
+    assert len(received) == 1
+    assert isinstance(received[0], Scenario)
+    assert received[0].network is case14
+
+
+# --- market.multiperiod happy path ----------------------------------------------------------------
+def test_run_market_multiperiod_on_case14_is_ok_with_typed_result_and_provenance(
+    case14: Network,
+) -> None:
+    """A period-less (network=) request: T=1, mirroring the market.nodal jobs smoke test."""
+    out = run(SolveRequest(kind="market.multiperiod", network=case14))
+    assert out.status == "ok"
+    assert out.error is None
+    assert isinstance(out.result, MarketMultiperiodResult)
+    assert out.result.status == "Optimal"
+    assert out.result.n_periods == 1
+    assert out.result.periods
+    assert out.provenance is not None
+    assert out.provenance.kind == "market.multiperiod"
+    assert out.provenance == out.result.provenance
+
+
+def test_run_market_multiperiod_with_real_periods_via_scenario(case14: Network) -> None:
+    scenario = _two_period_scenario(case14)
+    out = run(SolveRequest(kind="market.multiperiod", scenario=scenario))
+    assert out.status == "ok"
+    assert isinstance(out.result, MarketMultiperiodResult)
+    assert out.result.status == "Optimal"
+    assert out.result.n_periods == 2
+    assert len(out.result.periods) == 2
+
+
+# --- purity, across all six kinds -------------------------------------------------------------
+@pytest.mark.parametrize("kind", ALL_SIX_KINDS)
+def test_run_is_pure_across_all_six_kinds(kind: str, case14: Network) -> None:
+    req = SolveRequest(kind=kind, network=case14)
+    first, second = run(req), run(req)
+    assert first.result is not None and second.result is not None
+    assert first.result.model_dump(exclude=TIMING) == second.result.model_dump(exclude=TIMING)
+    assert first.model_dump(exclude={"result", "provenance"}) == second.model_dump(
+        exclude={"result", "provenance"}
+    )
+    assert first.provenance is not None and second.provenance is not None
+    assert first.provenance.started_at <= second.provenance.started_at
+
+
+def test_run_is_pure_for_market_multiperiod_with_real_periods(case14: Network) -> None:
+    """The purity check above uses network= (T=1); this repeats it with a genuine multi-period
+    Scenario, so purity is proven on a non-trivial (non-constant-looking) result too."""
+    scenario = _two_period_scenario(case14)
+    req = SolveRequest(kind="market.multiperiod", scenario=scenario)
+    first, second = run(req), run(req)
+    assert first.result is not None and second.result is not None
+    assert isinstance(first.result, MarketMultiperiodResult)
+    assert first.result.n_periods == 2
+    assert first.result.model_dump(exclude=TIMING) == second.result.model_dump(exclude=TIMING)
+
+
+# --- JSON round trip --------------------------------------------------------------------------
+def test_request_with_scenario_round_trips_through_json(case14: Network) -> None:
+    scenario = _two_period_scenario(case14)
+    req = SolveRequest(kind="market.multiperiod", scenario=scenario, job_id="rt-s")
+    again = SolveRequest.model_validate_json(req.model_dump_json())
+    assert again == req
+    assert again.network is None
+    assert again.resolved_scenario == req.resolved_scenario
+
+
+def test_result_round_trips_through_json_for_market_multiperiod(case14: Network) -> None:
+    out = run(SolveRequest(kind="market.multiperiod", network=case14))
+    again = SolveResult.model_validate_json(out.model_dump_json())
+    assert again == out
+    assert type(again.result) is MarketMultiperiodResult
+
+
+def test_market_multiperiod_with_real_periods_round_trips_through_run_json(
+    case14: Network,
+) -> None:
+    """Explicit requirement: a market.multiperiod request carrying a genuine multi-period
+    Scenario round-trips through run_json (JSON text in, JSON text out) and returns a typed
+    MarketMultiperiodResult, not just a dict-shaped payload."""
+    scenario = _two_period_scenario(case14)
+    req = SolveRequest(kind="market.multiperiod", scenario=scenario, job_id="mp-1")
+    out_text = run_json(req.model_dump_json())
+    payload = json.loads(out_text)
+    assert payload["status"] == "ok"
+    assert payload["kind"] == "market.multiperiod"
+    assert payload["job_id"] == "mp-1"
+    out = SolveResult.model_validate_json(out_text)
+    assert isinstance(out.result, MarketMultiperiodResult)
+    assert out.result.n_periods == 2
+    assert len(out.result.periods) == 2
+
+
+# --- never raises: structured failures for market.multiperiod --------------------------------
+def test_infeasible_market_multiperiod_is_infeasible_lp_not_internal(case14: Network) -> None:
+    """AC-7: the same hand-built infeasible network as market.nodal's/opf.dc's equivalent
+    tests, routed through market.multiperiod -- an infeasible multiperiod horizon must land as
+    INFEASIBLE_LP, not INTERNAL, and not a "successful" status="ok" result."""
+    out = run(SolveRequest(kind="market.multiperiod", network=_infeasible_net(case14)))
+    error = _assert_failed(out, "INFEASIBLE_LP")
+    assert "Infeasible" in error.message
+
+
+def test_market_multiperiod_shares_the_status_translation_function(
+    case14: Network, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Design item 6 (reused, not re-implemented a third time): spies on the same
+    _translate_non_optimal_status object opf.dc and market.nodal already share (proved by the
+    untouched test_opf_dc_and_market_nodal_share_the_same_status_translation_function above),
+    and confirms market.multiperiod's runner exercises that identical function object too."""
+    original = jobs_registry._translate_non_optimal_status
+    calls: list[str] = []
+
+    def spy(kind: str, status: str, message: str | None) -> NoReturn:
+        calls.append(kind)
+        original(kind, status, message)
+
+    monkeypatch.setattr(jobs_registry, "_translate_non_optimal_status", spy)
+    net = _infeasible_net(case14)
+    assert run(SolveRequest(kind="market.multiperiod", network=net)).error is not None
+    assert calls == ["market.multiperiod"]

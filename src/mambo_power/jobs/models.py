@@ -6,16 +6,17 @@ body of an HTTP request *is* a :class:`SolveRequest` and the body of the respons
 
 **How ``SolveResult.result`` is typed.** Its annotation is the closed union of the registered
 kinds' result models (``AcPowerFlowResult | DcPowerFlowResult`` in M2, widened to add
-``OpfDcResult | N1Result`` in M3, ``MarketNodalResult`` in M4). The type is *not*
-inferred from the payload's shape: a ``model_validator(mode="before")`` looks the request
-``kind`` up in :data:`~mambo_power.jobs.KINDS` and validates a dict ``result`` with exactly that
-kind's ``result_model``; a second validator (``mode="after"``) then checks that the instance
-type equals the kind's model, and that ``status`` agrees with which of ``result`` / ``error``
-is present. A pydantic discriminated union was not used because the discriminator (``kind``)
-lives on the parent, not inside the result, and because the power-flow results do not carry
-a tag field of their own. A wave that registers a new kind widens the union annotation — the
-``after`` validator will refuse a result whose class is not the kind's ``result_model``, and the
-field validation refuses a class outside the union, so the two cannot silently drift apart.
+``OpfDcResult | N1Result`` in M3, ``MarketNodalResult`` in M4, ``MarketMultiperiodResult`` in
+M5). The type is *not* inferred from the payload's shape: a ``model_validator(mode="before")``
+looks the request ``kind`` up in :data:`~mambo_power.jobs.KINDS` and validates a dict ``result``
+with exactly that kind's ``result_model``; a second validator (``mode="after"``) then checks
+that the instance type equals the kind's model, and that ``status`` agrees with which of
+``result`` / ``error`` is present. A pydantic discriminated union was not used because the
+discriminator (``kind``) lives on the parent, not inside the result, and because the power-flow
+results do not carry a tag field of their own. A wave that registers a new kind widens the union
+annotation — the ``after`` validator will refuse a result whose class is not the kind's
+``result_model``, and the field validation refuses a class outside the union, so the two cannot
+silently drift apart.
 """
 
 from __future__ import annotations
@@ -25,17 +26,25 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mambo_power.jobs.registry import KINDS
-from mambo_power.model import Network, ValidationIssue
+from mambo_power.model import Network, Scenario, ValidationIssue
 from mambo_power.results import (
     AcPowerFlowResult,
     DcPowerFlowResult,
+    MarketMultiperiodResult,
     MarketNodalResult,
     N1Result,
     OpfDcResult,
     ResultProvenance,
 )
 
-ResultModel = AcPowerFlowResult | DcPowerFlowResult | OpfDcResult | N1Result | MarketNodalResult
+ResultModel = (
+    AcPowerFlowResult
+    | DcPowerFlowResult
+    | OpfDcResult
+    | N1Result
+    | MarketNodalResult
+    | MarketMultiperiodResult
+)
 """The closed union of result types a ``SolveResult`` can carry (one per registered kind)."""
 
 FailureCode = Literal[
@@ -76,7 +85,20 @@ class StructuredError(BaseModel):
 
 
 class SolveRequest(BaseModel):
-    """One analysis to run: the kind, the network (inline) and the kind's options.
+    """One analysis to run: the kind, the subject (inline) and the kind's options.
+
+    ``network``/``scenario`` — wave M5 design item D3 (2026-08-25) — exactly one must be given:
+    ``network`` is the original, still-supported shape (a bare
+    :class:`~mambo_power.model.Network`), and every pre-existing
+    ``SolveRequest(kind=..., network=...)`` construction and serialized JSON keeps working
+    unchanged. ``scenario`` is the new form, for a genuine multi-period
+    :class:`~mambo_power.model.Scenario` (``market.multiperiod``) or simply an explicit
+    single-period one. Neither or both given is a ``ValueError`` (a pydantic error at
+    construction time; :func:`mambo_power.jobs.run_json` turns it into ``BAD_REQUEST``).
+    :attr:`resolved_scenario` is what every :class:`~mambo_power.jobs.registry.Runner` actually
+    receives — ``scenario`` itself, or ``network`` wrapped as ``Scenario(network=network)``
+    (single-period, ``periods=None``, exactly ``market.nodal``'s and every T=1 kind's existing
+    semantics) — never the raw fields, so widening this model changes no runner's contract.
 
     ``options`` is validated by :func:`mambo_power.jobs.run` against the kind's options model
     (``AcOptions`` for ``pf.ac``; ``pf.dc`` takes none) — unknown keys are a ``BAD_OPTIONS``
@@ -86,11 +108,48 @@ class SolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: str = Field(min_length=1, description="A key of ``jobs.KINDS``, e.g. ``pf.ac``.")
-    network: Network = Field(description="The network to solve; the request is self-contained.")
+    network: Network | None = Field(
+        default=None, description="The network to solve; mutually exclusive with ``scenario``."
+    )
+    scenario: Scenario | None = Field(
+        default=None, description="The scenario to solve; mutually exclusive with ``network``."
+    )
     options: dict[str, Any] = Field(
         default_factory=dict, description="Kind-specific options, validated by ``run``."
     )
     job_id: str | None = Field(default=None, description="Caller's correlation id, echoed back.")
+
+    @model_validator(mode="after")
+    def _exactly_one_of_network_or_scenario(self) -> Self:
+        if (self.network is None) == (self.scenario is None):
+            raise ValueError(
+                "SolveRequest requires exactly one of `network` or `scenario`, got "
+                f"network={'given' if self.network is not None else None}, "
+                f"scenario={'given' if self.scenario is not None else None}"
+            )
+        return self
+
+    @property
+    def resolved_scenario(self) -> Scenario:
+        """This request as a :class:`~mambo_power.model.Scenario`: ``scenario`` itself when
+        given, or ``network`` wrapped as ``Scenario(network=network)`` — single-period,
+        ``periods=None``. Recomputed on every access, not cached, so a ``network`` mutated in
+        place after construction (``request.network.branches[0].to_bus = ...`` — ``Network``
+        does not re-validate on mutation on its own) is reflected here too, exactly as it was
+        when ``jobs.registry._run_market_nodal`` did this same wrap internally pre-M5.
+
+        Constructing the wrapping ``Scenario`` *does* re-run ``Network``'s own after-validator —
+        nested-model construction re-checks every invariant (``model/scenario.py``'s own
+        docstring) — so this can raise :class:`~mambo_power.model.NetworkValidationError` for a
+        ``network`` mutated into an invalid state; :func:`mambo_power.jobs.run` catches that
+        itself, immediately, precisely so it stays a graceful ``VALIDATION`` failure rather than
+        an exception crossing its boundary. A directly-supplied ``scenario`` is returned as-is,
+        with no such re-check — mirroring ``network``'s own no-revalidation-on-mutation rule.
+        """
+        if self.scenario is not None:
+            return self.scenario
+        assert self.network is not None  # guaranteed by _exactly_one_of_network_or_scenario
+        return Scenario(network=self.network)
 
 
 class SolveResult(BaseModel):

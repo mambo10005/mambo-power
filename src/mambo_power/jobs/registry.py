@@ -1,19 +1,22 @@
 """The analysis-kinds registry: what the installed version can run (ADR-004, design item 6).
 
-``KINDS`` maps a kind name (``"pf.ac"``, ``"pf.dc"``, ``"opf.dc"``, ``"n1"``, ``"market.nodal"``)
-to a :class:`KindSpec` — the options model the request's ``options`` dict is validated against,
-the result model the runner returns, and the runner itself. The registry is the capability list
-a service publishes, and the contract test (AC-6/AC-8, AC-7) asserts every entry's models are
-importable and its runner callable. Later waves add kinds with :func:`register`; nothing else in
-the package changes.
+``KINDS`` maps a kind name (``"pf.ac"``, ``"pf.dc"``, ``"opf.dc"``, ``"n1"``, ``"market.nodal"``,
+``"market.multiperiod"``) to a :class:`KindSpec` — the options model the request's ``options``
+dict is validated against, the result model the runner returns, and the runner itself. The
+registry is the capability list a service publishes, and the contract test (AC-6/AC-8, wave M4
+AC-7, wave M5 AC-7) asserts every entry's models are importable and its runner callable. Later
+waves add kinds with :func:`register`; nothing else in the package changes.
 
-``market.nodal`` is the first kind whose subject is not a bare ``Network``:
-:func:`mambo_power.market.nodal.solve_nodal` takes a ``Scenario``. ``SolveRequest`` stays
-``network``-shaped rather than growing a parallel ``scenario`` field — ``Scenario`` is, this
-wave, genuinely just ``network: Network`` and nothing else (``model/scenario.py``), so
-``_run_market_nodal`` wraps the incoming ``Network`` into a ``Scenario`` itself; every ``Runner``
-still has the one ``(Network, options) -> result`` shape. Revisit only if a future wave gives
-``Scenario`` fields a bare ``Network`` cannot supply.
+``market.nodal`` was the first kind whose subject is not a bare ``Network``:
+:func:`mambo_power.market.nodal.solve_nodal` takes a ``Scenario``. Wave M4 kept ``SolveRequest``
+``network``-shaped and had ``_run_market_nodal`` wrap the incoming ``Network`` into a
+``Scenario`` itself, since ``Scenario`` was then genuinely just ``network: Network``. Wave M5
+(design item D3) widened ``SolveRequest`` to accept either ``network`` or ``scenario`` — now
+that ``Scenario`` also carries ``periods``, a bare ``Network`` genuinely cannot supply everything
+a caller may need — so that wrap moved outward, onto ``SolveRequest.resolved_scenario``
+(``jobs/models.py``): every ``Runner`` now has the one ``(Scenario, options) -> result`` shape,
+and reads ``.network`` off the scenario when that is all it needs (``pf.ac``, ``pf.dc``,
+``opf.dc``, ``n1``); ``_run_market_nodal`` no longer wraps anything itself.
 """
 
 from __future__ import annotations
@@ -25,49 +28,56 @@ from typing import NoReturn
 from pydantic import BaseModel
 
 from mambo_power.contingency import N1Options, n1
+from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multiperiod
 from mambo_power.market.nodal import MarketNodalOptions, solve_nodal
-from mambo_power.model import Network, Scenario
+from mambo_power.model import Scenario
 from mambo_power.opf import OpfDcOptions, solve_dc_opf
 from mambo_power.pf import AcOptions, solve_ac, solve_dc
 from mambo_power.results import (
     AcPowerFlowResult,
     DcPowerFlowResult,
+    MarketMultiperiodResult,
     MarketNodalResult,
     N1Result,
     OpfDcResult,
 )
 
-Runner = Callable[[Network, BaseModel | None], BaseModel]
-"""Signature every kind's runner has: ``(network, validated_options_or_None) -> result``."""
+Runner = Callable[[Scenario, BaseModel | None], BaseModel]
+"""Signature every kind's runner has: ``(scenario, validated_options_or_None) -> result``."""
 
 
 class InfeasibleLpError(Exception):
-    """``opf.dc``'s or ``market.nodal``'s runner found a non-Optimal, non-Unbounded status
-    (e.g. ``OpfDcResult.status == "Infeasible"``) — see :func:`_translate_non_optimal_status`.
+    """``opf.dc``'s, ``market.nodal``'s or ``market.multiperiod``'s runner found a non-Optimal,
+    non-Unbounded status (e.g. ``OpfDcResult.status == "Infeasible"``) — see
+    :func:`_translate_non_optimal_status`.
 
-    Neither :func:`mambo_power.opf.solve_dc_opf` nor :func:`mambo_power.market.nodal.solve_nodal`
-    ever raises on a non-Optimal LP/QP status (their own docstrings, mirroring
-    :func:`mambo_power.pf.solve_ac`'s never-raise-on-non-convergence convention) — each reports
-    the status as data. But an infeasible LP has *no* dispatch at all, unlike a non-converged AC
-    iterate which still carries a meaningful partial state; wave M3's design (item 7) draws that
-    line deliberately, so both job kinds report it as a structured job failure
-    (``INFEASIBLE_LP``) rather than a "successful" result carrying a non-Optimal status. Raised
-    only here, by the job runners — not by ``solve_dc_opf``/``solve_nodal`` themselves.
+    None of :func:`mambo_power.opf.solve_dc_opf`, :func:`mambo_power.market.nodal.solve_nodal`
+    or :func:`mambo_power.market.multiperiod.solve_multiperiod` ever raises on a non-Optimal
+    LP/QP status (their own docstrings, mirroring :func:`mambo_power.pf.solve_ac`'s
+    never-raise-on-non-convergence convention) — each reports the status as data. But an
+    infeasible LP has *no* dispatch at all, unlike a non-converged AC iterate which still
+    carries a meaningful partial state; wave M3's design (item 7) draws that line deliberately,
+    so every such job kind reports it as a structured job failure (``INFEASIBLE_LP``) rather
+    than a "successful" result carrying a non-Optimal status. Raised only here, by the job
+    runners — not by ``solve_dc_opf``/``solve_nodal``/``solve_multiperiod`` themselves.
     """
 
 
 class UnboundedLpError(Exception):
-    """``opf.dc``'s or ``market.nodal``'s runner found status ``"Unbounded"``; see
-    :class:`InfeasibleLpError` for why this is a job failure rather than an ``"ok"`` result."""
+    """``opf.dc``'s, ``market.nodal``'s or ``market.multiperiod``'s runner found status
+    ``"Unbounded"``; see :class:`InfeasibleLpError` for why this is a job failure rather than an
+    ``"ok"`` result."""
 
 
 def _translate_non_optimal_status(kind: str, status: str, message: str | None) -> NoReturn:
     """Translate a non-``"Optimal"`` LP/QP status into :class:`InfeasibleLpError`/
     :class:`UnboundedLpError`, for :mod:`mambo_power.jobs.run` to map to a structured failure —
-    see :class:`InfeasibleLpError`. Shared by ``opf.dc``'s and ``market.nodal``'s runners (wave
-    spec Design item 6): both wrap a welfare/cost LP with the identical two failure shapes
-    (infeasible: no feasible dispatch; unbounded: every bound is finite by construction, but a
-    malformed input could still trigger it), so the translation is one function, not two copies.
+    see :class:`InfeasibleLpError`. Shared by ``opf.dc``'s, ``market.nodal``'s and
+    ``market.multiperiod``'s runners (wave M3 spec Design item 6, reused rather than
+    reimplemented by wave M5's S7): all three wrap a welfare/cost LP with the identical two
+    failure shapes (infeasible: no feasible dispatch; unbounded: every bound is finite by
+    construction, but a malformed input could still trigger it), so the translation is one
+    function, not three copies.
 
     ``"Unbounded"`` maps to :class:`UnboundedLpError`; every other non-``"Optimal"`` status
     (``"Infeasible"`` and, in principle, any other HiGHS status this wave's options cannot
@@ -90,49 +100,63 @@ class KindSpec:
     result_model: type[BaseModel]
     """Type the runner returns and ``SolveResult.result`` carries for this kind."""
     runner: Runner
-    """``(network, options) -> result``; ``options`` is ``None`` when ``options_model`` is."""
+    """``(scenario, options) -> result``; ``options`` is ``None`` when ``options_model`` is."""
 
 
-def _run_ac(net: Network, options: BaseModel | None) -> BaseModel:
+def _run_ac(scenario: Scenario, options: BaseModel | None) -> BaseModel:
     """Runner for ``pf.ac``: :func:`mambo_power.pf.solve_ac` with the validated options."""
     assert isinstance(options, AcOptions)  # guaranteed by run(): validated into options_model
-    return solve_ac(net, options=options)
+    return solve_ac(scenario.network, options=options)
 
 
-def _run_dc(net: Network, options: BaseModel | None) -> BaseModel:
+def _run_dc(scenario: Scenario, options: BaseModel | None) -> BaseModel:
     """Runner for ``pf.dc``: :func:`mambo_power.pf.solve_dc`; the kind takes no options."""
-    return solve_dc(net)
+    return solve_dc(scenario.network)
 
 
-def _run_opf_dc(net: Network, options: BaseModel | None) -> BaseModel:
+def _run_opf_dc(scenario: Scenario, options: BaseModel | None) -> BaseModel:
     """Runner for ``opf.dc``: :func:`mambo_power.opf.solve_dc_opf`, then translate a non-Optimal
     ``status`` via the shared :func:`_translate_non_optimal_status` — see
     :class:`InfeasibleLpError` for why a non-Optimal status is a job failure, not an ``"ok"``
     result carrying it.
     """
     assert isinstance(options, OpfDcOptions)  # guaranteed by run(): validated into options_model
-    result = solve_dc_opf(net, options=options)
+    result = solve_dc_opf(scenario.network, options=options)
     if result.status != "Optimal":
         _translate_non_optimal_status("opf.dc", result.status, result.message)
     return result
 
 
-def _run_n1(net: Network, options: BaseModel | None) -> BaseModel:
+def _run_n1(scenario: Scenario, options: BaseModel | None) -> BaseModel:
     """Runner for ``n1``: :func:`mambo_power.contingency.n1`."""
     assert isinstance(options, N1Options)  # guaranteed by run(): validated into options_model
-    return n1(net, options=options)
+    return n1(scenario.network, options=options)
 
 
-def _run_market_nodal(net: Network, options: BaseModel | None) -> BaseModel:
-    """Runner for ``market.nodal``: wraps ``net`` into a ``Scenario`` (module docstring, "not a
-    bare ``Network``") and calls :func:`mambo_power.market.nodal.solve_nodal`, then translates a
-    non-Optimal status via the same :func:`_translate_non_optimal_status` :func:`_run_opf_dc`
-    calls — see :class:`InfeasibleLpError`.
+def _run_market_nodal(scenario: Scenario, options: BaseModel | None) -> BaseModel:
+    """Runner for ``market.nodal``: :func:`mambo_power.market.nodal.solve_nodal` on ``scenario``
+    directly — the ``Network``-to-``Scenario`` wrap now happens upstream, at
+    ``SolveRequest.resolved_scenario`` (module docstring) — then translates a non-Optimal status
+    via the same :func:`_translate_non_optimal_status` :func:`_run_opf_dc` calls — see
+    :class:`InfeasibleLpError`.
     """
     assert isinstance(options, MarketNodalOptions)  # guaranteed by run(): options_model-validated
-    result = solve_nodal(Scenario(network=net), options=options)
+    result = solve_nodal(scenario, options=options)
     if result.status != "Optimal":
         _translate_non_optimal_status("market.nodal", result.status, result.message)
+    return result
+
+
+def _run_market_multiperiod(scenario: Scenario, options: BaseModel | None) -> BaseModel:
+    """Runner for ``market.multiperiod``: :func:`mambo_power.market.multiperiod.solve_multiperiod`
+    on ``scenario`` directly (``scenario.periods is None`` clears a single period — wave M5
+    AC-4), then translates a non-Optimal status via the same shared
+    :func:`_translate_non_optimal_status` — see :class:`InfeasibleLpError`.
+    """
+    assert isinstance(options, MarketMultiperiodOptions)  # run(): options_model-validated
+    result = solve_multiperiod(scenario, options=options)
+    if result.status != "Optimal":
+        _translate_non_optimal_status("market.multiperiod", result.status, result.message)
     return result
 
 
@@ -168,5 +192,13 @@ register(
         options_model=MarketNodalOptions,
         result_model=MarketNodalResult,
         runner=_run_market_nodal,
+    )
+)
+register(
+    KindSpec(
+        kind="market.multiperiod",
+        options_model=MarketMultiperiodOptions,
+        result_model=MarketMultiperiodResult,
+        runner=_run_market_multiperiod,
     )
 )

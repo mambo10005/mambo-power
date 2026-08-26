@@ -5,7 +5,9 @@ Pipeline of :func:`run` (design item 6):
 1. look the kind up in :data:`~mambo_power.jobs.KINDS` — miss → ``UNKNOWN_KIND``;
 2. validate ``request.options`` into the kind's options model — ``BAD_OPTIONS`` (pydantic
    errors in ``error.details``); a kind without an options model rejects any key;
-3. re-check the network's invariants with :func:`mambo_power.model.validate_network` —
+3. resolve ``request`` to a :class:`~mambo_power.model.Scenario` via
+   ``request.resolved_scenario`` (wave M5 D3: ``scenario`` as given, or ``network`` wrapped) and
+   re-check its network's invariants with :func:`mambo_power.model.validate_network` —
    ``VALIDATION`` with every issue (a ``Network`` validates on construction but not on
    mutation, so ``run`` does not trust its input);
 4. call the runner under ``warnings.catch_warnings(record=True)`` and wrap what it raises:
@@ -146,7 +148,18 @@ def run(request: SolveRequest) -> SolveResult:
         return fail("BAD_OPTIONS", f'kind "{kind}" takes no options; got: {keys}')
     run_options = options.model_dump() if options is not None else {}
 
-    issues = validate_network(request.network)
+    try:
+        scenario = request.resolved_scenario
+    except NetworkValidationError as exc:
+        # request.network was mutated in place into an invalid network after construction
+        # (Network does not re-validate on mutation) and resolved_scenario's wrap of it into a
+        # fresh Scenario *does* re-run Network's own after-validator (Scenario's own docstring:
+        # nested-model construction re-checks every invariant, dangling refs included) -- so the
+        # wrap itself can raise where a bare `request.network` never did. Caught here, in the
+        # same shape as the explicit validate_network() check just below, so this remains a
+        # graceful VALIDATION failure rather than an exception crossing run()'s boundary.
+        return fail("VALIDATION", str(exc), issues=exc.issues, options=run_options)
+    issues = validate_network(scenario.network)
     if issues:
         error = NetworkValidationError(issues)
         return fail("VALIDATION", str(error), issues=issues, options=run_options)
@@ -156,7 +169,7 @@ def run(request: SolveRequest) -> SolveResult:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
-            raw = spec.runner(request.network, options)
+            raw = spec.runner(scenario, options)
         except NetworkValidationError as exc:
             failure = ("VALIDATION", str(exc), exc.issues)
         except NoSlackGeneratorError as exc:
