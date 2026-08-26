@@ -104,6 +104,7 @@ nav:
       - DC-OPF: manual/opf.md
       - N-1 screening: manual/n1.md
       - Nodal market: manual/market.md
+      - Multiperiod market: manual/multiperiod.md
       - Results: manual/results.md
       - Jobs API: manual/jobs.md
   - Examples: examples/index.md

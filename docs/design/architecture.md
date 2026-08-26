@@ -12,20 +12,21 @@ later waves add (their dependencies are already fixed by the epic design).
 
 ```mermaid
 flowchart TB
-    subgraph present["Shipped (M1-M4)"]
-        model["model<br/>Network, entities, validation errors,<br/>ImportIssue, repair_islands, Scenario"]
+    subgraph present["Shipped (M1-M5)"]
+        model["model<br/>Network, entities, validation errors,<br/>ImportIssue, repair_islands,<br/>Scenario, Period"]
         io["io<br/>matpower, native, ImportReport"]
         numerics["numerics<br/>NetworkArrays, ybus, bbus, ptdf, lodf,<br/>effective_roles"]
         pf["pf<br/>solve_dc, solve_ac, dc.solve"]
         ac["pf.ac_newton<br/>AcOptions, newton"]
-        opf["opf<br/>solve_dc_opf, dc_opf, lmp_decomposition"]
+        opf["opf<br/>solve_dc_opf, dc_opf, lmp_decomposition,<br/>gen_cost_coeffs"]
+        opfmp["opf.multiperiod<br/>multiperiod_dc_opf<br/>(ramp, SoC, cyclic rows)"]
         contingency["contingency<br/>n1, screen_n1, confirm_n1"]
-        market["market<br/>solve_nodal (nodal LMP clearing)"]
+        market["market<br/>solve_nodal (one period),<br/>solve_multiperiod (a horizon)"]
         results["results<br/>BusResult, BranchResult, GenResult,<br/>ResultProvenance, from_arrays"]
         jobs["jobs<br/>SolveRequest, SolveResult, KINDS, run"]
     end
     subgraph later["Later waves"]
-        marketlater["market: zonal, multiperiod,<br/>agents (M5-M7)"]
+        marketlater["market: zonal (M6),<br/>agents (M7)"]
         formats["io: pandapower_json, pypsa,<br/>psse_raw, csv_bundle (M8)"]
     end
 
@@ -47,7 +48,10 @@ flowchart TB
     market --> model
     market --> numerics
     market --> opf
+    market --> opfmp
     market --> results
+    opfmp --> numerics
+    opfmp --> opf
     jobs --> pf
     jobs --> opf
     jobs --> contingency
@@ -72,11 +76,17 @@ Rules the diagram encodes:
   re-solve — neither reimplements power flow.
 - `market` composes `opf.dc_opf`/`opf.lmp_decomposition` directly (its `Scenario`-facing
   wrapper over the same welfare LP, extended for elastic demand); it never reimplements them.
-  Later market modes (zonal, multiperiod, agents) build on `market.nodal` in turn, not on
-  `opf` directly.
+  `market.multiperiod` sits at the same altitude over `opf.multiperiod` — it does **not** call
+  `market.nodal`'s clearing, only its `load_bid_coeffs` extractor, shared rather than copied.
+  `opf.multiperiod` in turn calls `opf.dc_opf`'s own balance / flow-limit / epigraph / hypograph
+  row builders per period and adds the three coupling families (ramp, state of charge, cyclic)
+  on top; it is one builder with more row families, not a second solver. Later market modes
+  (zonal, agents) extend the same seam.
 - `jobs` is the outermost layer: it validates a request, calls a solver entry point (`pf`,
   `opf`, `contingency` or `market`, by kind), times it and wraps any exception into a
-  structured failure.
+  structured failure. Since M5 its subject is a `Scenario`: a request carries either a bare
+  `network` or a `scenario`, and `SolveRequest.resolved_scenario` wraps the former, so every
+  runner has the one `(Scenario, options) -> result` shape.
 - pandapower and PyPSA appear nowhere in this graph. They are development dependencies used
   by the parity test tier only.
 
@@ -96,6 +106,9 @@ consumers honest when the owner changes.
 | DC-OPF formulation | `opf` (M3) | market.*, jobs | parity against pandapower `rundcopp` (primary) and PyPSA `optimize` (secondary) |
 | N-1 screen-vs-confirm | `contingency.n1` (M3) | jobs | brute-force all-outage sweep agrees with the LODF screen + DC re-solve on every fixture |
 | LMP / congestion rent | `market.nodal` (M4) | zonal comparison, multiperiod, agents | settlement identities; LMP(slack) = λ |
+| Ramp / SoC / cyclic row families | `opf.multiperiod` (M5) | sole caller `market.multiperiod` | hand-derived ramp optimum; analytic 2-bus/2-period arbitrage; PyPSA multi-period parity |
+| Storage physical limits | `model.Storage` (M1, solver-read from M5) | LP bounds, result rows, docs | SoC balance every period; cyclic `SoC_T == soc_initial`; `min(charge, discharge) ≈ 0` invariant with a paired positive case |
+| Horizon shape | `model.Scenario.periods` / `model.Period` | `market.multiperiod`, `jobs` | `periods=None` reproduces `market.nodal` bit-exactly (`==`, not a tolerance) |
 | Analysis kinds registry | `jobs` | future SaaS capability list | contract test: every kind has request model, result model, runner |
 
 ## Data flow of one solve
@@ -128,14 +141,18 @@ the provenance. The network is never modified; the result is a separate value.
 ```text
 src/mambo_power/
   __init__.py       __version__ from package metadata
-  model/            entities.py (Bus, Branch, Generator, ...), network.py (Network, validate_network), errors.py
-  io/               matpower.py (load, loads, *_with_warnings), native.py (load, loads, save, dumps)
-  numerics/         arrays.py (NetworkArrays), ybus.py, bbus.py, ptdf.py, lodf.py
-  pf/               __init__.py (solve_dc), dc.py (solve, DcSolution)
-  opf/              __init__.py (solve_dc_opf), dc_opf.py (dc_opf, lmp_decomposition)
+  model/            entities.py (Bus, Branch, Generator, ...), network.py (Network, validate_network),
+                    scenario.py (Scenario, Period), islands.py, warnings.py, errors.py
+  io/               matpower.py (load, loads, *_with_warnings), native.py (load, loads, save, dumps), report.py
+  numerics/         arrays.py (NetworkArrays), ybus.py, bbus.py, ptdf.py, lodf.py, roles.py, errors.py
+  pf/               __init__.py (solve_dc, solve_ac), dc.py (solve, DcSolution), ac_newton.py, _common.py
+  opf/              __init__.py (solve_dc_opf, gen_cost_coeffs), dc_opf.py (dc_opf, lmp_decomposition),
+                    multiperiod.py (multiperiod_dc_opf)
   contingency/      __init__.py (n1), n1.py (screen_n1, confirm_n1)
-  market/           __init__.py (solve_nodal), nodal.py (solve_nodal, MarketNodalOptions)
-  results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, n1.py, feasibility.py, market.py
+  market/           __init__.py, nodal.py (solve_nodal), multiperiod.py (solve_multiperiod)
+  results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, n1.py, feasibility.py,
+                    market.py, multiperiod.py
+  jobs/             __init__.py, models.py (SolveRequest, SolveResult), registry.py (KINDS), run.py (run, run_json)
 ```
 
 The test suite mirrors the boundaries: `tests/unit` exercises each module hermetically,

@@ -1,6 +1,6 @@
 # Examples
 
-Nine runnable scripts live under `examples/` in the repository. Each one is self-contained,
+Ten runnable scripts live under `examples/` in the repository. Each one is self-contained,
 reads only files under `fixtures/`, prints a short deterministic summary and exits 0 in about a
 second. They are executed on every push — by `tests/unit/test_examples_run.py` inside the test
 matrix and by the dedicated `examples` CI job — and this page embeds them with
@@ -23,6 +23,7 @@ uv run python examples/02_ac_power_flow.py
 | [`07_results_and_export.py`](#7-results-and-export) | JSON round trip, `to_arrays()`, CSV export | [Results](../manual/results.md) |
 | [`08_opf_and_n1.py`](#8-opf-and-n-1) | `solve_dc_opf` dispatch/duals/LMP, `ac_check`, congestion, `contingency.n1` screen-then-confirm | [DC-OPF](../manual/opf.md), [N-1 screening](../manual/n1.md) |
 | [`09_nodal_market.py`](#9-nodal-market) | `market.solve_nodal` on a `Scenario`: elastic-demand dispatch, LMPs split by congestion, settlement | [Nodal market](../manual/market.md) |
+| [`10_multiperiod_market.py`](#10-multiperiod-market) | `market.solve_multiperiod` over a 24-period `Scenario`: ramp coupling, storage SoC with efficiency, the cyclic horizon, per-period LMPs and settlement | [Multiperiod market](../manual/multiperiod.md) |
 
 ## 1. Load and validate
 
@@ -109,6 +110,19 @@ receipts, and congestion rent.
 
 ``` { .python }
 --8<-- "examples/09_nodal_market.py"
+```
+
+## 10. Multiperiod market
+
+`market.solve_multiperiod` on a 24-hour horizon over case14 with derived ratings, one storage
+unit and ramp limits on every generator: the whole day cleared as one coupled LP, the unit
+charging through the overnight trough and discharging into the afternoon peak, the cyclic
+end-of-horizon SoC, two binding ramp rows with duals of opposite sign, the per-period settlement
+with storage as a third participant, and the `periods=None` degeneracy reproducing
+`market.solve_nodal` bit-exactly.
+
+``` { .python }
+--8<-- "examples/10_multiperiod_market.py"
 ```
 
 ## Conventions for examples

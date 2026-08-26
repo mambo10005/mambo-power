@@ -22,3 +22,11 @@ for field semantics, the JSON round-trip and the positional view.
 ## Builders
 
 ::: mambo_power.results.from_arrays
+
+## Multiperiod market results
+
+Per-period dispatch, LMPs and settlement, per-storage charge/discharge/SoC, and horizon totals.
+Its module docstring states the settlement identity in its general form, including the
+phase-shift and shunt correction terms.
+
+::: mambo_power.results.multiperiod
