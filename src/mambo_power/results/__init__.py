@@ -14,6 +14,12 @@ from mambo_power.results.feasibility import (
 )
 from mambo_power.results.from_arrays import ac_result_from_arrays, dc_result_from_arrays
 from mambo_power.results.market import LoadDispatchResult, MarketNodalResult
+from mambo_power.results.multiperiod import (
+    GenPeriodDispatchResult,
+    MarketMultiperiodResult,
+    MarketPeriodResult,
+    StorageDispatchResult,
+)
 from mambo_power.results.n1 import N1BranchFlag, N1OutageResult, N1Result
 from mambo_power.results.opf import (
     BusLmpResult,
@@ -45,9 +51,12 @@ __all__ = [
     "DcPowerFlowResult",
     "FeasibilityReport",
     "GenDispatchResult",
+    "GenPeriodDispatchResult",
     "GenResult",
     "LoadDispatchResult",
+    "MarketMultiperiodResult",
     "MarketNodalResult",
+    "MarketPeriodResult",
     "N1BranchFlag",
     "N1OutageResult",
     "N1Result",
@@ -57,6 +66,7 @@ __all__ = [
     "PowerFlowResultBase",
     "QLimitSide",
     "ResultProvenance",
+    "StorageDispatchResult",
     "ThermalViolation",
     "VoltageViolation",
     "ac_result_from_arrays",

@@ -35,7 +35,13 @@ from mambo_power.results import (
     ResultProvenance,
 )
 
-__all__ = ["MarketNodalOptions", "NonConcaveBidError", "NonConvexCostError", "solve_nodal"]
+__all__ = [
+    "MarketNodalOptions",
+    "NonConcaveBidError",
+    "NonConvexCostError",
+    "load_bid_coeffs",
+    "solve_nodal",
+]
 
 PolyBidCoeffs = dict[int, tuple[float, float, float]]
 PwlBids = dict[int, list[tuple[float, float]]]
@@ -53,11 +59,17 @@ class MarketNodalOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-def _load_bid_coeffs(net: Network, arr: NetworkArrays) -> tuple[PolyBidCoeffs, PwlBids]:
+def load_bid_coeffs(net: Network, arr: NetworkArrays) -> tuple[PolyBidCoeffs, PwlBids]:
     """Per-load ``(v2, v1, v0)`` plus any PWL bids, from ``Load.bid`` -- the demand-side mirror
     of :func:`mambo_power.opf.gen_cost_coeffs`. A load with no bid (``bid is None``) contributes
     to neither mapping, so :func:`~mambo_power.opf.dc_opf.dc_opf` leaves it purely on the
     fixed-RHS side (its module docstring, "Elastic demand").
+
+    Public (not module-private) for the same reason
+    :func:`~mambo_power.opf.gen_cost_coeffs` is:
+    :func:`mambo_power.market.multiperiod.solve_multiperiod` needs the identical bid extraction
+    and calls this rather than carrying a second copy (M4 review Duplication FLAG, M4/R2's own
+    resolution applied to the demand side).
     """
     loads_by_id = {ld.id: ld for ld in net.loads}
     demand_bid_coeffs: PolyBidCoeffs = {}
@@ -97,7 +109,7 @@ def solve_nodal(scenario: Scenario, options: MarketNodalOptions | None = None) -
     net = scenario.network
     arr = NetworkArrays.from_network(net)
     cost_coeffs, pwl_costs = gen_cost_coeffs(net, arr)
-    demand_bid_coeffs, demand_pwl_bids = _load_bid_coeffs(net, arr)
+    demand_bid_coeffs, demand_pwl_bids = load_bid_coeffs(net, arr)
     solution = dc_opf(
         arr,
         cost_coeffs,

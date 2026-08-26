@@ -75,7 +75,7 @@ def gen_cost_coeffs(net: Network, arr: NetworkArrays) -> tuple[FloatArray, PwlCo
     Exported (not module-private) because :func:`mambo_power.market.nodal.solve_nodal` needs the
     identical generator-cost extraction and imports this rather than carrying its own copy
     (M4 review Duplication FLAG) — the demand-bid-side mirror
-    (:func:`mambo_power.market.nodal._load_bid_coeffs`) has no prior-wave analog to share.
+    (:func:`mambo_power.market.nodal.load_bid_coeffs`) has no prior-wave analog to share.
     """
     gens_by_id = {g.id: g for g in net.generators}
     coeffs = np.zeros((len(arr.gen_ids), 3))
