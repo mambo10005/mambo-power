@@ -27,6 +27,7 @@ Contract under test (wave M2 design item 6, wave M3 design item 7, wave M4 desig
 from __future__ import annotations
 
 import json
+import math
 import warnings
 from typing import Any, NoReturn
 
@@ -934,6 +935,48 @@ def test_market_zonal_with_empty_corridors_islands_the_zones_and_is_not_an_error
     prices = {z.id: z.price for z in out.result.zones}
     assert len(prices) == 3
     assert len(set(prices.values())) == 3  # islanded: every zone prices independently
+
+
+def test_market_zonal_copper_plate_survives_the_json_round_trip_and_prices_as_one_zone(
+    case30_zoned: Network,
+) -> None:
+    """Walk defect D3: the manual teaches the copper plate as "lifting the cap -- leaving the
+    column in place, unbounded", ``opf.zonal``'s own guard says "give a number, 0, or inf", and
+    ``CorridorLimit`` used to reject ``inf`` with ``finite_number``, so through ``solve_zonal`` the
+    copper plate could only be approximated by a large finite number.
+
+    Proven here on the surface that made it hard -- ``run_json``, JSON text in and out -- and
+    proven as a *market* claim rather than a serialisation one: with every corridor unbounded the
+    three zones must clear at a single price, which is what a copper plate is. The paired negative
+    is committed next door, where an empty corridor list islands the same network and its three
+    zones price independently.
+    """
+    zone_ids = sorted({str(bus.zone) for bus in case30_zoned.buses if bus.zone is not None})
+    corridors = [
+        {"zone1": a, "zone2": b, "cap_mw": math.inf}
+        for i, a in enumerate(zone_ids)
+        for b in zone_ids[i + 1 :]
+    ]
+    req = SolveRequest(
+        kind="market.zonal",
+        scenario=Scenario(network=case30_zoned),
+        options={"corridors": corridors},
+        job_id="copper-plate",
+    )
+    out_text = run_json(req.model_dump_json())
+    assert "Infinity" in out_text  # the wire form; json.loads reads it, JSON.parse does not
+    payload = json.loads(out_text)
+    assert payload["status"] == "ok", payload.get("error")
+    echoed = payload["provenance"]["options"]["corridors"]
+    assert [entry["cap_mw"] for entry in echoed] == [math.inf] * len(corridors)
+
+    out = SolveResult.model_validate_json(out_text)
+    assert isinstance(out.result, MarketZonalResult)
+    prices = [zone.price for zone in out.result.zones]
+    assert len(prices) == 3
+    assert prices == pytest.approx([prices[0]] * 3, abs=1e-4), (
+        f"an unbounded corridor between every pair is the copper plate: one price, got {prices}"
+    )
 
 
 def test_market_zonal_corridor_naming_an_unknown_zone_is_a_validation_failure(

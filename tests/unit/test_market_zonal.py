@@ -45,16 +45,20 @@ bit-equality — spec assumption A3 and wave M5's macOS CI finding.
 
 from __future__ import annotations
 
+import json
+import math
 from collections.abc import Sequence
 from typing import TypeVar
 
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
+from pydantic import ValidationError
 
 from mambo_power.io.matpower import load as load_matpower
 from mambo_power.market.nodal import load_bid_coeffs, solve_nodal
 from mambo_power.market.zonal import (
+    MAX_CORRIDORS,
     CorridorLimit,
     MarketZonalOptions,
     _demand_value,
@@ -1115,6 +1119,106 @@ def test_distinct_corridors_sharing_one_zone_are_accepted() -> None:
         ]
     )
     assert options.corridor_map() == {("A", "B"): 10.0, ("A", "C"): 20.0, ("C", "B"): 30.0}
+
+
+def test_an_infinite_cap_is_the_copper_plate_and_the_only_non_finite_value_accepted() -> None:
+    """:attr:`~mambo_power.market.zonal.CorridorLimit.cap_mw` is the one float in this package that
+    may be non-finite, because an unbounded transfer capacity means something the array level has
+    always accepted — the copper plate — and the options model used to be unable to say it (walk
+    D3, review C12: two layers, two rules on infinite caps).
+
+    The scoping is the field's own ``ge=0.0``, not ``allow_inf_nan``, which is a model-wide switch:
+    ``-inf`` fails the bound, and so does ``NaN``, since every comparison with ``NaN`` is false. So
+    ``+inf`` is the only non-finite value that gets through, and the round trip carries it —
+    ``ser_json_inf_nan="constants"``, the bare token ``Infinity`` — instead of writing ``null`` and
+    then refusing to read it back, which is what pydantic's default did.
+    """
+    unbounded = CorridorLimit(zone1="A", zone2="B", cap_mw=math.inf)
+    assert unbounded.cap_mw == math.inf
+    assert "Infinity" in unbounded.model_dump_json()
+    assert CorridorLimit.model_validate_json(unbounded.model_dump_json()) == unbounded
+
+    for rejected in (-math.inf, math.nan):
+        with pytest.raises(ValidationError, match="greater than or equal to 0"):
+            CorridorLimit(zone1="A", zone2="B", cap_mw=rejected)
+
+
+def test_a_lifted_cap_clears_one_price_where_the_true_rating_clears_two() -> None:
+    """The copper plate as a *market* statement, on the derivation's hand fixture: with the tie
+    unbounded both zones clear at the cheap zone's cost, and at the tie's true rating they do not.
+
+    Paired against the true rating rather than against corridor *deletion*, which is a different
+    market again — deleting the entry islands the zones (S3's A22(i)) and would also pass a
+    sign-flipped corridor column, so it is not the control this claim needs.
+    """
+    net = _hand_network()
+    copper = solve_zonal(
+        Scenario(network=net),
+        MarketZonalOptions(corridors=[CorridorLimit(zone1="A", zone2="B", cap_mw=math.inf)]),
+    )
+    assert copper.status == "Optimal"
+    assert [zone.price for zone in copper.zones] == pytest.approx(
+        [COST_A, COST_A], abs=EXACT_ATOL
+    ), "an unbounded tie lets the cheap zone serve both, so both clear at its cost"
+
+    scarce = solve_zonal(Scenario(network=net), _hand_options(BRANCH_RATING))
+    assert [zone.price for zone in scarce.zones] == pytest.approx(
+        [COST_A, COST_B], abs=EXACT_ATOL
+    ), "and at the true rating the constrained zone falls back on its own expensive unit"
+
+
+def _distinct_corridors(count: int) -> list[CorridorLimit]:
+    """``count`` corridors, no unordered pair repeated — which the options model now requires, so a
+    length test cannot simply repeat one entry the way ``tests/unit/test_period_scenario.py``'s
+    ``_periods`` repeats an empty ``Period``. Zone ids are synthetic and never resolved against a
+    network: this is a *field* bound, checked before any solve."""
+    out: list[CorridorLimit] = []
+    zone = 0
+    while len(out) < count:
+        out.extend(
+            CorridorLimit(zone1=f"z{zone}", zone2=f"z{other}", cap_mw=100.0)
+            for other in range(zone)
+        )
+        zone += 1
+    return out[:count]
+
+
+# MAX_CORRIDORS is a request/response-size bound, not a solver limit: `corridors` is echoed
+# verbatim into every result's provenance.options, and review F2 measured 20,000 entries accepted
+# before it existed. Both tests below take the number from the module rather than a literal
+# 500/501, so what they prove is that the *field's* bound and the *constant* agree — a bump of one
+# without the other is the failure they exist to catch, exactly as S7a's MAX_PERIODS pair does.
+
+
+def test_corridors_at_max_length_is_accepted() -> None:
+    options = MarketZonalOptions(corridors=_distinct_corridors(MAX_CORRIDORS))
+    assert len(options.corridors) == MAX_CORRIDORS
+    assert len(options.corridor_map()) == MAX_CORRIDORS
+
+
+def test_corridors_over_max_length_is_rejected() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        MarketZonalOptions(corridors=_distinct_corridors(MAX_CORRIDORS + 1))
+    (error,) = excinfo.value.errors()
+    assert error["type"] == "too_long"
+    assert error["loc"] == ("corridors",)
+
+
+def test_corridors_over_max_length_is_rejected_via_json() -> None:
+    """The bound holds on the wire too, which is the surface it exists for: ``jobs.run`` validates
+    ``request.options`` into this model, so an over-long list comes back as ``BAD_OPTIONS`` instead
+    of a 900 KB response body."""
+    payload = json.dumps(
+        {
+            "corridors": [
+                entry.model_dump(mode="json") for entry in _distinct_corridors(MAX_CORRIDORS + 1)
+            ]
+        }
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        MarketZonalOptions.model_validate_json(payload)
+    (error,) = excinfo.value.errors()
+    assert error["type"] == "too_long"
 
 
 def test_a_corridor_naming_a_zone_the_network_does_not_have_is_a_network_level_error() -> None:

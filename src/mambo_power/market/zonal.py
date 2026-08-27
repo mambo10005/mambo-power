@@ -131,6 +131,24 @@ from mambo_power.results import (
 
 from mambo_power.market.nodal import load_bid_coeffs, solve_nodal  # isort: skip
 
+MAX_CORRIDORS = 500
+"""Upper bound on :attr:`MarketZonalOptions.corridors`' length: a request/response-size guard, not
+a solver limit — the same guard :data:`~mambo_power.model.scenario.MAX_PERIODS` puts on
+``Scenario.periods``, applied to the other user-supplied list this package takes.
+
+The *honest* bound is the network's own: a partition into ``n`` zones admits at most ``n(n-1)/2``
+distinct pairs, and a corridor list longer than that necessarily repeats one (now rejected on its
+own). But ``n`` is a property of the network and this is an options model, which has none — so the
+bound here is a fixed number chosen to sit above every network anyone clears zonally and below the
+sizes that make the *response* a problem. ``corridors`` is echoed verbatim into every result's
+``provenance.options``, so the list's length is paid twice, once inbound and once out.
+
+500 covers a 32-zone network exhaustively (496 pairs, measured 22,025 bytes of options JSON), and
+32 zones is already above Europe's day-ahead market, the largest zonal design in operation at
+around 25 bidding zones. Above it, growth is quadratic and unbounded in an options field: 200
+zones is 19,900 corridors and 913,425 bytes echoed back per solve. Review F2 measured 20,000
+entries accepted before this bound existed."""
+
 __all__ = [
     "CorridorLimit",
     "MarketZonalOptions",
@@ -162,7 +180,34 @@ class CorridorLimit(BaseModel):
     is the one stored and the mapping is derived on the way to the builder.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, allow_inf_nan=True, ser_json_inf_nan="constants"
+    )
+    """The one model in this package that does **not** set ``allow_inf_nan=False``, and the reason
+    is :attr:`cap_mw`'s alone.
+
+    Everywhere else a non-finite float is meaningless — an infinite ``base_kv`` or ``p_max_mw``
+    describes nothing — so the package refuses them at the wire. An infinite *transfer capacity*
+    does describe something, and something the array level already accepts and the manual already
+    teaches: the **copper plate**, a corridor left in place with its bound lifted, which is not the
+    same market as deleting the corridor (that islands the zones). Before this, the two layers
+    disagreed — :func:`~mambo_power.opf.zonal.zonal_dc_opf`'s own guard says "give a number, 0, or
+    inf" and maps ``inf`` to ``kHighsInf``, while this model rejected it with ``finite_number`` and
+    left ``solve_zonal`` unable to express the copper plate at all (walk defect D3, review C12).
+    This model is now the one that yields.
+
+    ``allow_inf_nan`` is a model-wide switch, but the *scoping* is done by ``cap_mw``'s own
+    ``ge=0.0``, which rejects ``-inf`` and ``NaN`` (a ``NaN`` comparison is false), so ``+inf`` is
+    the only non-finite value that gets through — and ``zone1``/``zone2`` are strings.
+
+    ``ser_json_inf_nan="constants"`` writes it as the bare token ``Infinity``, which is what
+    :func:`json.dumps` emits and :func:`json.loads` accepts, so ``run_json``'s output stays
+    readable by the standard library and by pydantic. It is a JSON *extension*, not RFC 8259 — a
+    browser's ``JSON.parse`` will reject it — so a caller who needs strict JSON should send a large
+    finite cap instead. The default (``"null"``) was not an option: it serialises the cap to
+    ``null`` and then refuses to read it back, which is a one-way round trip that looks fine until
+    something reads it.
+    """
 
     zone1: str = Field(
         description="One end of the corridor: a zone id present in the network. A zone id no bus "
@@ -177,7 +222,11 @@ class CorridorLimit(BaseModel):
         ge=0.0,
         description="Transfer capacity, MW, as a magnitude: the corridor is bounded at "
         "[-cap_mw, +cap_mw], so it constrains both directions equally. ``0`` is allowed and means "
-        "a tie that exists but can carry nothing.",
+        "a tie that exists but can carry nothing; ``inf`` is allowed and means the copper plate -- "
+        "the corridor stays in the LP, with no bound, which is a different market from deleting "
+        "the entry (that islands the two zones). ``NaN`` and ``-inf`` are rejected by this field's "
+        "own ``ge=0.0``. On the wire an infinite cap is the bare token ``Infinity``, a JSON "
+        "extension that json.loads reads and a browser's JSON.parse does not.",
     )
 
 
@@ -196,9 +245,13 @@ class MarketZonalOptions(BaseModel):
 
     corridors: list[CorridorLimit] = Field(
         default_factory=list,
+        max_length=MAX_CORRIDORS,
         description="Transfer capacity per tied zone pair. A pair absent from this list has no "
         "corridor at all and so cannot exchange power -- which is a stronger statement than a "
-        "corridor of capacity 0 only in that no capacity shadow price is reported for it.",
+        "corridor of capacity 0 only in that no capacity shadow price is reported for it. At most "
+        "MAX_CORRIDORS (500) entries -- a request/response-size guard, since this list is echoed "
+        "verbatim into every result's provenance.options; 500 exhausts a 32-zone network, which is "
+        "above every zonal market in operation.",
     )
 
     @model_validator(mode="after")

@@ -108,7 +108,19 @@ class SolveRequest(BaseModel):
     failure, never silently ignored. ``job_id`` is an opaque caller tag echoed on the result.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", ser_json_inf_nan="constants")
+    """``ser_json_inf_nan="constants"`` for :attr:`options` alone.
+
+    Every model reachable from ``network``/``scenario`` sets ``allow_inf_nan=False``, so no
+    non-finite float can exist anywhere in this request except inside the free-form ``options``
+    dict -- and exactly one option field in the package accepts one:
+    :attr:`mambo_power.market.zonal.CorridorLimit.cap_mw`, where ``inf`` is the copper plate. Under
+    pydantic's default (``"null"``) that cap serialised to ``null`` and then failed to validate
+    back, so ``run_json`` could not express a copper plate at all even though the array-level
+    builder has always accepted one (walk defect D3). Writing the JSON extension ``Infinity``
+    instead costs nothing for any other kind: with no non-finite value able to occur, every
+    existing request serialises byte-for-byte as before.
+    """
 
     kind: str = Field(min_length=1, description="A key of ``jobs.KINDS``, e.g. ``pf.ac``.")
     network: Network | None = Field(
@@ -167,7 +179,12 @@ class SolveResult(BaseModel):
     state is a result, not a failure.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, ser_json_inf_nan="constants")
+    """``ser_json_inf_nan="constants"`` for the same single reason :class:`SolveRequest` carries
+    it: :attr:`~mambo_power.results.ResultProvenance.options` echoes the request's options back
+    verbatim, so a copper-plate ``cap_mw`` of ``inf`` has to survive the outbound trip as well as
+    the inbound one. Every result model sets ``allow_inf_nan=False``, so nothing else in this
+    response can be non-finite and no other kind's bytes change."""
 
     kind: str = Field(description='Echo of the request kind (``""`` when unreadable).')
     job_id: str | None = Field(default=None, description="Echo of the request ``job_id``.")
