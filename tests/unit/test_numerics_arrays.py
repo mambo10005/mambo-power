@@ -19,8 +19,10 @@ import math
 import numpy as np
 import pytest
 
-from mambo_power.model import Branch, Bus, Generator, Load, Network, Shunt
+from mambo_power.io import matpower
+from mambo_power.model import Branch, Bus, Generator, Load, Network, Shunt, Storage
 from mambo_power.numerics import NetworkArrays
+from tests._fixtures import FIXTURES, FIXTURES_DIR
 
 BASE = 100.0
 
@@ -142,6 +144,25 @@ def test_index_maps_cover_only_in_service_elements(arr: NetworkArrays) -> None:
     assert arr.branch_index == {"branch-1": 0, "branch-2": 1, "branch-3": 2}
     assert arr.n_branch == 3
     assert arr.gen_ids == ["gen-1", "gen-2a", "gen-2b"]
+
+
+def test_no_storage_gives_empty_arrays_not_a_crash(arr: NetworkArrays) -> None:
+    """``four_bus`` carries no ``Storage`` entities at all -- the common case (research §8.1:
+    every MATPOWER fixture has zero storage), not an edge case. ``from_network`` must not
+    raise, and every per-storage array must come back empty with the right dtype.
+    """
+    assert arr.storage_ids == []
+    assert arr.storage_bus.shape == (0,)
+    assert arr.storage_bus.dtype.kind == "i"
+    for values in (
+        arr.storage_p_max_pu,
+        arr.storage_energy_pu,
+        arr.storage_soc_initial,
+        arr.storage_efficiency_charge,
+        arr.storage_efficiency_discharge,
+    ):
+        assert values.shape == (0,)
+        assert values.dtype.kind == "f"
 
 
 def test_slack_position_and_bus_types(arr: NetworkArrays) -> None:
@@ -328,3 +349,163 @@ def test_per_load_bounds_are_zero_to_own_demand(marr: NetworkArrays) -> None:
 def test_per_load_sums_agree_with_aggregate(marr: NetworkArrays) -> None:
     summed = np.bincount(marr.load_bus, weights=marr.load_p_max_pu, minlength=marr.n_bus)
     np.testing.assert_allclose(summed, marr.p_load_pu, rtol=0, atol=1e-15)
+
+
+def multi_storage_network() -> Network:
+    """Mirrors ``multi_load_network``'s shape, but for storage: bus-2 carries two in-service
+    storage units and one out-of-service unit; bus-3 carries one. Exercises per-storage
+    identity, exclusion, and pu conversion with more than one storage unit at a bus -- the
+    storage equivalent of ``multi_load_network``'s bus-2.
+    """
+    return Network(
+        base_mva=BASE,
+        buses=[
+            Bus(id="bus-1", base_kv=132.0, type="slack"),
+            Bus(id="bus-2", base_kv=132.0, type="pq"),
+            Bus(id="bus-3", base_kv=33.0, type="pq"),
+        ],
+        branches=[
+            Branch(id="branch-1", from_bus="bus-1", to_bus="bus-2", r=0.01, x=0.1, b=0.0),
+            Branch(id="branch-2", from_bus="bus-2", to_bus="bus-3", r=0.01, x=0.1, b=0.0),
+        ],
+        generators=[
+            Generator(
+                id="gen-1",
+                bus="bus-1",
+                p_mw=0.0,
+                q_mvar=0.0,
+                p_min_mw=0.0,
+                p_max_mw=300.0,
+                q_min_mvar=-100.0,
+                q_max_mvar=100.0,
+                v_set_pu=1.0,
+            ),
+        ],
+        loads=[Load(id="load-1", bus="bus-1", p_mw=100.0, q_mvar=20.0)],
+        storage=[
+            Storage(
+                id="storage-2a",
+                bus="bus-2",
+                p_max_mw=20.0,
+                energy_mwh=40.0,
+                soc_initial=0.5,
+                efficiency_charge=0.9,
+                efficiency_discharge=0.85,
+            ),
+            Storage(
+                id="storage-2b",
+                bus="bus-2",
+                p_max_mw=10.0,
+                energy_mwh=15.0,
+                soc_initial=0.25,
+                efficiency_charge=0.95,
+                efficiency_discharge=0.9,
+            ),
+            Storage(
+                id="storage-2-off",
+                bus="bus-2",
+                p_max_mw=999.0,
+                energy_mwh=999.0,
+                soc_initial=1.0,
+                efficiency_charge=1.0,
+                efficiency_discharge=1.0,
+                in_service=False,
+            ),
+            Storage(
+                id="storage-3",
+                bus="bus-3",
+                p_max_mw=5.0,
+                energy_mwh=8.0,
+                soc_initial=1.0,
+                efficiency_charge=0.8,
+                efficiency_discharge=0.8,
+            ),
+        ],
+    )
+
+
+@pytest.fixture(scope="module")
+def sarr() -> NetworkArrays:
+    return NetworkArrays.from_network(multi_storage_network())
+
+
+def test_per_storage_identity(sarr: NetworkArrays) -> None:
+    """Every in-service storage unit gets exactly one entry, correctly ordered, out-of-service
+    excluded, bus index correct -- the storage mirror of ``test_per_load_identity``.
+    """
+    assert sarr.storage_ids == ["storage-2a", "storage-2b", "storage-3"]
+    np.testing.assert_array_equal(sarr.storage_bus, [1, 1, 2])
+    assert sarr.storage_bus.dtype.kind == "i"
+
+
+def test_per_storage_values(sarr: NetworkArrays) -> None:
+    """ADR-005: physical units (MW, MWh) in the model, per unit in numerics -- ``p_max_mw`` and
+    ``energy_mwh`` divide by ``base_mva`` like every other physical field ``arrays.py`` already
+    converts; ``soc_initial`` (already a fraction of ``energy_mwh``) and both efficiencies
+    (already dimensionless ratios) carry through unconverted.
+    """
+    np.testing.assert_allclose(sarr.storage_p_max_pu, [20.0 / BASE, 10.0 / BASE, 5.0 / BASE])
+    np.testing.assert_allclose(sarr.storage_energy_pu, [40.0 / BASE, 15.0 / BASE, 8.0 / BASE])
+    np.testing.assert_allclose(sarr.storage_soc_initial, [0.5, 0.25, 1.0])
+    np.testing.assert_allclose(sarr.storage_efficiency_charge, [0.9, 0.95, 0.8])
+    np.testing.assert_allclose(sarr.storage_efficiency_discharge, [0.85, 0.9, 0.8])
+
+
+def test_storage_pu_conversion_scales_with_base() -> None:
+    net = multi_storage_network()
+    net.base_mva = 50.0
+    arr = NetworkArrays.from_network(net)
+    assert arr.storage_p_max_pu[0] == 20.0 / 50.0
+    assert arr.storage_energy_pu[0] == 40.0 / 50.0
+
+
+@pytest.mark.parametrize("name", FIXTURES)
+def test_every_matpower_fixture_has_no_storage(name: str) -> None:
+    """research §8.1: every fixture has zero storage -- the common case, not an edge case."""
+    net = matpower.load(FIXTURES_DIR / f"{name}.m")
+    arr = NetworkArrays.from_network(net)
+    assert arr.storage_ids == []
+    assert arr.storage_bus.shape == (0,)
+
+
+@pytest.mark.parametrize("name", FIXTURES)
+def test_existing_aggregate_arrays_unchanged_on_every_fixture(name: str) -> None:
+    """The pre-existing aggregate arrays must be byte-identical before and after adding
+    per-storage identity, on every fixture -- the check that matters most (a silent shift here
+    would corrupt every solver in the package), mirrored from
+    ``test_aggregate_load_arrays_unchanged_by_per_load_identity`` which proved the same thing
+    for M4's own per-load identity addition.
+    """
+    net = matpower.load(FIXTURES_DIR / f"{name}.m")
+    arr = NetworkArrays.from_network(net)
+
+    loads = [ld for ld in net.loads if ld.in_service and ld.bus in arr.bus_index]
+    expected_p = (
+        np.bincount(
+            [arr.bus_index[ld.bus] for ld in loads],
+            weights=[ld.p_mw for ld in loads],
+            minlength=arr.n_bus,
+        )
+        / net.base_mva
+    )
+    expected_q = (
+        np.bincount(
+            [arr.bus_index[ld.bus] for ld in loads],
+            weights=[ld.q_mvar for ld in loads],
+            minlength=arr.n_bus,
+        )
+        / net.base_mva
+    )
+    np.testing.assert_array_equal(arr.p_load_pu, expected_p)
+    np.testing.assert_array_equal(arr.q_load_pu, expected_q)
+
+    gens = [g for g in net.generators if g.in_service and g.bus in arr.bus_index]
+    expected_p_max = (
+        np.bincount(
+            [arr.bus_index[g.bus] for g in gens],
+            weights=[g.p_max_mw for g in gens],
+            minlength=arr.n_bus,
+        )
+        / net.base_mva
+    )
+    np.testing.assert_array_equal(arr.p_max_pu, expected_p_max)

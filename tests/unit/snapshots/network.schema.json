@@ -296,6 +296,32 @@
           ],
           "default": null,
           "title": "Cost"
+        },
+        "ramp_up_mw": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Max increase from the previous period, MW; None = none.",
+          "title": "Ramp Up Mw"
+        },
+        "ramp_down_mw": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Max decrease from the previous period, MW; None = none.",
+          "title": "Ramp Down Mw"
         }
       },
       "required": [
@@ -336,7 +362,7 @@
     },
     "Load": {
       "additionalProperties": false,
-      "description": "Fixed demand at a bus. ``bid`` is model-present; only ``market.nodal`` reads it.",
+      "description": "Demand at a bus, fixed or elastic. ``bid`` is read by ``market.nodal`` and\n``market.multiperiod``; ``opf.solve_dc_opf`` ignores it and serves ``p_mw`` in full.",
       "properties": {
         "id": {
           "description": "Unique within loads.",
@@ -349,7 +375,7 @@
           "type": "string"
         },
         "p_mw": {
-          "description": "Active demand, MW.",
+          "description": "Active demand, MW. With a bid, this is the *maximum* quantity that can be served, and the bid decides where in [0, p_mw] the load actually clears; a Period override of it therefore moves that maximum too.",
           "title": "P Mw",
           "type": "number"
         },
@@ -387,7 +413,7 @@
             }
           ],
           "default": null,
-          "description": "Elastic-demand bid covering this Load's entire p_mw; market.nodal reads it, opf.solve_dc_opf does not. There is no per-Load partial-capacity split -- bidding only part of a load's capacity, with the rest must-serve, means splitting it into two Load entities at the same bus (one bid=None fixed, one bid-carrying).",
+          "description": "Elastic-demand bid covering this Load's entire p_mw; market.nodal and market.multiperiod read it, opf.solve_dc_opf does not. There is no per-Load partial-capacity split -- bidding only part of a load's capacity, with the rest must-serve, means splitting it into two Load entities at the same bus (one bid=None fixed, one bid-carrying).",
           "title": "Bid"
         }
       },
@@ -587,7 +613,7 @@
     },
     "Storage": {
       "additionalProperties": false,
-      "description": "Energy storage. Schema-present; no M1 solver reads it.",
+      "description": "Energy storage. Read by ``market.multiperiod``, which gives each unit a charge, a\ndischarge and a state-of-charge column per period; every other solver ignores it.",
       "properties": {
         "id": {
           "description": "Unique within storage.",

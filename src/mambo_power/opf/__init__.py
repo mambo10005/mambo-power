@@ -8,6 +8,13 @@
 spec design item 4 — re-exported here as :data:`NonConvexCostError`), calls ``dc_opf``,
 decomposes the duals into LMPs (:func:`mambo_power.opf.dc_opf.lmp_decomposition`) and builds a
 typed :class:`~mambo_power.results.OpfDcResult`.
+
+:func:`~mambo_power.opf.multiperiod.multiperiod_dc_opf` (wave M5 W2) and its two result types are
+re-exported here alongside them: it is the ``T``-coupled-period sibling of ``dc_opf``, built from
+the same row-family core (ADR-007), and ``market.multiperiod`` imports it from this package the
+way ``market.nodal`` imports :func:`gen_cost_coeffs`. There is no ``solve_multiperiod`` wrapper in
+``opf`` — the ``Scenario``-facing entry point lives in ``market/`` because a horizon needs
+``Scenario.periods``, which a bare ``Network`` cannot supply.
 """
 
 from __future__ import annotations
@@ -23,6 +30,11 @@ from mambo_power.model import Network
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import pf_shift
 from mambo_power.opf.dc_opf import NonConvexCostError, OpfDcOptions, dc_opf, lmp_decomposition
+from mambo_power.opf.multiperiod import (
+    MultiperiodDuals,
+    MultiperiodSolution,
+    multiperiod_dc_opf,
+)
 from mambo_power.pf import solve_ac
 from mambo_power.results import (
     BusLmpResult,
@@ -33,7 +45,15 @@ from mambo_power.results import (
     feasibility_report,
 )
 
-__all__ = ["NonConvexCostError", "OpfDcOptions", "gen_cost_coeffs", "solve_dc_opf"]
+__all__ = [
+    "MultiperiodDuals",
+    "MultiperiodSolution",
+    "NonConvexCostError",
+    "OpfDcOptions",
+    "gen_cost_coeffs",
+    "multiperiod_dc_opf",
+    "solve_dc_opf",
+]
 
 FloatArray = npt.NDArray[np.float64]
 PwlCosts = dict[int, list[tuple[float, float]]]
@@ -55,7 +75,7 @@ def gen_cost_coeffs(net: Network, arr: NetworkArrays) -> tuple[FloatArray, PwlCo
     Exported (not module-private) because :func:`mambo_power.market.nodal.solve_nodal` needs the
     identical generator-cost extraction and imports this rather than carrying its own copy
     (M4 review Duplication FLAG) — the demand-bid-side mirror
-    (:func:`mambo_power.market.nodal._load_bid_coeffs`) has no prior-wave analog to share.
+    (:func:`mambo_power.market.nodal.load_bid_coeffs`) has no prior-wave analog to share.
     """
     gens_by_id = {g.id: g for g in net.generators}
     coeffs = np.zeros((len(arr.gen_ids), 3))

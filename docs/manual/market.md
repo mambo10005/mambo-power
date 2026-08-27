@@ -16,9 +16,10 @@ Runnable script: [`09_nodal_market.py`](../examples/index.md#9-nodal-market).
 ## The `Scenario`
 
 `solve_nodal` takes a [`Scenario`](model.md), not a bare `Network`: `Scenario(network=net)` is
-presently a thin, self-contained wrapper (`network: Network`, nothing else yet) — mirroring
-[`jobs.SolveRequest`](jobs.md)'s own self-contained pattern rather than an id/path
+self-contained — mirroring [`jobs.SolveRequest`](jobs.md)'s own pattern rather than an id/path
 cross-reference, since no such resolution mechanism exists anywhere else in this codebase.
+Since wave M5 it also carries `periods`, which is what the [multiperiod clearing](multiperiod.md)
+reads; `solve_nodal` ignores that field entirely and stays a single-period entry point.
 Bid data lives on the entities themselves, not on the scenario: a generator's offer is
 `Generator.cost` (unchanged since M3) and a load's bid is the new `Load.bid`, a
 `PolynomialBid | PiecewiseBid` discriminated union that mirrors `GeneratorCost` field-for-field
@@ -132,6 +133,13 @@ independently on real multi-bus fixtures with derived bids
 (`tests/unit/test_market_nodal.py`). `congestion_rent` is 0 whenever no branch binds — the
 common case on this package's bundled fixtures, none of which carries a real `RATE_A` (see
 [DC-OPF › Formulation](opf.md#formulation)).
+
+!!! note "The identity above is the narrow form"
+    It is stated here without the corrections for phase-shifting transformers and bus shunt
+    conductance, and is exact only on a network carrying neither — which is every fixture
+    this wave's own tests use, but not `case300`, whose `g_shunt` is non-zero. The general
+    form, and what `congestion_rent` therefore is in the presence of such a term, are given
+    on [Multiperiod market › Settlement](multiperiod.md#settlement).
 
 ## The price-taker reduction
 
@@ -258,6 +266,7 @@ remainder (`market.nodal` sums both onto that bus like any other two loads).
 ## Jobs API
 
 `market.nodal` is a registered [jobs](jobs.md) kind: `jobs.run(jobs.SolveRequest(kind=
-"market.nodal", network=net))` wraps the network in a `Scenario` itself (the runner's own job,
-not the caller's) and returns a `MarketNodalResult`. See [Jobs API › Failures are
+"market.nodal", network=net))` returns a `MarketNodalResult`. Since wave M5 the `Network`-to-
+`Scenario` wrap happens at `SolveRequest.resolved_scenario` rather than inside the runner, so a
+request may equally carry `scenario=...` directly; either way this kind clears one period. See [Jobs API › Failures are
 data](jobs.md#failures-are-data) for the structured-failure shape.

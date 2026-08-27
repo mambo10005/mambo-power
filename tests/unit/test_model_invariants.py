@@ -197,6 +197,20 @@ def test_bad_base_kv() -> None:
             {"storage": [storage("e1", "b1", efficiency_discharge=1.2)]},
             "storage[0].efficiency_discharge",
         ),
+        # M5/R1: a solver reads these now. 0 is the dangerous half -- it validates, clears
+        # "Optimal", and leaves the unit silently inert with every storage row trivially
+        # satisfied; a negative one reaches HiGHS as an empty bound and returns a bare
+        # "Infeasible". Same shape as the ramp rule above.
+        ({"storage": [storage("e1", "b1", p_max_mw=0.0)]}, "storage[0].p_max_mw"),
+        ({"storage": [storage("e1", "b1", p_max_mw=-5.0)]}, "storage[0].p_max_mw"),
+        ({"storage": [storage("e1", "b1", energy_mwh=0.0)]}, "storage[0].energy_mwh"),
+        ({"storage": [storage("e1", "b1", energy_mwh=-15.0)]}, "storage[0].energy_mwh"),
+        # W3: ramp_up_mw/ramp_down_mw=0 would mean "cannot move at all" -- the MATPOWER
+        # unpopulated-column trap (m5-research.md §4.2); None is the honest "unconstrained"
+        # default, so only a non-positive value (given at all) is rejected.
+        ({"generators": [gen("g1", "b1", ramp_up_mw=0.0)]}, "generators[0].ramp_up_mw"),
+        ({"generators": [gen("g1", "b1", ramp_down_mw=0.0)]}, "generators[0].ramp_down_mw"),
+        ({"generators": [gen("g1", "b1", ramp_up_mw=-5.0)]}, "generators[0].ramp_up_mw"),
         (
             {
                 "generators": [

@@ -33,7 +33,7 @@ raises `NetworkValidationError` listing every issue found.
 | `generators` | `list[Generator]` | `[]` | Dispatchable injections. |
 | `loads` | `list[Load]` | `[]` | Fixed demand. |
 | `shunts` | `list[Shunt]` | `[]` | Fixed shunt admittances. |
-| `storage` | `list[Storage]` | `[]` | Energy storage; schema-present, no solver reads it yet. |
+| `storage` | `list[Storage]` | `[]` | Energy storage; read by [`market.multiperiod`](multiperiod.md#storage) since wave M5. |
 | `zones` | `list[Zone]` | `[]` | Named bus groupings. |
 
 Methods:
@@ -110,6 +110,8 @@ flow needs no schema bump; no power-flow solver reads it.
 | `v_set_pu` | `float` | pu | required | Voltage setpoint used when the bus is PV or slack. |
 | `in_service` | `bool` | — | `True` | |
 | `cost` | `PolynomialCost \| PiecewiseCost \| None` | — | `None` | Discriminated on `kind`. |
+| `ramp_up_mw` | `float \| None` | MW | `None` | Max increase from the previous period. `None` = unconstrained; must be strictly > 0 when given. Read by [`market.multiperiod`](multiperiod.md#ramp-coupling). |
+| `ramp_down_mw` | `float \| None` | MW | `None` | Max decrease from the previous period; same rules. |
 
 Several generators may sit on one bus. Their powers and limits are summed per bus in the
 numerics; the voltage setpoint rule is described under
@@ -149,6 +151,7 @@ MATPOWER gencost MODEL 1: piecewise-linear breakpoints.
 | `p_mw` | `float` | MW | required | Active demand (positive consumes). |
 | `q_mvar` | `float` | MVAr | required | Reactive demand. |
 | `in_service` | `bool` | — | `True` | |
+| `bid` | `PolynomialBid \| PiecewiseBid \| None` | — | `None` | Elastic-demand bid covering this load's entire `p_mw`; read by the [market clearings](market.md#the-scenario), not by `opf.solve_dc_opf`. |
 
 ## `Shunt`
 
@@ -164,18 +167,38 @@ A fixed shunt specified by its power at 1.0 pu voltage, MATPOWER GS/BS sign conv
 
 ## `Storage`
 
-Schema-present for the market waves; no M1/M2 solver reads it.
+Read by [`market.multiperiod`](multiperiod.md#storage) since wave M5 — schema-present and
+solver-ignored from M1 until then. `p_max_mw` caps charging and discharging *together*, and the
+two efficiencies enter the state-of-charge balance with different coefficients.
 
 | Field | Type | Unit | Default | Notes |
 | --- | --- | --- | --- | --- |
 | `id` | `str` | — | required | Unique within `storage`. |
 | `bus` | `str` | — | required | Must exist (`DANGLING_REF`). |
-| `p_max_mw` | `float` | MW | required | Charge/discharge power limit. |
-| `energy_mwh` | `float` | MWh | required | Energy capacity. |
+| `p_max_mw` | `float` | MW | required | Charge/discharge power limit; must be `> 0` (`BAD_RANGE`). |
+| `energy_mwh` | `float` | MWh | required | Energy capacity; must be `> 0` (`BAD_RANGE`). |
 | `soc_initial` | `float` | fraction | required | Initial state of charge in \([0, 1]\) (`BAD_RANGE`). |
 | `efficiency_charge` | `float` | fraction | required | In \((0, 1]\) (`BAD_RANGE`). |
 | `efficiency_discharge` | `float` | fraction | required | In \((0, 1]\) (`BAD_RANGE`). |
 | `in_service` | `bool` | — | `True` | |
+
+## `Scenario` and `Period`
+
+A scenario is what the [market clearings](market.md) take instead of a bare `Network`: the
+network to clear, plus the horizon to clear it over.
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `network` | `Network` | required | The network to clear; the scenario is self-contained. `Network`'s own validator runs while the `Scenario` is being constructed. |
+| `periods` | `list[Period] \| None` | `None` | `None` = single-period, `market.nodal` semantics. If given, must be non-empty. |
+
+`Period` carries one field, `load_p_mw: dict[str, float]` — an id-keyed **override** of each
+`Load.p_mw` for that period, not a scale factor. A load absent from the dict keeps its own
+`p_mw`. Values carry exactly `Load.p_mw`'s own range, **negatives included** (`case300` ships
+eight negative loads, and an override may not be narrower than the field it overrides); only
+non-finite values are rejected. Every key must resolve to a `Load` id in the scenario's network,
+checked by `Scenario` rather than by `Period`, which has no network to check against. See
+[Multiperiod market](multiperiod.md#the-horizon-scenarioperiods-and-period).
 
 ## `Zone`
 
@@ -228,7 +251,7 @@ where a number is expected, an unknown field, `NaN` — still raise pydantic's
 | `DUPLICATE_ID` | Two elements in the same collection share an `id` (ids may repeat across collections). |
 | `DANGLING_REF` | `Branch.from_bus` / `to_bus`, `Generator.bus`, `Load.bus`, `Shunt.bus`, `Storage.bus` names a bus that does not exist; `Bus.zone` names a zone that does not exist. |
 | `BAD_BASE` | `base_mva <= 0`, or a bus with `base_kv <= 0`. |
-| `BAD_RANGE` | `v_min_pu > v_max_pu`; `from_bus == to_bus`; `tap_ratio <= 0`; `r == x == 0`; `rating_mva <= 0`; `p_min_mw > p_max_mw`; `q_min_mvar > q_max_mvar`; an empty polynomial cost; a piecewise cost with fewer than two points or non-increasing `p_mw`; `soc_initial` outside \([0, 1]\); an efficiency outside \((0, 1]\). |
+| `BAD_RANGE` | `v_min_pu > v_max_pu`; `from_bus == to_bus`; `tap_ratio <= 0`; `r == x == 0`; `rating_mva <= 0`; `p_min_mw > p_max_mw`; `q_min_mvar > q_max_mvar`; a `ramp_up_mw` or `ramp_down_mw` that is given and not `> 0`; an empty polynomial cost or bid; a piecewise cost or bid with fewer than two points or non-increasing `p_mw`; `soc_initial` outside \([0, 1]\); an efficiency outside \((0, 1]\); a `Storage.p_max_mw` or `energy_mwh` not `> 0`. |
 
 `ValidationCode` is the `Literal` of these seven strings.
 

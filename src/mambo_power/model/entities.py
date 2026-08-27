@@ -135,20 +135,32 @@ class Generator(_Entity):
     v_set_pu: float = Field(description="Voltage setpoint, per unit.")
     in_service: bool = True
     cost: GeneratorCost | None = None
+    ramp_up_mw: float | None = Field(
+        default=None, description="Max increase from the previous period, MW; None = none."
+    )
+    ramp_down_mw: float | None = Field(
+        default=None, description="Max decrease from the previous period, MW; None = none."
+    )
 
 
 class Load(_Entity):
-    """Fixed demand at a bus. ``bid`` is model-present; only ``market.nodal`` reads it."""
+    """Demand at a bus, fixed or elastic. ``bid`` is read by ``market.nodal`` and
+    ``market.multiperiod``; ``opf.solve_dc_opf`` ignores it and serves ``p_mw`` in full."""
 
     id: str = Field(description="Unique within loads.")
     bus: str = Field(description="Bus id.")
-    p_mw: float = Field(description="Active demand, MW.")
+    p_mw: float = Field(
+        description="Active demand, MW. With a bid, this is the *maximum* quantity that can be "
+        "served, and the bid decides where in [0, p_mw] the load actually clears; a Period "
+        "override of it therefore moves that maximum too."
+    )
     q_mvar: float = Field(description="Reactive demand, MVAr.")
     in_service: bool = True
     bid: LoadBid | None = Field(
         default=None,
-        description="Elastic-demand bid covering this Load's entire p_mw; market.nodal reads "
-        "it, opf.solve_dc_opf does not. There is no per-Load partial-capacity split -- bidding "
+        description="Elastic-demand bid covering this Load's entire p_mw; market.nodal and "
+        "market.multiperiod read it, opf.solve_dc_opf does not. There is no per-Load "
+        "partial-capacity split -- bidding "
         "only part of a load's capacity, with the rest must-serve, means splitting it into two "
         "Load entities at the same bus (one bid=None fixed, one bid-carrying).",
     )
@@ -165,7 +177,8 @@ class Shunt(_Entity):
 
 
 class Storage(_Entity):
-    """Energy storage. Schema-present; no M1 solver reads it."""
+    """Energy storage. Read by ``market.multiperiod``, which gives each unit a charge, a
+    discharge and a state-of-charge column per period; every other solver ignores it."""
 
     id: str = Field(description="Unique within storage.")
     bus: str = Field(description="Bus id.")

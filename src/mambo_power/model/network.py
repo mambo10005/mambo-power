@@ -173,6 +173,14 @@ def validate_network(net: Network) -> list[ValidationIssue]:
                 f"generators[{index}].q_min_mvar",
                 f'generator "{gen.id}": q_min_mvar {gen.q_min_mvar} > q_max_mvar {gen.q_max_mvar}',
             )
+        for field in ("ramp_up_mw", "ramp_down_mw"):
+            ramp: float | None = getattr(gen, field)
+            if ramp is not None and not ramp > 0:
+                add(
+                    "BAD_RANGE",
+                    f"generators[{index}].{field}",
+                    f'generator "{gen.id}": {field} must be > 0 when given, got {ramp}',
+                )
         if gen.cost is not None and gen.cost.kind == "polynomial" and not gen.cost.coefficients:
             add(
                 "BAD_RANGE",
@@ -232,6 +240,19 @@ def validate_network(net: Network) -> list[ValidationIssue]:
                     "BAD_RANGE",
                     f"storage[{index}].{field}",
                     f'storage "{unit.id}": {field} must be in (0, 1], got {value}',
+                )
+        # Sizing, checked here for the same reason ramp_up_mw/ramp_down_mw are: a solver reads
+        # these now. Zero is the dangerous half -- an unsized unit clears "Optimal" with every
+        # storage row trivially satisfied and the unit silently inert, a confidently wrong-shaped
+        # answer; a negative one merely reaches HiGHS as an empty [0, negative] bound and comes
+        # back "Infeasible" with nothing naming the cause. Both are caught here instead.
+        for field in ("p_max_mw", "energy_mwh"):
+            size: float = getattr(unit, field)
+            if not size > 0:
+                add(
+                    "BAD_RANGE",
+                    f"storage[{index}].{field}",
+                    f'storage "{unit.id}": {field} must be > 0, got {size}',
                 )
 
     slack_buses = [bus for bus in net.buses if bus.type == "slack" and bus.in_service]

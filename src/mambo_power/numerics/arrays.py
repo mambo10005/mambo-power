@@ -99,6 +99,22 @@ class NetworkArrays:
     by ``opf.dc_opf`` is decided per-load elsewhere, not here. ``p_load_pu``/``q_load_pu`` (the
     bus aggregate) are untouched by this addition."""
 
+    storage_ids: list[str] = field(default_factory=list)
+    storage_bus: IntArray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    storage_p_max_pu: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Charge/discharge power limit (``Storage.p_max_mw``), pu of ``base_mva``."""
+    storage_energy_pu: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Energy capacity (``Storage.energy_mwh``), pu of ``base_mva`` (pu-hours) — the same
+    ``base_mva``-division convention every other physical field in this class already uses
+    (ADR-005: physical units in the model, pu in numerics)."""
+    storage_soc_initial: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Initial state of charge, already a fraction of ``energy_mwh`` in ``[0, 1]`` on the
+    entity — dimensionless, so unlike ``storage_p_max_pu``/``storage_energy_pu`` it carries
+    through unconverted."""
+    storage_efficiency_charge: FloatArray = field(default_factory=lambda: np.zeros(0))
+    storage_efficiency_discharge: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Charge/discharge efficiency, already dimensionless ratios in ``(0, 1]`` — unconverted."""
+
     @classmethod
     def from_network(cls, net: Network) -> NetworkArrays:
         """Build the in-service positional view; the one pu-conversion site."""
@@ -188,6 +204,13 @@ class NetworkArrays:
         def per_gen(values: list[float]) -> FloatArray:
             return np.fromiter(values, np.float64, n_gen) / base
 
+        storage_units = [s for s in net.storage if s.in_service and s.bus in bus_index]
+        n_storage = len(storage_units)
+        storage_bus = np.fromiter((bus_index[s.bus] for s in storage_units), np.int64, n_storage)
+
+        def per_storage(values: list[float]) -> FloatArray:
+            return np.fromiter(values, np.float64, n_storage)
+
         return cls(
             base_mva=base,
             bus_ids=bus_ids,
@@ -230,4 +253,13 @@ class NetworkArrays:
             load_bus=load_bus,
             load_p_min_pu=np.zeros(n_load),
             load_p_max_pu=per_load([ld.p_mw for ld in loads]),
+            storage_ids=[s.id for s in storage_units],
+            storage_bus=storage_bus,
+            storage_p_max_pu=per_storage([s.p_max_mw / base for s in storage_units]),
+            storage_energy_pu=per_storage([s.energy_mwh / base for s in storage_units]),
+            storage_soc_initial=per_storage([s.soc_initial for s in storage_units]),
+            storage_efficiency_charge=per_storage([s.efficiency_charge for s in storage_units]),
+            storage_efficiency_discharge=per_storage(
+                [s.efficiency_discharge for s in storage_units]
+            ),
         )

@@ -49,6 +49,20 @@ model them either.
 directly — proven generically in ``record/m3-research.md`` §1, and re-verified here for both the
 pure-LP and the QP path. No PTDF-reconstruction fallback is needed.
 
+**Row-family core (M5 W1).** Every row family described here is built by its own internal helper —
+:func:`_balance_row`, :func:`_flow_limit_rows`, :func:`_epigraph_rows`, :func:`_hypograph_rows` —
+each *returning* a :class:`_RowBlock` (the CSR triple :meth:`highspy.Highs.addRows` takes) rather
+than touching a :class:`highspy.Highs` object; :func:`dc_opf` assembles its model by handing those
+blocks to :func:`_add_rows`, and is the only thing here that owns a solver object. Two properties
+of the helpers are deliberate rather than incidental: each takes the **LP column indices** its
+coefficients attach to as parameters instead of assuming :func:`dc_opf`'s own
+``[gen | demand | cost_g | val_d]`` layout, and none of them holds or mutates state across calls,
+so a family can be built any number of times against any column layout. That is what makes
+ADR-007's "one place the balance row is assembled" literally true for a multi-period builder,
+which constructs the *same* balance/flow/epigraph/hypograph rows once per period instead of
+reproducing the idioms. The extraction is a pure refactor: :func:`dc_opf`'s signature, the LP it
+hands HiGHS (structural zeros included) and its results are unchanged (wave M5 AC-1).
+
 **PWL costs (W4, spec design item 4).** A generator with a convex piecewise-linear cost is
 passed via ``dc_opf``'s optional ``pwl_costs`` argument — a ``{generator_index:
 [(p_mw, cost), ...]}`` mapping (``PiecewiseCost.points``, verbatim) — instead of through
@@ -138,11 +152,15 @@ import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field
 
-from mambo_power.numerics.arrays import NetworkArrays
+from mambo_power.numerics.arrays import IntArray, NetworkArrays
 from mambo_power.numerics.bbus import pf_shift
 from mambo_power.numerics.ptdf import ptdf as compute_ptdf
 
 FloatArray = npt.NDArray[np.float64]
+ColArray = npt.NDArray[np.int32]
+"""LP column index / CSR index array — int32, the width HiGHS's own API takes (:class:`_RowBlock`).
+Distinct from :data:`~mambo_power.numerics.arrays.IntArray`, which is the int64 width every
+``NetworkArrays`` *bus* index array uses."""
 
 SOLVER = "highspy.Highs"
 """Solver backend name stamped into the result provenance."""
@@ -310,6 +328,195 @@ def _concave_pwl_segments(points: Sequence[tuple[float, float]]) -> list[tuple[f
         segments.append((slope, v0 - slope * p0))
         prev_slope = slope
     return segments
+
+
+@dataclass(frozen=True)
+class _RowBlock:
+    """One family of LP rows, in exactly the CSR form :meth:`highspy.Highs.addRows` takes.
+
+    ``starts`` has ``n_rows + 1`` entries (the trailing one being the total nonzero count), so a
+    block is self-describing: families are built independently and added in whatever order the
+    caller wants its rows numbered in.
+    """
+
+    lower: FloatArray
+    """Row lower bounds, one per row."""
+    upper: FloatArray
+    """Row upper bounds, one per row (equal to :attr:`lower` for an equality row)."""
+    starts: ColArray
+    """CSR row starts, ``n_rows + 1`` entries."""
+    indices: ColArray
+    """Column index of each nonzero, row-major."""
+    values: FloatArray
+    """Coefficient of each nonzero, row-major, aligned with :attr:`indices`."""
+
+    @property
+    def n_rows(self) -> int:
+        """Number of rows in this block."""
+        return int(self.lower.size)
+
+
+def _add_rows(h: highspy.Highs, block: _RowBlock) -> None:
+    """Append ``block``'s rows to ``h`` — the only place a row family meets the solver object.
+
+    A block with no rows is a no-op: a family can legitimately be empty (a network with no
+    branches, a solve with no piecewise-linear generator), and HiGHS is never asked to add zero
+    rows, exactly as before the families were extracted.
+    """
+    if not block.n_rows:
+        return
+    h.addRows(
+        block.n_rows,
+        block.lower,
+        block.upper,
+        block.indices.size,
+        block.starts,
+        block.indices,
+        block.values,
+    )
+
+
+def _dense_csr(dense: FloatArray, cols: ColArray) -> tuple[ColArray, ColArray, FloatArray]:
+    """CSR triple for a *dense* row block: every row carries an entry in every column of ``cols``,
+    structural zeros included — the exact coefficient pattern this module has always handed HiGHS,
+    preserved so that no degenerate-vertex choice (and hence no dual) can shift underneath the
+    extraction.
+    """
+    n_rows, n_cols = dense.shape
+    if not n_cols:
+        return (
+            np.zeros(n_rows + 1, dtype=np.int32),
+            np.zeros(0, dtype=np.int32),
+            np.zeros(0),
+        )
+    starts = np.arange(0, n_cols * n_rows + 1, n_cols, dtype=np.int32)
+    return starts, np.tile(cols, n_rows), np.asarray(dense.ravel(), dtype=np.float64)
+
+
+def _balance_row(
+    injection_cols: ColArray,
+    withdrawal_cols: ColArray,
+    fixed_mw: float,
+) -> _RowBlock:
+    """The system-wide nodal-balance equality row (module docstring): ``Σ x_inject − Σ x_withdraw
+    == fixed_mw``, coefficient ``+1`` on every injection column and ``−1`` on every withdrawal one.
+
+    Both arguments are **LP column indices**, not generator/load indices: the row is pure algebra
+    and does not care what a column represents, only which side of the balance it sits on.
+    :func:`dc_opf` passes its generator columns as injections and its elastic-load columns as
+    withdrawals. ``fixed_mw`` is the caller's — it is what varies when the fixed load does — and is
+    the right-hand side of both bounds, the row being an equality.
+    """
+    dense = np.hstack([np.ones((1, injection_cols.size)), -np.ones((1, withdrawal_cols.size))])
+    starts, indices, values = _dense_csr(dense, np.concatenate([injection_cols, withdrawal_cols]))
+    return _RowBlock(
+        lower=np.full(1, fixed_mw),
+        upper=np.full(1, fixed_mw),
+        starts=starts,
+        indices=indices,
+        values=values,
+    )
+
+
+def _flow_limit_rows(
+    ptdf: FloatArray,
+    injection_cols: ColArray,
+    injection_bus: IntArray,
+    withdrawal_cols: ColArray,
+    withdrawal_bus: IntArray,
+    rating_mw: FloatArray,
+    const_mw: FloatArray,
+) -> _RowBlock:
+    """One PTDF-based flow-limit row per branch (module docstring): ``−rating_k − const_k <=
+    Σ_i PTDF[k, injection_bus[i]]·x_i − Σ_j PTDF[k, withdrawal_bus[j]]·x_j <= rating_k − const_k``.
+
+    ``injection_bus``/``withdrawal_bus`` give the bus each of those columns injects at or withdraws
+    from, aligned with ``injection_cols``/``withdrawal_cols``. ``const_mw`` folds in every *fixed*
+    contribution to each branch's flow and is the caller's to compute (it is what varies when the
+    fixed load does); the ``±rating − const`` bound convention is this row family's own and lives
+    here. An unrated branch (``rating == inf``) gets an unconstrained row, which never binds.
+    """
+    n_branch = ptdf.shape[0]
+    injections = ptdf[:, injection_bus] if injection_cols.size else np.zeros((n_branch, 0))
+    withdrawals = -ptdf[:, withdrawal_bus] if withdrawal_cols.size else np.zeros((n_branch, 0))
+    starts, indices, values = _dense_csr(
+        np.hstack([injections, withdrawals]),
+        np.concatenate([injection_cols, withdrawal_cols]),
+    )
+    return _RowBlock(
+        lower=-rating_mw - const_mw,
+        upper=rating_mw - const_mw,
+        starts=starts,
+        indices=indices,
+        values=values,
+    )
+
+
+def _epigraph_rows(
+    segments_by_gen: Mapping[int, Sequence[tuple[float, float]]],
+    gen_cols: ColArray,
+    cost_col_of: Mapping[int, int],
+) -> _RowBlock:
+    """Convex-PWL generator cost rows (module docstring, "PWL costs"): one row per segment,
+    ``cost_g − slope_i·p_g >= intercept_i``.
+
+    ``segments_by_gen`` maps a generator index to that generator's ``(slope, intercept)`` segments
+    (:func:`_convex_pwl_segments`, which has already rejected a non-convex curve); ``gen_cols[g]``
+    is generator ``g``'s dispatch column and ``cost_col_of[g]`` its free ``cost_g`` column. Rows
+    come out in ascending generator index.
+    """
+    lower: list[float] = []
+    indices: list[int] = []
+    values: list[float] = []
+    starts = [0]
+    for gen_idx in sorted(segments_by_gen):
+        p_col, cost_col = int(gen_cols[gen_idx]), cost_col_of[gen_idx]
+        for slope, intercept in segments_by_gen[gen_idx]:
+            lower.append(intercept)
+            indices.extend([p_col, cost_col])
+            values.extend([-slope, 1.0])
+            starts.append(len(indices))
+    return _RowBlock(
+        lower=np.asarray(lower, dtype=np.float64),
+        upper=np.full(len(lower), highspy.kHighsInf),
+        starts=np.asarray(starts, dtype=np.int32),
+        indices=np.asarray(indices, dtype=np.int32),
+        values=np.asarray(values, dtype=np.float64),
+    )
+
+
+def _hypograph_rows(
+    segments_by_load: Mapping[int, Sequence[tuple[float, float]]],
+    demand_col_of: Mapping[int, int],
+    val_col_of: Mapping[int, int],
+) -> _RowBlock:
+    """Concave-PWL demand-bid rows (module docstring, "Elastic demand"): one row per segment,
+    ``val_d − slope_i·p_d <= intercept_i`` — the sign mirror of :func:`_epigraph_rows`, kept a
+    separate function for the same reason :func:`_concave_pwl_segments` is separate from
+    :func:`_convex_pwl_segments`: each side reads as its own derivation rather than as a flag.
+
+    ``segments_by_load`` maps a load index to that bid's ``(slope, intercept)`` segments
+    (:func:`_concave_pwl_segments`); ``demand_col_of[d]`` is load ``d``'s dispatch column and
+    ``val_col_of[d]`` its free ``val_d`` column. Rows come out in ascending load index.
+    """
+    upper: list[float] = []
+    indices: list[int] = []
+    values: list[float] = []
+    starts = [0]
+    for load_idx in sorted(segments_by_load):
+        p_col, val_col = demand_col_of[load_idx], val_col_of[load_idx]
+        for slope, intercept in segments_by_load[load_idx]:
+            upper.append(intercept)
+            indices.extend([p_col, val_col])
+            values.extend([-slope, 1.0])
+            starts.append(len(indices))
+    return _RowBlock(
+        lower=np.full(len(upper), -highspy.kHighsInf),
+        upper=np.asarray(upper, dtype=np.float64),
+        starts=np.asarray(starts, dtype=np.int32),
+        indices=np.asarray(indices, dtype=np.int32),
+        values=np.asarray(values, dtype=np.float64),
+    )
 
 
 def lmp_decomposition(duals: OpfDuals, ptdf: FloatArray) -> LmpBreakdown:
@@ -510,87 +717,31 @@ def dc_opf(
     const = pf_shift_mw - ptdf_matrix @ fixed_bus_mw
     rating_mw = arr.rating_pu * arr.base_mva  # inf where unrated -> row never binds
 
+    # Each row family is built by its own helper (module docstring, "Row-family core") against
+    # explicit column indices, and appended in the order their row indices are read back below:
+    # the balance row is row 0, the flow-limit rows are 1..n_branch.
     n_rows = 1 + arr.n_branch
-    lower = np.empty(n_rows)
-    upper = np.empty(n_rows)
-    lower[0] = total_fixed
-    upper[0] = total_fixed
-    lower[1:] = -rating_mw - const
-    upper[1:] = rating_mw - const
+    gen_cols = np.arange(n_gen, dtype=np.int32)
+    demand_cols = np.arange(n_gen, n_dispatch, dtype=np.int32)
 
-    if n_dispatch:
-        gen_balance = np.ones((1, n_gen))
-        demand_balance = -np.ones((1, n_demand))
-        balance_row = np.hstack([gen_balance, demand_balance])
-        if arr.n_branch:
-            gen_flow = ptdf_matrix[:, arr.gen_bus] if n_gen else np.zeros((arr.n_branch, 0))
-            demand_flow = (
-                -ptdf_matrix[:, arr.load_bus[elastic_idx_arr]]
-                if n_demand
-                else np.zeros((arr.n_branch, 0))
-            )
-            flow_rows = np.hstack([gen_flow, demand_flow])
-        else:
-            flow_rows = np.zeros((0, n_dispatch))
-        dense = np.vstack([balance_row, flow_rows])
-        row_starts = np.arange(0, n_dispatch * n_rows + 1, n_dispatch, dtype=np.int32)
-        col_indices = np.tile(np.arange(n_dispatch, dtype=np.int32), n_rows)
-        values = dense.ravel()
-        h.addRows(n_rows, lower, upper, col_indices.size, row_starts, col_indices, values)
-    else:
-        row_starts = np.zeros(n_rows + 1, dtype=np.int32)
-        h.addRows(n_rows, lower, upper, 0, row_starts, np.zeros(0, dtype=np.int32), np.zeros(0))
+    _add_rows(h, _balance_row(gen_cols, demand_cols, total_fixed))
+    _add_rows(
+        h,
+        _flow_limit_rows(
+            ptdf_matrix,
+            gen_cols,
+            arr.gen_bus,
+            demand_cols,
+            arr.load_bus[elastic_idx_arr],
+            rating_mw,
+            const,
+        ),
+    )
 
-    # --- PWL epigraph rows: cost_g >= slope_i * p_g + intercept_i, one per segment, per PWL
-    # generator (module docstring, "PWL costs"). Appended as extra rows after balance/flow-limit,
-    # so those rows' indices (0 and 1..n_branch, read below) are unaffected.
-    if segments_by_gen:
-        epi_lower: list[float] = []
-        epi_indices: list[int] = []
-        epi_values: list[float] = []
-        epi_row_starts = [0]
-        for gen_idx in pwl_gen_idxs:
-            p_col, cost_col = gen_idx, cost_col_of[gen_idx]
-            for slope, intercept in segments_by_gen[gen_idx]:
-                epi_lower.append(intercept)
-                epi_indices.extend([p_col, cost_col])
-                epi_values.extend([-slope, 1.0])
-                epi_row_starts.append(len(epi_indices))
-        n_epi = len(epi_lower)
-        h.addRows(
-            n_epi,
-            np.asarray(epi_lower, dtype=np.float64),
-            np.full(n_epi, highspy.kHighsInf),
-            len(epi_indices),
-            np.asarray(epi_row_starts, dtype=np.int32),
-            np.asarray(epi_indices, dtype=np.int32),
-            np.asarray(epi_values, dtype=np.float64),
-        )
-
-    # --- demand hypograph rows: val_d <= slope_i * p_d + intercept_i, one per segment, per PWL
-    # bid-load (module docstring, "Elastic demand") — the mirror of the epigraph rows above.
-    if demand_segments_by_load:
-        hyp_upper: list[float] = []
-        hyp_indices: list[int] = []
-        hyp_values: list[float] = []
-        hyp_row_starts = [0]
-        for load_idx in demand_pwl_idxs:
-            p_col, val_col = demand_col_of[load_idx], demand_val_col_of[load_idx]
-            for slope, intercept in demand_segments_by_load[load_idx]:
-                hyp_upper.append(intercept)
-                hyp_indices.extend([p_col, val_col])
-                hyp_values.extend([-slope, 1.0])
-                hyp_row_starts.append(len(hyp_indices))
-        n_hyp = len(hyp_upper)
-        h.addRows(
-            n_hyp,
-            np.full(n_hyp, -highspy.kHighsInf),
-            np.asarray(hyp_upper, dtype=np.float64),
-            len(hyp_indices),
-            np.asarray(hyp_row_starts, dtype=np.int32),
-            np.asarray(hyp_indices, dtype=np.int32),
-            np.asarray(hyp_values, dtype=np.float64),
-        )
+    # PWL epigraph / hypograph rows, appended after the balance and flow-limit rows so those
+    # rows' indices (0 and 1..n_branch, read below) are unaffected.
+    _add_rows(h, _epigraph_rows(segments_by_gen, gen_cols, cost_col_of))
+    _add_rows(h, _hypograph_rows(demand_segments_by_load, demand_col_of, demand_val_col_of))
 
     h.run()
     status = h.modelStatusToString(h.getModelStatus())

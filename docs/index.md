@@ -17,15 +17,18 @@ print(result.branches[0].p_from_mw)
 !!! info "Status"
     Wave **M1** (substrate: model, MATPOWER import, network matrices), wave **M2** (DC/AC
     Newton-Raphson power flow, typed results, the stateless [jobs API](manual/jobs.md), this
-    documentation site) and wave **M3** (DC optimal power flow with duals, N-1
-    branch-contingency screening) are all merged. Wave **M4** (nodal-market clearing: elastic
-    demand, LMP-based settlement) is in progress on its own wave branch, with everything below
-    shipped there: welfare-maximizing DC-OPF over generator costs and load bids
-    (`market.solve_nodal`, see [Manual › Nodal market](manual/market.md)), decomposed into
-    per-bus LMPs and settlement (payments, receipts, congestion rent), exposed through
-    `jobs.run` as `kind="market.nodal"`, and a new [runnable example](examples/index.md)
-    building on M3's DC-OPF and N-1 pair. Nothing is on PyPI yet — install from source (see
-    [Getting started](getting-started.md)).
+    documentation site), wave **M3** (DC optimal power flow with duals, N-1
+    branch-contingency screening) and wave **M4** (nodal-market clearing: elastic demand,
+    LMP-based settlement — `market.solve_nodal`, see [Manual › Nodal
+    market](manual/market.md)) are all merged. Wave **M5** (multiperiod clearing) is in
+    progress on its own wave branch, with everything below shipped there: a whole horizon
+    cleared as one coupled LP/QP with generator ramp coupling, storage state of charge and
+    a cyclic end-of-horizon condition (`market.solve_multiperiod`, see [Manual › Multiperiod
+    market](manual/multiperiod.md)), per-period LMPs and settlement, exposed through
+    `jobs.run` as `kind="market.multiperiod"` on a `SolveRequest` that now accepts a
+    `scenario` as well as a `network`, and a new [runnable example](examples/index.md).
+    Nothing is on PyPI yet — install from source (see [Getting
+    started](getting-started.md)).
 
 ## Three principles
 
@@ -91,6 +94,7 @@ flowchart LR
 | Solve DC-OPF for cost-minimising dispatch and LMPs | [Manual › DC-OPF](manual/opf.md) |
 | Screen for N-1 branch-contingency violations | [Manual › N-1 screening](manual/n1.md) |
 | Clear a nodal market with elastic demand, LMPs and settlement | [Manual › Nodal market](manual/market.md) |
+| Clear a whole horizon with ramp limits and storage | [Manual › Multiperiod market](manual/multiperiod.md) |
 | Read and serialise results | [Manual › Results](manual/results.md) |
 | Call the package from a service | [Manual › Jobs API](manual/jobs.md) |
 | Copy a working script | [Examples](examples/index.md) |
@@ -105,8 +109,9 @@ flowchart LR
 | M1 | Installable package, `Network` model, MATPOWER import, Ybus/Bbus/PTDF/LODF, CI matrix | merged |
 | M2 | DC + AC Newton-Raphson power flow, typed results, `jobs` API, docs site, examples | merged |
 | M3 | DC optimal power flow with duals on HiGHS, N-1 branch-contingency screening | merged |
-| M4 | Nodal market: elastic-demand DC-OPF, LMP clearing, settlement | in progress |
-| M5–M7 | Markets: zonal + redispatch, multi-period with storage, agent-based bidding | planned |
+| M4 | Nodal market: elastic-demand DC-OPF, LMP clearing, settlement | merged |
+| M5 | Multiperiod market: 24-period horizon, ramp coupling, storage SoC, per-period settlement | in progress |
+| M6–M7 | Markets: zonal + redispatch, agent-based bidding | planned |
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | planned |
 | M9 | PyPI 0.1.0 with trusted publishing and semantic-release | planned |
 
