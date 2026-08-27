@@ -344,23 +344,48 @@ def test_ac4_period_less_scenario_reproduces_market_nodal_exactly(case: str) -> 
     assert multi.congestion_rent == nodal.congestion_rent
 
 
+# The explicit single-``Period`` route agrees with ``market.nodal`` to floating point, not
+# bitwise -- see that test's docstring for the mechanism and for the measured platform split.
+# Pinned well inside the largest divergence anyone has measured on this route (2.619e-10 $/h on
+# rated case118, audit 2026-08-26) and far above the one-ULP macOS reading that forced the change
+# (7.105e-15 absolute, 2.161e-16 relative on case30). Tight enough that a real regression cannot
+# hide under it: measured, a +1e-6 MW perturbation of the balance row's right-hand side -- 1000x
+# the ULP that forced this change -- still takes both parametrisations red.
+EXPLICIT_PERIOD_RTOL = 1e-9
+EXPLICIT_PERIOD_ATOL = 1e-8
+
+
 @pytest.mark.parametrize("case", ["case14", "case30"])
 def test_ac4_an_explicit_single_period_also_reproduces_market_nodal_exactly(case: str) -> None:
     """AC-4's other reading: a horizon of **one explicit** ``Period`` whose overrides restate
     every load's own ``p_mw``.
 
-    This is exact as *measured*, not as structurally guaranteed, and the distinction is real
+    This route agrees to floating-point tolerance, **not** bitwise, and the distinction is real
     rather than theoretical. ``opf.multiperiod`` computes the period's bus-aggregate fixed load
     two different ways: with ``period_load_mw=None`` it evaluates ``dc_opf``'s literal
     ``arr.p_load_pu * base_mva`` (a per-unit round trip), and with an explicit profile it
     re-aggregates the MW values directly, skipping that round trip. Those two vectors are **not**
     bitwise equal on any fixture in this repository -- they differ by ~1e-15 MW on 2 buses of
     case14 and on 37 buses of case300 -- so the two routes hand HiGHS LP data that is a hair
-    apart. The *answers* nonetheless come back bit-identical on both fixtures here, on every
-    dispatch, LMP and settlement figure. Which is why ``solve_multiperiod`` routes a period-less
-    scenario through ``None`` rather than through a materialised profile: only that route's
-    exactness is structural. A fixture where the two answers diverged would land this test on
-    ``assert_allclose``, and that would be information rather than a regression.
+    apart, and what HiGHS then does with that hair is platform-dependent.
+
+    **This assertion used to be ``assert_array_equal`` and the docstring predicted its own
+    failure**: "a fixture where the two answers diverged would land this test on
+    ``assert_allclose``, and that would be information rather than a regression." Both halves came
+    true. The wave's audit found the explicit route diverging on ``rated_network(case57)``
+    (LMP 1.705e-13) and ``rated_network(case118)`` (dispatch 7.283e-12), which this test does not
+    cover -- and then CI found ``case30``, which it does, diverging on **macos-latest / py3.12
+    only** by 7.105e-15 absolute / 2.161e-16 relative, one ULP on 2 of 6 LMPs. Windows and Ubuntu
+    3.11/3.12/3.13 all still agree bitwise, which is exactly why a single-platform green run could
+    not have caught it. Different BLAS/libm, different last bit.
+
+    So the tolerance below is the finding, not a concession: agreement is real and tight, and it
+    is *not* bit-exactness. Only the ``periods=None`` route is structurally exact -- it is
+    bit-identical on all six fixtures, plain and rated, case300 included, which is why
+    ``solve_multiperiod`` routes a period-less scenario through ``None`` rather than through a
+    materialised profile, and why
+    :func:`test_ac4_period_less_scenario_reproduces_market_nodal_exactly` keeps
+    ``assert_array_equal`` and must continue to.
     """
     net = rated_network(matpower.load(FIXTURES_DIR / f"{case}.m"))
     nodal = solve_nodal(Scenario(network=net))
@@ -374,12 +399,27 @@ def test_ac4_an_explicit_single_period_also_reproduces_market_nodal_exactly(case
     assert nodal.status == "Optimal"
     assert explicit.status == "Optimal"
     period = explicit.periods[0]
-    np.testing.assert_array_equal(
-        [g.p_mw for g in period.generators], [g.p_mw for g in nodal.generators]
+    np.testing.assert_allclose(
+        [g.p_mw for g in period.generators],
+        [g.p_mw for g in nodal.generators],
+        rtol=EXPLICIT_PERIOD_RTOL,
+        atol=EXPLICIT_PERIOD_ATOL,
     )
-    np.testing.assert_array_equal([b.lmp for b in period.buses], [b.lmp for b in nodal.buses])
-    np.testing.assert_array_equal([ld.p_mw for ld in period.loads], [ld.p_mw for ld in nodal.loads])
-    assert period.congestion_rent == nodal.congestion_rent
+    np.testing.assert_allclose(
+        [b.lmp for b in period.buses],
+        [b.lmp for b in nodal.buses],
+        rtol=EXPLICIT_PERIOD_RTOL,
+        atol=EXPLICIT_PERIOD_ATOL,
+    )
+    np.testing.assert_allclose(
+        [ld.p_mw for ld in period.loads],
+        [ld.p_mw for ld in nodal.loads],
+        rtol=EXPLICIT_PERIOD_RTOL,
+        atol=EXPLICIT_PERIOD_ATOL,
+    )
+    assert period.congestion_rent == pytest.approx(
+        nodal.congestion_rent, rel=EXPLICIT_PERIOD_RTOL, abs=EXPLICIT_PERIOD_ATOL
+    )
 
 
 def test_ac4_exactness_holds_with_elastic_bids_in_play() -> None:
