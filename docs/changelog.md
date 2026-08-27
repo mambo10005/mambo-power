@@ -7,7 +7,193 @@ will be 0.1.0 on PyPI (wave M9).
 
 ## [Unreleased]
 
-### Added — wave M2 (power flow), in progress
+One section per wave, newest first. Nothing on this page has been released. Which waves have
+merged to `epic/01-foundation` and which are still on their own branch is tracked in [the home
+page's roadmap table](index.md), not restated here, so this page cannot go stale about it.
+
+### Added — wave M5 (multiperiod market)
+
+- `market.solve_multiperiod(scenario, options=None) -> MarketMultiperiodResult`: a whole horizon
+  cleared as **one** coupled LP/QP, not `T` stacked single-period clearings. Three row families a
+  single instant cannot have — a ramp row tying period `t` to `t-1`, a state-of-charge row tying
+  the horizon into one energy budget, and a cyclic row closing it at
+  `soc[T-1] == soc_initial * energy_mwh`. `MarketPeriodResult` carries that period's own dispatch,
+  its per-bus LMPs split by `opf.lmp_decomposition`, and five settlement figures;
+  `MarketMultiperiodResult` carries their plain sum as horizon totals. A `Scenario` with
+  `periods=None` degenerates to `market.solve_nodal` bit-for-bit on every bundled fixture,
+  case300 included.
+- `model.Period(load_p_mw)` and `Scenario.periods: list[Period] | None`: an id-keyed **override**
+  of each `Load.p_mw` for that period, not a scale factor — a load absent from the dict keeps its
+  own `p_mw`. Keys are checked against the scenario's network by `Scenario`'s own validator, since
+  a bare `Period` has no network to check against. On a load carrying a `bid` the override moves
+  the upper bound of its elastic column too, `Load.p_mw` being that load's maximum served
+  quantity. `market.solve_nodal` ignores `periods` entirely and stays a single-period entry point.
+- `Generator.ramp_up_mw` / `ramp_down_mw`, both `float | None`, in MW per period — physical, like
+  every other `Generator` field, rather than PyPSA's per-unit-of-`p_nom` convention. `None` means
+  unconstrained and builds no row at all; a limit of exactly `0` is rejected by `Network` itself
+  with a `BAD_RANGE` validation issue. `GenPeriodDispatchResult.ramp_dual` reports the row's
+  shadow price under HiGHS's own sign convention — negative when the ramp-up side binds, positive
+  when the ramp-down side does.
+- `model.Storage` is read by a solver for the first time, having been in the schema and
+  solver-ignored since M1. Two nonnegative power columns per unit per period plus an explicit
+  `soc` column, because the charge and discharge efficiencies enter the SoC row with *different*
+  coefficients (`+eta_c` against `-1/eta_d`) — an asymmetry one signed column cannot express in a
+  linear row. `StorageDispatchResult` reports `charge_mw`, `discharge_mw`, end-of-period `soc_mwh`
+  and `soc_dual`. A unit settles on both sides of the market, and the settlement identity does not
+  close if a dispatched one is left out.
+- `opf.multiperiod_dc_opf(arr, cost_coeffs, n_periods, ...) -> MultiperiodSolution`, with
+  `MultiperiodDuals`: the array-level builder, on `dc_opf`'s own row-family helpers rather than a
+  second solver. The variable vector is two tiers, not `T` self-contained blocks —
+  `T * (n_gen + n_demand + 3*n_storage)` period-major columns the quadratic Hessian covers
+  exactly, then the free PWL variables — because `dc_opf` passes its Hessian over a prefix of the
+  columns.
+- `jobs`: `market.multiperiod` registered as a sixth kind, and `SolveRequest` now takes either a
+  `network` **or** a `scenario`, resolved through the new `SolveRequest.resolved_scenario`. A
+  horizon needs `Scenario.periods`, which a bare `Network` cannot supply.
+- Oracle: **PyPSA** multi-period `optimize` with `StorageUnit` and
+  `ramp_limit_up` / `ramp_limit_down`, on a 24-period rated case14 with a lossy unit and an
+  asymmetric generator ramp limit both genuinely engaged. Measured worst-case residuals:
+  objective 4.35e-13 relative, per-generator per-period dispatch 3.01e-4 MW, net storage power
+  1.10e-4 MW, state of charge 1.25e-4 MWh, per-bus per-period LMP 4.24e-5 \$/MWh. Two limits of
+  that oracle — PyPSA's transformer ratings, and the fixture's inability to tell the two
+  efficiencies apart — are disclosed on the manual page rather than tolerated silently.
+- Fixtures, derived at test time and committing no new files: `tests/_periods.py` (a 24-hour
+  raised-cosine profile, 0.7x at hour 4 up to 1.2x twelve hours later, applied as a single
+  system-wide curve — the two-archetype design it started from was measured infeasible against
+  the derived ratings) and `tests/_storage.py` (one unit at 15% of the network's own total
+  base-case load with a 4-hour duration, `soc_initial = 0.5`, deliberately asymmetric
+  efficiencies).
+- Documentation: the multiperiod manual and API page, `examples/10_multiperiod_market.py`, and
+  `tests/unit/test_docs_registry_listing.py`, which pins the three places the jobs manual states
+  the registry's contents against the registry itself — that hand-pasted list had gone two waves
+  stale before anything checked it.
+
+### Added — wave M4 (nodal market)
+
+- `market.solve_nodal(scenario, options=None) -> MarketNodalResult`: a day-ahead nodal energy
+  market cleared as a welfare LP/QP — generation cost minimised, demand value maximised — subject
+  to the same linearised network `opf.dc_opf` solves, with per-bus LMPs and settlement. Built
+  directly on `opf.dc_opf` and `opf.dc_opf.lmp_decomposition`, called verbatim rather than
+  reimplemented.
+- `model.Scenario(network)`: the self-contained clearing input, embedding the `Network` directly,
+  mirroring `jobs.SolveRequest`'s own pattern rather than an id/path cross-reference — no such
+  resolution mechanism exists anywhere else in this codebase.
+- `Load.bid`: a `PolynomialBid | PiecewiseBid` discriminated union mirroring `GeneratorCost`
+  field-for-field with one difference — direction. `bid is None` stays fixed demand, so every
+  M1–M3 network behaves exactly as it did.
+- Elastic demand inside `opf.dc_opf`, through two optional parameters (`demand_bid_coeffs`,
+  `demand_pwl_bids`) that leave every M2/M3 caller unaffected: one new LP column per bid load,
+  bounded `[load_p_min_mw, load_p_max_mw]` with no sign flip (the column is the load's own served
+  demand, not a negative-bound pseudo-generator), a matching `-1`-signed term in the balance and
+  PTDF flow-limit rows, and a **hypograph** encoding for a piecewise bid — the concave mirror of
+  the convex epigraph already used for PWL generator costs. `OpfSolution.demand_dispatch_mw` and
+  `demand_bound` are explicit new fields, never overloading the generator-side ones. `dc_opf`
+  resolves the double-counting itself, removing each bid load's own historical contribution from
+  the fixed RHS, so the caller passes `NetworkArrays` completely unmodified.
+- `market.NonConcaveBidError`, raised before any HiGHS object is created for a bid whose marginal
+  value is not non-increasing (a non-concave PWL sequence, or a polynomial bid with `v2 > 0`).
+- `results`: `MarketNodalResult`, `LoadDispatchResult`. `MarketNodalResult.loads` carries one row
+  for **every** load in the network, bid or not — a bid load's `p_mw` is its solved elastic
+  dispatch, a fixed load keeps its own `Load.p_mw` with `bound_dual == 0.0` — matching the
+  settlement identity's own derivation, which sums `LMP · p_d` over every load.
+- Settlement: `total_load_payment`, `total_generator_receipts` and `congestion_rent`, each
+  computed directly from prices and quantities rather than asserted equal to the others by
+  construction, and proved against `-Σ_k μ_k · flow_k` on a hand-KKT-verified 2-bus case and
+  independently on real multi-bus fixtures with derived bids.
+- The price-taker reduction, proved rather than assumed: where every load's bid value exceeds
+  every achievable price up to its own fixed historical demand, `solve_nodal`'s dispatch, duals
+  and LMPs are identical to plain `opf.solve_dc_opf` on that same demand as fixed load.
+- `NetworkArrays`: per-load identity (`load_ids`, `load_bus`, `load_p_min_pu` / `load_p_max_pu`),
+  the same per-entity treatment generators already had.
+- `jobs`: `market.nodal` registered as a fifth kind, with the non-`"Optimal"` status translation
+  factored into a helper shared with `opf.dc`.
+- Oracle: pandapower `rundcopp` via the **`sgen` framing** — each bid load dropped as a `load` row
+  and rebuilt as a sign-flipped, negative-bound `sgen` (`min_p_mw = -p_mw, max_p_mw = 0`) whose
+  poly-cost coefficients are the bid's own sign-flipped, proved exact against a hand KKT solve
+  before any test was written. The more natural-looking `load`-row framing reproducibly fails to
+  converge in `rundcopp`; the parity module's docstring records that precisely so a future reader
+  does not have to rediscover it. Measured on case14 with every load bid: dispatch within 1e-6 MW,
+  LMP within 1e-3 \$/MWh.
+- `tests/_bids.py`: bid curves derived at test time from a fixture's own already-committed
+  `Load.p_mw` and `Generator.cost` — marginal value descending linearly from
+  `VOLL_PER_MWH = 10,000` \$/MWh at `p = 0` to that fixture's own generation-fleet max marginal
+  cost at `p = load.p_mw` — the same no-new-fixture-data discipline `tests/_rated.py`
+  established.
+- Documentation: the nodal-market manual and API page, and `examples/09_nodal_market.py`.
+
+### Added — wave M3 (DC optimal power flow, N-1 screening)
+
+- `opf.solve_dc_opf(net, options=OpfDcOptions()) -> OpfDcResult`: cost-minimising DC optimal power
+  flow over [HiGHS](https://highs.dev) — one column per generator bounded by its own declared
+  `[p_min_mw, p_max_mw]`, one system-wide nodal-balance equality row whose dual is the energy
+  component of every LMP, and one PTDF-based flow-limit row per branch, reusing the
+  `numerics.ptdf` already parity-tested on its own. `opf.dc_opf.dc_opf` is the array-level solver.
+  A pure LP with no Hessian at all when every generator's `c2` is exactly 0, transparently a
+  convex QP via `Highs.passHessian` when one is not — every bundled OPF fixture carries genuine
+  nonzero quadratic coefficients, so matching real fixture data needs the quadratic term, not just
+  the linear one.
+- Convex **piecewise-linear generator costs** through `dc_opf`'s `pwl_costs`: the standard
+  segment/epigraph encoding — one free `cost_g` variable with objective coefficient 1, plus one
+  inequality row per segment. It composes unchanged with the QP path, so one network may mix
+  quadratic and PWL generators in the same solve. A non-convex breakpoint sequence raises
+  `opf.NonConvexCostError` before any HiGHS object is created, rather than a
+  wrong-but-optimal-looking answer; a degree-3-or-higher `PolynomialCost` raises
+  `NotImplementedError` at cost extraction.
+- `opf.dc_opf.lmp_decomposition(duals, ptdf) -> LmpBreakdown`: standalone and independent of
+  `dc_opf` / `solve_dc_opf`, callable with any hand-built duals/PTDF pair, splitting every bus's
+  price into a system-wide-uniform energy component and a congestion component (that bus's
+  exposure to every binding flow-limit row). `solve_dc_opf` calls it to populate `OpfDcResult.lmp`.
+- `OpfDcOptions.ac_check`: re-runs `pf.solve_ac` on the dispatched network — a deep copy with each
+  in-service generator's `p_mw` overwritten, id-keyed, from the DC-OPF dispatch — and attaches a
+  `FeasibilityReport` of thermal (`loading_pct > 100%`) and voltage violations. It reports; it
+  does not re-dispatch. case14's own DC-OPF-optimal dispatch lands 3 buses outside their declared
+  1.06 pu upper bound once AC-solved.
+- `contingency.n1(net, options=None) -> N1Result`: N-1 branch-contingency screening as
+  screen-then-confirm. `screen_n1` DC-solves the base case once, then estimates every other
+  branch's post-outage flow from `numerics.lodf`, skipping bridge outages entirely since LODF is
+  undefined where the outage disconnects the network; `confirm_n1` re-solves only what the screen
+  flagged, against one deep copy whose `in_service` flag is flipped and restored per outage rather
+  than a fresh copy each time (measured ~20x slower the naive way on case300). `N1Result` carries
+  `outages` — per flagged branch: rating, LODF estimate, DC-re-solved flow, and whether the
+  re-solve confirms a violation — and `bridge_branch_ids`. Branch outages only; generator
+  outages, N-2+ and any redispatch on a violation are explicit carry-overs.
+- The agreement guarantee: on all five bundled OPF fixtures with derived ratings, the
+  screen-then-confirm pipeline's confirmed-violating outage set is **exactly** the set a
+  brute-force sweep finds with no LODF pre-filter at all (case14 18, case_ieee30 34, case57 75,
+  case118 166, case300 293) — it misses no confirmed violation the brute force catches, and
+  confirms nothing the brute force would not.
+- `results`: `OpfDcResult`, `GenDispatchResult`, `OpfBranchFlowResult`, `BusLmpResult`,
+  `FeasibilityReport` with `ThermalViolation` and `VoltageViolation`, `N1Result`,
+  `N1OutageResult`, `N1BranchFlag`.
+- `jobs`: `opf.dc` and `n1` registered as kinds, plus two new failure codes, `INFEASIBLE_LP` and
+  `UNBOUNDED_LP`, so a non-`"Optimal"` LP/QP comes back as a structured failure rather than a
+  "successful" result carrying a meaningless dispatch. `solve_dc_opf` itself still never raises
+  for one — it is reported through `OpfDcResult.status` / `message`, mirroring `pf.solve_ac`'s
+  never-raise-on-non-convergence convention.
+- `tests/_rated.py`: `rating_mva = max(1.2 * |base_case_p_from_mw|, 1.0)`, derived at test time
+  from each fixture's own unmodified base-case DC dispatch. No bundled fixture carries a real
+  `RATE_A` (every branch reads 0, MATPOWER's "unlimited" convention), so nothing had anything for
+  a flow-limit row or a contingency screen to bind against. The first of this repository's
+  derived-fixture helpers, and the discipline `tests/_bids.py`, `tests/_periods.py` and
+  `tests/_storage.py` each followed after it.
+- Fixture: `fixtures/matpower/derived/case14_pwl.m`, two of case14's five generators converted to
+  convex piecewise-linear cost with the other three keeping their real quadratic coefficients.
+  pandapower's `rundcopp` refuses to mix quadratic and piecewise costs anywhere in one network, so
+  this fixture cannot be oracled by it at all; verification fell back to an independent
+  lambda-iteration economic dispatch, which also surfaced a genuine LP degeneracy — two
+  breakpoints tie in marginal cost, so how the two affected generators split their combined output
+  has multiple optima. Asserted as an interval, not a false-precise split, with the other three
+  generators and the total system cost uniquely pinned.
+- Named as a real formulation difference rather than rounded into a looser tolerance:
+  `opf.dc_opf`'s PTDF-based dispatch and pandapower's theta-based `rundcopp` are genuinely
+  different formulations that happen to agree on every bundled fixture. `rundcopp` marks the
+  slack-bus generator `controllable=False`, making its dispatch the network's balance residual;
+  `dc_opf` makes every generator, that one included, a bounded decision variable. The two
+  conditions under which they must agree are asserted directly in the parity suite, not assumed.
+- Documentation: the DC-OPF and N-1 manual pages and their API pages, and
+  `examples/08_opf_and_n1.py`.
+
+### Added — wave M2 (power flow)
 
 - `pf.solve_dc(net) -> DcPowerFlowResult`: DC power flow \(B'\theta = P - P_\text{shift}\)
   with phase-shifter injections, flows via \(B_f\), slack balance to the first in-service
@@ -65,7 +251,7 @@ will be 0.1.0 on PyPI (wave M9).
   document `ImportIssue`, `ImportReport` and `repair_islands`; getting started runs an AC
   power flow.
 
-### Added — wave M1 (substrate), merged
+### Added — wave M1 (substrate)
 
 - uv-managed `src/` layout with hatchling; ruff, mypy `--strict`, pytest tiers `unit` /
   `parity` / `property`; GitHub Actions CI on Ubuntu, macOS and Windows (Python 3.12) plus
@@ -99,6 +285,28 @@ will be 0.1.0 on PyPI (wave M9).
 
 ### Changed
 
+- `jobs.SolveRequest` now takes **exactly one** of `network` and `scenario`; neither or both is a
+  `ValueError`, and `BAD_REQUEST` through `run_json`. A request carrying only a `network` — every
+  M2–M4 caller, and every stored request JSON — keeps working unchanged, wrapped as a
+  single-period `Scenario` by `resolved_scenario`. That wrap left the individual runners as a
+  result, and every kind now runs through one uniform `Runner`. M5.
+- `opf.dc_opf`'s nodal-balance, PTDF flow-limit, epigraph and hypograph row families are built by
+  internal helpers rather than inline, so `opf.multiperiod_dc_opf` calls the same code once per
+  period instead of carrying a second copy of it. Extracted and proved behaviour-preserving
+  before any multiperiod row existed; no public behaviour changed. M5.
+- `opf.gen_cost_coeffs` and `market.load_bid_coeffs` are public, so `market.nodal` and
+  `market.multiperiod` share one cost extraction and one bid extraction rather than each carrying
+  its own copy. M4 for the generator side, M5 for the demand side.
+- A quadratic `GeneratorCost` with `c2 < 0` is now rejected as `NonConvexCostError` before any
+  solve. M3 checked convexity only for piecewise costs; the quadratic gap was found while
+  building the demand-side guard and closed in the same commit, rather than shipping an
+  asymmetric check. M4.
+- The settlement identity on [the nodal-market page](manual/market.md#settlement) is stated in
+  its narrow form, `congestion_rent == -Σ_k μ_k · flow_k`, which is exact only on a network with
+  no phase-shifting transformer and no bus shunt conductance — every fixture M4's own tests use,
+  but not `case300`. The general form, with both correction terms, is on [the multiperiod
+  page](manual/multiperiod.md#settlement). The value was always right; it is the *name* that is
+  narrower than the number. M5.
 - MATPOWER repair warnings are now `CODE: message` strings (`BASE_KV_REPLACED`,
   `GENCOST_REACTIVE_IGNORED`, `ISLAND_DEACTIVATED`) — M2, with island repair.
 - The typed import-issue record is `model.ImportIssue` (`ImportIssueCode`); it was briefly

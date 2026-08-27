@@ -31,14 +31,26 @@ Period(load_p_mw: dict[str, float])
 factor: a load id absent from the dict keeps its own `Load.p_mw` in that period, so a scenario
 that varies two loads out of eleven names two. Every key must resolve to a real `Load` id in the
 scenario's network — checked by `Scenario`'s own validator rather than by `Period`, since a bare
-`Period` has no network to check against — and every value must be `>= 0`.
+`Period` has no network to check against.
+
+The **values** carry exactly `Load.p_mw`'s own range, negatives included, deliberately: an
+override may not be narrower than the field it overrides. `Load.p_mw` has no lower bound and
+`case300` ships eight negative loads (a net injection at a load bus), so a `>= 0` rule here would
+reject even the identity profile `{ld.id: ld.p_mw for ld in case300.loads}` — a horizon that
+changes nothing — on a network `market.solve_nodal` clears without complaint. Non-finite values
+are still rejected.
+
+On a load carrying a `bid`, `Load.p_mw` is that load's *maximum served quantity*, so an override
+moves the upper bound of its elastic column as well as the fixed-load term — one field, both
+meanings, both moved. The bid **curve** is horizon-invariant (per-period bids are out of scope
+this wave), so a period override rescales how much of that curve is reachable, not its shape.
 
 `periods=None` means single-period. That is not a special case in the solver; it is the
 degenerate end of the same code path, and it reproduces `market.solve_nodal` bit-for-bit (see
 [Degeneracy](#degeneracy-one-period-is-the-nodal-clearing), below).
 
-**Only the fixed load varies by period.** Costs, bids, bounds, ratings and the network's topology
-are horizon-invariant. Per-period offers and bids are deliberately out of scope this wave —
+**Only load quantity varies by period.** Cost curves, bid curves, generator bounds, ratings and
+the network's topology are horizon-invariant. Per-period offers and bids are deliberately out of scope this wave —
 `Period` is shaped so a later wave can widen it additively rather than re-cut it. The PTDF matrix
 is computed **once** and reused for every period, which assumes a static topology over the
 horizon: no intra-horizon switching, no mid-day outage.
@@ -151,8 +163,19 @@ so the unit's combined converter throughput is capped whichever way it is runnin
 
 one equality row per unit per period, anchored at `t = 0` to the unit's own initial energy
 `soc_initial * energy_mwh`. `StorageDispatchResult.soc_mwh` is the state of charge at the **end**
-of the period, and `soc_dual` is that row's shadow price — the marginal value of one more MWh
-stored in that unit at the end of that period.
+of the period.
+
+`soc_dual` is that row's shadow price, and it carries **HiGHS's own row-dual sign** — the same
+convention `flow_limit` and `ramp_dual` already use on this page. It is the *negative* of the
+marginal value of stored energy, so it reads negative wherever one more MWh in the unit is worth
+having: `-LMP / eta_c` where the unit is charging on an interior column, `-eta_d · LMP` where it
+is discharging on one. On the 2-period example at the bottom of this page that is exactly
+`-10 / 0.9 = -11.111` at `t=0` and `-0.9 × 50 = -45.0` at `t=1`. Read the worth of an MWh as
+`-soc_dual`.
+
+`energy_bound_dual` is the reduced cost of the `soc` column's own `[0, energy_mwh]` bound, and it
+is non-zero at **either** end: a unit sitting empty binds that bound exactly as much as one
+sitting full. It is 0 only where the state of charge is strictly between the two.
 
 ### Cyclic end of horizon
 
