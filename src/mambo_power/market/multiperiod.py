@@ -84,8 +84,9 @@ class MarketMultiperiodOptions(BaseModel):
 
     No fields yet, for the same reason :class:`~mambo_power.market.nodal.MarketNodalOptions` has
     none: a solver-tuning field is added the first time a caller actually needs one. It exists
-    now, rather than being omitted, because the options model is where a ``market.multiperiod``
-    ``jobs`` kind (S7) validates a request against -- and because the array-level builder
+    now, rather than being omitted, because the options model is what the registered
+    ``market.multiperiod`` ``jobs`` kind validates a request against -- and because the
+    array-level builder
     deliberately takes no ``options`` parameter at all, so this is the one place multiperiod
     options can live.
     """

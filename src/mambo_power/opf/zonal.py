@@ -1,23 +1,23 @@
-"""Zonal clearing LP/QP builder over HiGHS (wave M6 W2; AC-2).
+"""Zonal clearing LP/QP builder over HiGHS.
 
 Array-level entry point: :func:`zonal_dc_opf` clears a market at **zonal** granularity — one
 price per zone, the intra-zone grid ignored entirely. It is the third caller of ``dc_opf``'s
 row-family core (ADR-007) and the second of :func:`~mambo_power.opf.dc_opf._extract_and_validate`
-(ADR-008, wave M6 W1), at the same altitude as :func:`~mambo_power.opf.dc_opf.dc_opf` and
+(ADR-008), at the same altitude as :func:`~mambo_power.opf.dc_opf.dc_opf` and
 :func:`~mambo_power.opf.multiperiod.multiperiod_dc_opf`: pure numerics over
 :class:`~mambo_power.numerics.NetworkArrays` plus a caller-supplied zone partition and corridor
 map, with no ``Network``/``Scenario`` dependency. The ``Scenario``-facing entry point is
-``market.zonal.solve_zonal`` (W4).
+:func:`~mambo_power.market.zonal.solve_zonal`.
 
 **What a zonal clearing is, as an LP.** The nodal LP (:func:`~mambo_power.opf.dc_opf.dc_opf`)
 carries one system-wide balance row and one PTDF flow-limit row per branch. The zonal LP replaces
 *both*: one balance row **per zone**, and — instead of any branch-level flow row — one bounded
 **exchange variable per tied zone-pair**, whose bound is that corridor's transfer capacity. That
-is design decision D2, alternative b2 (spec ``## Design``; ``record/m6-research.md`` §2(b)):
-each zone is a copper plate internally, and the only thing limiting where power comes from is how
-much a corridor can carry. There are deliberately **no** intra-zone flow rows, and no flow rows
-at all — :func:`~mambo_power.opf.dc_opf._flow_limit_rows` is never called here, and no PTDF matrix
-is ever built. The whole point of the zonal design is that the intra-zone grid does not constrain
+is the design this builder implements: each zone is a copper plate internally, and the only thing
+limiting where power comes from is how much a corridor can carry. There are deliberately **no**
+intra-zone flow rows, and no flow rows at all —
+:func:`~mambo_power.opf.dc_opf._flow_limit_rows` is never called here, and no PTDF matrix is ever
+built. The whole point of the zonal design is that the intra-zone grid does not constrain
 the clearing; a solve that consulted the PTDF would be modelling something else.
 
 **Column layout — two tiers, mirroring** :func:`~mambo_power.opf.multiperiod.multiperiod_dc_opf`:
@@ -37,11 +37,11 @@ quadratic term, so it has nothing to contribute to a Hessian in the first place.
 **positive == power flowing z1 -> z2**. Concretely, corridor ``(z1, z2)``'s column enters zone
 ``z1``'s balance row as a *withdrawal* (coefficient ``-1``) and zone ``z2``'s as an *injection*
 (``+1``), and its variable bounds are the plain, symmetric ``[-cap_mw, +cap_mw]`` — the corridor's
-capacity is a **variable bound**, not a row (spec ``## Design``, ``opf.zonal`` bullet). So a
-negative :attr:`ZonalSolution.corridor_flow_mw` entry means that corridor is carrying power the
-other way, ``z2 -> z1``, and is at ``-cap`` when it binds in that direction. This is precisely the
-convention ``record/m6-ac2-derivation.md`` §2 hand-derives (``p_A - f_AB == L_A``,
-``p_B + f_AB == L_B`` for the A-B corridor), so the committed AC-2 numbers transcribe directly.
+capacity is a **variable bound**, not a row. So a negative
+:attr:`ZonalSolution.corridor_flow_mw` entry means that corridor is carrying power the other way,
+``z2 -> z1``, and is at ``-cap`` when it binds in that direction. Written out for a two-zone
+network with one corridor, the pair of balance rows is ``p_A - f_AB == L_A`` and
+``p_B + f_AB == L_B``.
 
 **Row layout.** One balance row per zone, in :attr:`ZonalSolution.zone_ids` order (sorted), at row
 indices ``0 .. n_zone-1``; then the PWL epigraph rows, then the PWL hypograph rows, both of which
@@ -56,11 +56,10 @@ own fixed right-hand side. Nothing about the balance row's algebra is reimplemen
 **Zone price.** Zone ``z``'s clearing price is its own balance row's dual, read straight off
 HiGHS (:attr:`ZonalDuals.zone_price`) — the per-zone counterpart of
 :attr:`~mambo_power.opf.dc_opf.OpfDuals.balance`, and the sole owner of the "zone price" concept
-in the ownership table (spec ``## Design``). Two zones joined by a **slack** corridor necessarily
-price identically: summing their balance rows cancels the exchange column entirely, collapsing
-them into the single system-wide row ``dc_opf`` already builds (``record/m6-research.md`` §2(a)).
-Prices separate exactly when a corridor binds, and by exactly that corridor's own capacity shadow
-price — the identity AC-2's paired negative asserts.
+in this package. Two zones joined by a **slack** corridor necessarily price identically: summing
+their balance rows cancels the exchange column entirely, collapsing them into the single
+system-wide row ``dc_opf`` already builds. Prices separate exactly when a corridor binds, and by
+exactly that corridor's own capacity shadow price.
 
 **Corridor capacity shadow price.** :attr:`ZonalDuals.corridor_cap` is the shadow price of the
 corridor's *capacity*: the rate at which the objective would improve per extra MW of cap, in
@@ -77,9 +76,10 @@ collapse to the one system-wide row, and with no corridors there is no exchange 
 only structural difference from ``dc_opf`` is the ``n_branch`` unconstrained flow-limit rows
 ``dc_opf`` still builds and this builder never does. Those rows cannot bind, so the two LPs have
 the same feasible set and the same optimum; they are nonetheless *different LPs* handed to HiGHS,
-so the agreement is asserted to a measured **tolerance**, never bitwise (wave M5's macOS CI
-finding, spec A3). The measured agreement on case30 is far tighter than the pinned tolerance —
-see ``tests/unit/test_opf_zonal.py``.
+so the agreement is asserted to a measured **tolerance**, never bitwise — floating-point
+reductions in a different order do not have to agree in the last bit, and on some platforms they
+do not. The measured agreement on case30 is far tighter than the pinned tolerance — see
+``tests/unit/test_opf_zonal.py``.
 
 **Phase shifters do not enter the zonal balance rows.** ``dc_opf`` omits phase-shift injections
 from its single balance row because they cancel *system-wide* by construction; per **zone** they
@@ -143,7 +143,7 @@ class ZonalDuals:
     corridor that is not at either of its bounds (module docstring, "Corridor capacity shadow
     price"; :func:`_corridor_cap_price`). Where corridor ``(z1, z2)`` binds and the zones on
     either side both price at an interior marginal unit, this equals ``|price[z2] − price[z1]|``
-    — the identity AC-2's paired negative asserts, not one this field is computed from."""
+    — an identity the tests assert, not one this field is computed from."""
     gen_bound: FloatArray
     """``(n_gen,)`` — reduced cost of each generator's ``[p_min, p_max]`` bound, generator order;
     0 unless that generator is pinned at a bound. Exactly
@@ -185,7 +185,7 @@ class ZonalSolution:
     bound, same order as :attr:`demand_dispatch_mw`; 0 unless that load is pinned at a bound.
     Sits on the solution rather than on :class:`ZonalDuals` because that is where
     :attr:`~mambo_power.opf.dc_opf.OpfSolution.demand_bound` sits. Required here, rather than
-    defaulted as ``OpfSolution``'s is: that default exists only because wave M4 added the field to
+    defaulted as ``OpfSolution``'s is: that default exists only because the field was added to
     an already-shipped dataclass, which is not this one's history."""
     corridor_flow_mw: FloatArray
     """``(n_corridor,)`` net inter-zonal transfer on each corridor, MW, in :attr:`corridor_ids`
@@ -253,7 +253,7 @@ def _normalise_corridors(
     is not a hole in this function -- it is the shape of its input -- but it is a hole one layer up,
     where the caller writes a *list*, so
     :class:`~mambo_power.market.zonal.MarketZonalOptions` rejects the repeat on the list before it
-    is ever collapsed into a mapping (review F1).
+    is ever collapsed into a mapping.
     """
     known = set(zone_ids)
     out: dict[ZoneKey, float] = {}
@@ -432,7 +432,7 @@ def zonal_dc_opf(
         demand_val_col_of = dict(zip(problem.demand_pwl_idxs, val_cols.tolist(), strict=True))
 
     # --- per-zone fixed right-hand sides. The same double-counting contract dc_opf carries: each
-    # elastic load's own historical p_mw (== arr.load_p_max_pu at its index, W3) comes off its own
+    # elastic load's own historical p_mw (== arr.load_p_max_pu at its index) comes off its own
     # bus before that bus is aggregated into its zone, so the caller passes arr unmodified here too.
     p_load_mw = arr.p_load_pu * arr.base_mva
     if n_demand:

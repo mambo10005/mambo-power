@@ -1,5 +1,5 @@
 """:func:`~mambo_power.market.zonal.solve_zonal`'s result: a zonal clearing, the redispatch that
-makes it network-feasible, and what the pair costs against the nodal optimum (wave M6 W4, D4).
+makes it network-feasible, and what the pair costs against the nodal optimum.
 
 The third market result type, and shaped like the other two: id-keyed rows plus
 :class:`~mambo_power.results.provenance.ResultProvenance`, never attached to a
@@ -23,22 +23,23 @@ direction.
 
 **The first market result carrying branch rows.** ``MarketNodalResult`` and
 ``MarketPeriodResult`` carry prices and quantities but no per-branch surface, so the settlement
-identity's flow-dual side (``-sum_k mu_k * f_k``) could not be recomputed from either object —
-wave M5's carry-over A23. :attr:`MarketZonalResult.branches` closes that: with
+identity's flow-dual side (``-sum_k mu_k * f_k``) could not be recomputed from either object.
+:attr:`MarketZonalResult.branches` closes that: with
 ``p_from_mw`` and ``flow_limit_dual`` per branch alongside the per-bus LMPs and the final
 dispatch, **both** sides of the identity are computable from this object alone, with no second
 solve. ``tests/unit/test_market_zonal.py`` proves exactly that, in a test that imports nothing
 from :mod:`mambo_power.numerics` or :mod:`mambo_power.opf`.
 
-**Three separated figures, and why separating them is the point.** The wave's own research (§4b)
-established that welfare and generation cost order *differently* between a zonal clearing and the
-nodal optimum, and that a result type conflating them would let a reader draw the wrong
-conclusion from either. So there are three fields, not one:
+**Three separated figures, and why separating them is the point.** Welfare and generation cost
+order *differently* between a zonal clearing and the nodal optimum — a zonal clearing that serves
+less, or less valuable, demand can be strictly cheaper to generate while being welfare-worse — so a
+result type conflating them would let a reader draw the wrong conclusion from either. Hence three
+fields, not one:
 
 * :attr:`~MarketZonalResult.redispatch_payment` — a **settlement** figure: what the operator pays
   out to move from the sold schedule to the deliverable one.
-* :attr:`~MarketZonalResult.welfare_gap` — the **exactness** row: ``0`` by design decision D1's
-  theorem, and therefore a check on the chain rather than a measurement of it.
+* :attr:`~MarketZonalResult.welfare_gap` — the **exactness** row: ``0`` by theorem, and
+  therefore a check on the chain rather than a measurement of it.
 * :attr:`~MarketZonalResult.generation_cost_gap` — a **diagnostic**, explicitly not
   sign-constrained.
 
@@ -74,8 +75,8 @@ class ZonePriceResult(_Row):
     """One zone's clearing price in the zonal stage.
 
     The price is that zone's own balance-row dual in the zonal LP
-    (:attr:`~mambo_power.opf.zonal.ZonalDuals.zone_price`), which the wave's ownership table names
-    as the single source of truth for the "zone price" concept. It is emphatically **not** an
+    (:attr:`~mambo_power.opf.zonal.ZonalDuals.zone_price`), which is this package's single source
+    of truth for the "zone price" concept. It is emphatically **not** an
     average or a rollup of the bus LMPs in :attr:`MarketZonalResult.buses`: those are the *final*,
     post-redispatch nodal prices, and the whole content of a nodal-versus-zonal comparison is that
     the two disagree. Two zones joined by a corridor that does not bind necessarily price
@@ -94,9 +95,9 @@ class ZonePriceResult(_Row):
 class GenRedispatchResult(_Row):
     """One generator's move from the zonal schedule to the redispatched one.
 
-    Two nonnegative fields rather than one signed one, for the reason the wave's research gives
-    (§6) and :class:`~mambo_power.results.multiperiod.StorageDispatchResult` already follows for
-    charge/discharge: a signed net number erases which direction was actually instructed, and
+    Two nonnegative fields rather than one signed one, following
+    :class:`~mambo_power.results.multiperiod.StorageDispatchResult`'s split of charge from
+    discharge: a signed net number erases which direction was actually instructed, and
     "instructed up" and "instructed down" are different products a real redispatch mechanism
     settles differently. Here at most one of the two is nonzero for any generator, because
     :class:`~mambo_power.opf.redispatch.RedispatchSolution` reports the netted canonical
@@ -116,9 +117,8 @@ class GenRedispatchResult(_Row):
 
 class LoadRedispatchResult(_Row):
     """One load's move from the zonal schedule to the redispatched one — the demand-side mirror of
-    :class:`GenRedispatchResult`, and a row type ``results/`` did not have before this wave
-    (:class:`~mambo_power.results.market.LoadDispatchResult` carries a served quantity, not a
-    delta).
+    :class:`GenRedispatchResult` (:class:`~mambo_power.results.market.LoadDispatchResult` carries
+    a served quantity, not a delta).
 
     Every load gets a row, bid or not, exactly as
     :class:`~mambo_power.results.market.LoadDispatchResult` gives every load a row. A load with no
@@ -186,7 +186,7 @@ class MarketZonalResult(BaseModel):
     generators_final: list[GenDispatchResult] = Field(
         default_factory=list,
         description="The **redispatched** generator dispatch -- what the network actually "
-        "delivers, and (design decision D1's theorem) the nodal optimum's own dispatch. "
+        "delivers, and -- by the redispatch LP's own theorem -- the nodal optimum's dispatch. "
         "``bound_dual`` is that generator's [p_min, p_max] reduced cost at the final point.",
     )
     loads_final: list[LoadDispatchResult] = Field(
@@ -196,7 +196,7 @@ class MarketZonalResult(BaseModel):
     branches: list[OpfBranchFlowResult] = Field(
         default_factory=list,
         description="Per-branch flow and flow-limit shadow price at the **final** point -- the "
-        "first market result type to carry them (M5 carry-over A23). Makes the settlement "
+        "first market result type to carry them. Makes the settlement "
         "identity's flow-dual side, -sum_k(mu_k * f_k), computable from this object alone.",
     )
     buses: list[BusLmpResult] = Field(
@@ -222,7 +222,7 @@ class MarketZonalResult(BaseModel):
     welfare_gap: float = Field(
         default=0.0,
         description="**Exactness row**, $/h: welfare(nodal) - welfare(final), both evaluated on "
-        "the true cost and bid curves at their own dispatch. Design decision D1 puts the true "
+        "the true cost and bid curves at their own dispatch. The redispatch LP carries the true "
         "curves in the redispatch objective, which makes the redispatched point the nodal optimum "
         "itself -- so this is 0 to solver tolerance, and a nonzero value means the chain is "
         "wrong, not that zonal clearing is expensive (that figure is redispatch_payment). "
@@ -234,8 +234,9 @@ class MarketZonalResult(BaseModel):
         "point, never a payment. **Not sign-constrained** -- the relaxation argument orders "
         "*welfare*, not generation cost, and a zonal clearing that serves less (or less valuable) "
         "demand can have strictly lower generation cost than the nodal optimum while being "
-        "welfare-worse (research §4b). Do not read it as 'how far zonal lands from nodal'; only "
-        "welfare answers that. Because design decision D1 makes cost(final) == cost(nodal), this "
+        "welfare-worse. Do not read it as 'how far zonal lands from nodal'; only "
+        "welfare answers that. Because the redispatch LP lands on the nodal optimum, so that "
+        "cost(final) == cost(nodal), this "
         "is exactly -(cost(final) - cost(zonal)) -- minus redispatch_payment's leading term -- so "
         "the two fields sum to the curtailment compensation value(d_zonal) - value(d_final) and "
         "are equal and opposite whenever no load carries a bid curve. 0.0 when not Optimal.",

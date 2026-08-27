@@ -1,4 +1,4 @@
-"""Min-cost redispatch LP/QP from a zonal operating point (wave M6 W3, spec AC-3/AC-4).
+"""Min-cost redispatch LP/QP from a zonal operating point.
 
 Array-level entry point: :func:`redispatch_dc_opf` is pure numerics over
 :class:`~mambo_power.numerics.NetworkArrays` plus the caller's cost/bid data and a starting
@@ -23,17 +23,19 @@ real network can carry. The move is expressed as four nonnegative column familie
 The final point is ``p_g = p0_g + Δp+_g − Δp-_g`` and ``d_d = d0_d + Δd+_d − Δd-_d``. Because the
 bounds are exactly the *shifted* generator/load bounds, the final point ranges over precisely
 ``[p_min, p_max]`` and ``[d_min, d_max]`` — the same box nodal has, no larger and no smaller.
-(``NetworkArrays.load_p_min_pu`` is all-zero on every network W3 builds, so ``[0, d0_d − d_min_d]``
-is today the ``[0, d0_d]`` the wave brief names; it is written against ``d_min`` anyway, because it
-is ``d_min`` and not ``0`` that the theorem below actually needs.)
+(``NetworkArrays.load_p_min_pu`` is all-zero on every network this package builds today, so
+``[0, d0_d − d_min_d]`` is currently just ``[0, d0_d]``; it is written against ``d_min`` anyway,
+because it is ``d_min`` and not ``0`` that the theorem below actually needs.)
 
-**Design decision D1: true cost/value curves in the objective.** The objective is the *true*
-welfare function evaluated at the *final* quantity — ``Σ_g cost_g(p0_g + Δp+_g − Δp-_g) −
-Σ_d value_d(d0_d + Δd+_d − Δd-_d)`` — not a linear rate anchored at ``(p0, d0)``. Research §3(a)
-proposed the anchored rate and §4(b) then proved it carries a systematic over-curtailment bias
-(its worked example curtails a load to zero and reports generation cost 0 against nodal's 1800
-while destroying welfare); the design interview rejected it at D1 and the spec's ``## Rejected
-alternatives`` records the rejection. So the objective here is the exact one, mechanically:
+**True cost/value curves in the objective.** The objective is the *true* welfare function
+evaluated at the *final* quantity — ``Σ_g cost_g(p0_g + Δp+_g − Δp-_g) −
+Σ_d value_d(d0_d + Δd+_d − Δd-_d)`` — not a linear rate anchored at ``(p0, d0)``. The anchored
+rate is the cheaper and more common formulation, and it was rejected: linearising each curve at the
+starting point carries a systematic over-curtailment bias, because an elastic load's marginal value
+is evaluated where it *started* rather than where it ends up, so curtailing it looks cheaper the
+further it is curtailed. A worked example on a two-bus network drives a load to zero and reports a
+generation cost of 0 against nodal's 1800 while destroying welfare. So the objective here is the
+exact one, mechanically:
 
 * **quadratic participants** — ``cost_g(p0+u) = c2·(p0+u)² + c1·(p0+u) + c0`` expands to a
   constant, a *linear* term ``(c1 + 2·c2·p0)·u`` and a *quadratic* term ``c2·u²`` where
@@ -68,18 +70,18 @@ zonal point itself is fixed data and belongs on the right-hand side too.
   ``Δp+``/``Δd-`` columns go in as injections at the generator/load bus and ``Δp-``/``Δd+`` as
   withdrawals at the same buses, which is exactly the sign each already carries in ``dc_opf``.
 
-**D1's theorem, and why it is a feature rather than a redundancy.** Because the objective is the
-true welfare function and the constraints reconstruct nodal's exact feasible set, this LP's
+**The theorem this buys, and why it is a feature rather than a redundancy.** Because the objective
+is the true welfare function and the constraints reconstruct nodal's exact feasible set, this LP's
 solution *is* the nodal optimum: ``redispatch_dc_opf(arr, ..., p0, d0)`` returns the same final
-point as ``dc_opf(arr, ...)`` for **any** feasible ``(p0, d0)``, to solver tolerance (never
-bitwise — M5's macOS CI finding, spec assumption A3). Redispatch is therefore not an approximation
-of nodal that might land somewhere worse; the thing it measures is the *distance travelled* from
-the zonal point to nodal — redispatch volume and the payment that settles it — which is precisely
-the cost of the zonal market design (spec `## Design` A5). ``tests/unit/test_opf_redispatch.py``
-asserts the theorem from two unrelated starting points on two fixtures, and the paired negative
-(an anchored-rate objective substituted in a scratch tree) is AC-4's own.
+point as ``dc_opf(arr, ...)`` for **any** feasible ``(p0, d0)``, to solver tolerance — never
+bitwise, since two different LPs reduce their floating-point sums in different orders. Redispatch
+is therefore not an approximation of nodal that might land somewhere worse; the thing it measures
+is the *distance travelled* from the zonal point to nodal — redispatch volume and the payment that
+settles it — which is precisely the cost of the zonal market design.
+``tests/unit/test_opf_redispatch.py`` asserts the theorem from two unrelated starting points on two
+fixtures, and its paired negative substitutes an anchored-rate objective in a scratch tree.
 
-**Reported deltas are netted.** Under D1 the objective depends on the pair only through
+**Reported deltas are netted.** The objective depends on the pair only through
 ``u = Δ+ − Δ-``, so any ``(Δ+ + α, Δ- + α)`` is exactly as optimal and the split is a solver
 choice, not a modelling one. :class:`RedispatchSolution` therefore reports the canonical
 representative — ``delta_up = max(u, 0)``, ``delta_down = max(−u, 0)``, computed from the solved
@@ -157,9 +159,10 @@ class RedispatchSolution:
     """``(n_branch,)`` branch flow at the final point, MW, ``NetworkArrays`` branch order:
     ``PTDF @ (net injection) + phase-shift injection``, the same construction
     :func:`mambo_power.opf.solve_dc_opf` uses for
-    :class:`~mambo_power.results.OpfBranchFlowResult`. Present so AC-3's feasibility readback and
-    AC-5's settlement identity are both computable from this object alone (M5 carry-over A23);
-    all-zero when ``status != "Optimal"``."""
+    :class:`~mambo_power.results.OpfBranchFlowResult`. Present so that a feasibility readback
+    (every flow within its rating) and the settlement identity (congestion rent against
+    ``-Σ μ_k f_k``) are both computable from this object alone, without a second solve; all-zero
+    when ``status != "Optimal"``."""
     ptdf: FloatArray
     """The PTDF matrix this solve built for its flow-limit rows, returned for reuse (LMP
     decomposition) exactly as :attr:`~mambo_power.opf.dc_opf.OpfSolution.ptdf` is. Present
@@ -194,8 +197,9 @@ class RedispatchSolution:
 
     @property
     def welfare(self) -> float:
-        """``demand_value − objective_cost``, $/h — the quantity D1's objective maximises and the
-        one the wave's ``welfare_gap`` compares against nodal's."""
+        """``demand_value − objective_cost``, $/h — the quantity this LP's objective maximises,
+        and the one :attr:`~mambo_power.results.MarketZonalResult.welfare_gap` compares against
+        nodal's."""
         return self.demand_value - self.objective_cost
 
 
@@ -328,7 +332,7 @@ def redispatch_dc_opf(
 
     # Delta bounds are the generator/load bounds shifted by the starting point, floored at 0
     # against BOUND_TOL_MW-scale noise in (p0, d0). The final quantity therefore ranges over
-    # exactly [p_min, p_max] / [d_min, d_max] — the property D1's theorem rests on.
+    # exactly [p_min, p_max] / [d_min, d_max] — the property the theorem above rests on.
     if n_gen:
         h.addVars(n_gen, np.zeros(n_gen), np.maximum(p_max - p0, 0.0))
         h.addVars(n_gen, np.zeros(n_gen), np.maximum(p0 - p_min, 0.0))
@@ -480,8 +484,8 @@ def redispatch_dc_opf(
     # below are ``row_dual[0]`` and ``row_dual[1:n_rows]``, and three row families of
     # conditionally-present height (the PWL linking equalities, the epigraph and hypograph blocks)
     # are appended *after* the flow rows. A family inserted before them instead shifts every
-    # flow-limit dual by exactly its own height, silently. M5's own equivalent assert
-    # (opf/multiperiod.py) was measured to be the only guard on its layout; this is the same guard.
+    # flow-limit dual by exactly its own height, silently. opf/multiperiod.py carries the same
+    # assert for the same reason, and it was measured there to be the only guard on its layout.
     n_linking = len(gen_q_col_of) + len(dem_q_col_of)
     n_epigraph = sum(len(segs) for segs in problem.segments_by_gen.values())
     n_hypograph = sum(len(segs) for segs in problem.demand_segments_by_load.values())

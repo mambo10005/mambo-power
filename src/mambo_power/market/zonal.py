@@ -1,5 +1,5 @@
 """``market.zonal`` clearing: zonal market, min-cost redispatch, nodal reference — and what the
-distance between them costs (wave M6 W4/W5, spec AC-4/AC-5).
+distance between them costs.
 
 :func:`solve_zonal` is the third ``Scenario``-facing market entry point, at exactly the altitude
 :func:`~mambo_power.market.nodal.solve_nodal` and
@@ -10,25 +10,25 @@ relationship rather than any one of them.
 
 **The chain, in order, and why each stage is there.**
 
-1. **Zones off the model.** ``Bus.zone`` and ``net.zones`` have been schema-present since M1 and
-   are populated by every MATPOWER import; this is where they finally become solver input. The
+1. **Zones off the model.** ``Bus.zone`` and ``net.zones`` have been in the schema from the
+   start and are populated by every MATPOWER import; this is where they become solver input. The
    partition is read, never derived: a bus with no zone is an error, because there is no
    defensible default for whose balance row its load belongs in.
 2. **Zonal clearing** — :func:`~mambo_power.opf.zonal.zonal_dc_opf` on that partition and the
    caller's corridor capacities. One price per zone, the intra-zone grid ignored, inter-zonal
-   exchange bounded by one corridor variable per tied zone pair (design decision D2, b2). This is
+   exchange bounded by one corridor variable per tied zone pair. This is
    the market the participants actually clear in, and its schedule is generally **not** something
    the real network can carry.
 3. **Min-cost redispatch** — :func:`~mambo_power.opf.redispatch.redispatch_dc_opf` from that
-   schedule, with the **true** cost and bid curves in the objective (design decision D1) and the
+   schedule, with the **true** cost and bid curves in the objective and the
    real PTDF flow rows reinstated. This is the operator's action after the market closes.
 4. **The nodal reference** — :func:`~mambo_power.market.nodal.solve_nodal` on the *same*
    scenario. It is the yardstick, and it is a genuinely separate solve rather than a quantity
-   inferred from stage 3, precisely because stage 3's agreement with it is the thing AC-4 asserts.
-   Inferring the reference from the thing being tested would make that assertion vacuous.
+   inferred from stage 3, precisely because stage 3's agreement with it is the thing the tests
+   assert. Inferring the reference from the thing being tested would make that assertion vacuous.
 5. **Composition** into :class:`~mambo_power.results.MarketZonalResult`.
 
-**Why stage 4 is not redundant, even though D1 makes it predictable.** Under D1 the redispatch
+**Why stage 4 is not redundant, even though its answer is predictable.** The redispatch
 objective is the true welfare function over nodal's exact feasible set, so the redispatched point
 *is* the nodal optimum — :attr:`~mambo_power.results.MarketZonalResult.welfare_gap` is ``0`` by
 theorem. That makes stage 4 a **check** on the chain rather than a source of new information, and
@@ -50,15 +50,16 @@ hypograph encoding, and ``tests/unit/test_market_zonal.py`` asserts they agree w
 constructions, not a tautology.
 
 * ``redispatch_payment = [cost(final) - cost(zonal)] + [value(d_zonal) - value(d_final)]`` — the
-  settlement figure spec ``## Design`` A5 names: extra generation cost plus curtailment
+  settlement figure the operator actually pays: extra generation cost plus curtailment
   compensation at bid value. Algebraically identical to ``welfare(zonal) - welfare(final)``, which
   is why it is non-negative wherever the zonal LP is a relaxation of the nodal one: it is exactly
   the welfare the zonal clearing promised and the network could not deliver.
-* ``welfare_gap = welfare(nodal) - welfare(final)`` — the exactness row; ``0`` by D1.
+* ``welfare_gap = welfare(nodal) - welfare(final)`` — the exactness row; ``0`` by the theorem
+  above.
 * ``generation_cost_gap = cost(zonal) - cost(nodal)`` — the unsigned diagnostic.
 
-**The three are two quantities and a combination, and the combination is worth naming.** Under D1
-``cost(final) == cost(nodal)``, so with ``A = cost(final) - cost(zonal)`` and
+**The three are two quantities and a combination, and the combination is worth naming.** By that
+same theorem ``cost(final) == cost(nodal)``, so with ``A = cost(final) - cost(zonal)`` and
 ``B = value(d_zonal) - value(d_final)`` the three fields are ``A + B``, ``0`` and ``-A``. Hence
 
     ``redispatch_payment + generation_cost_gap == value(d_zonal) - value(d_final)``
@@ -70,18 +71,18 @@ precisely ``-redispatch_payment``, while on rated case30 with bids it is 0.94 of
 payment. Read the pair that way and the fields stop looking redundant; read them as three
 independent numbers and a sign flip will pass for information.
 
-**A note on the third figure's definition.** The wave's research (§6) defined
-``generation_cost_gap`` as ``cost(final) - cost(nodal)``, which was the informative quantity under
-the *anchored-rate* redispatch objective it assumed (§3a) — that objective lands somewhere other
-than nodal, and §4(b) worked an example where it lands at strictly lower generation cost while
-destroying welfare. Design decision D1 rejected the anchored rate (spec ``## Rejected
-alternatives``; plan A17), and under true curves ``cost(final) - cost(nodal)`` is identically
-zero: the same theorem that makes ``welfare_gap`` zero makes it zero, so it would be a second copy
-of the exactness row rather than the diagnostic the spec asks for. The quantity that survives D1
-is the **zonal** point's cost against nodal's, and it survives with §4(b)'s reasoning intact and
-assumption-free: welfare is what the relaxation argument orders, generation cost is not, so a
-zonal clearing can be welfare-better and generation-cost-cheaper or dearer than nodal. That is the
-figure this module reports, and the reason its description insists it is not sign-constrained.
+**Why the diagnostic measures the** *zonal* **point and not the final one.** The obvious
+definition of a generation-cost gap is ``cost(final) - cost(nodal)``, and it is the informative one
+under an *anchored-rate* redispatch objective — that objective lands somewhere other than nodal,
+and it can land at strictly lower generation cost while destroying welfare. The anchored rate was
+rejected (see :mod:`mambo_power.opf.redispatch`), and under true curves
+``cost(final) - cost(nodal)`` is identically zero: the same theorem that makes ``welfare_gap`` zero
+makes it zero, so it would be a second copy of the exactness row rather than a diagnostic. The
+quantity that survives is the **zonal** point's cost against nodal's, and the warning survives with
+it, assumption-free: welfare is what the relaxation argument orders, generation cost is not, so a
+zonal clearing can be welfare-better and generation-cost-cheaper *or* dearer than nodal. That is
+the figure this module reports, and the reason its description insists it is not
+sign-constrained.
 
 **Never raises for a solve that does not converge.** A non-``Optimal`` stage — zonal, redispatch
 or nodal — comes back as ``status`` plus a ``message`` naming that stage, this package's standing
@@ -163,21 +164,20 @@ class CorridorLimit(BaseModel):
     :attr:`MarketZonalOptions.corridors`.
 
     **Why this is an option and not a model field.** A corridor capacity is a transfer limit
-    between two *zones*, and the domain model has no transfer-capacity entity: design decision D3
-    rejected inventing one, because a real NTC is administratively negotiated data that no
-    committed fixture carries and no branch rating uniquely determines. So capacities are supplied
-    per solve, by the caller who knows them. ``tests/_zones.py``'s ``corridors()`` derives a
-    defensible test-time set (the sum of ``rating_mva`` over the pair's cut-set) and is the
-    fixture half of the wave's acceptance criteria.
+    between two *zones*, and the domain model deliberately has no transfer-capacity entity,
+    because a real NTC is administratively negotiated data that no network file carries and no
+    branch rating uniquely determines. So capacities are supplied per solve, by the caller who
+    knows them. A defensible default, if you need one, is the sum of ``rating_mva`` over the pair's
+    cut-set — which is what ``tests/_zones.py``'s ``corridors()`` builds.
 
     **Why a row model rather than a ``{(z1, z2): cap}`` mapping.** The mapping is the shape the
     array-level builder takes and the shape :meth:`MarketZonalOptions.corridor_map` hands it. It
     is not a shape a pydantic options model can carry, because a ``dict`` keyed by a tuple does
     not survive a JSON round trip: pydantic serialises the key ``("1", "2")`` to the string
     ``"1,2"`` and then refuses to validate that string back into a tuple. An options model that
-    cannot round-trip through JSON is a ``jobs`` request form that cannot round-trip either (the
-    epic's ``jobs`` criterion is exact JSON round-trip on every kind), so the serialisable shape
-    is the one stored and the mapping is derived on the way to the builder.
+    cannot round-trip through JSON is a ``jobs`` request form that cannot round-trip either, and
+    an exact JSON round trip is a standing requirement on every kind — so the serialisable shape is
+    the one stored, and the mapping is derived on the way to the builder.
     """
 
     model_config = ConfigDict(
@@ -193,8 +193,8 @@ class CorridorLimit(BaseModel):
     same market as deleting the corridor (that islands the zones). Before this, the two layers
     disagreed — :func:`~mambo_power.opf.zonal.zonal_dc_opf`'s own guard says "give a number, 0, or
     inf" and maps ``inf`` to ``kHighsInf``, while this model rejected it with ``finite_number`` and
-    left ``solve_zonal`` unable to express the copper plate at all (walk defect D3, review C12).
-    This model is now the one that yields.
+    left ``solve_zonal`` unable to express the copper plate at all. This model is the one that
+    yields.
 
     ``allow_inf_nan`` is a model-wide switch, but the *scoping* is done by ``cap_mw``'s own
     ``ge=0.0``, which rejects ``-inf`` and ``NaN`` (a ``NaN`` comparison is false), so ``+inf`` is
@@ -264,7 +264,7 @@ class MarketZonalOptions(BaseModel):
         in one direction: :meth:`corridor_map` is a dict comprehension, so the same pair given
         twice in the *same* order silently kept the last entry and cleared the market on a capacity
         the caller never asked for, while the reversed order raised — from deep enough that
-        ``jobs.run`` classified a caller's typo as an engine bug (review F1, walk D1).
+        ``jobs.run`` classified a caller's typo as an engine bug.
 
         Checking it here rather than in the builder is what makes it a *request* error: an options
         model validates before any solve, so :func:`mambo_power.jobs.run` reports ``BAD_OPTIONS``
@@ -315,7 +315,7 @@ def _reject_corridors_naming_absent_zones(
     guard is what a caller driving the arrays directly relies on — but it raises ``ValueError``,
     which :func:`mambo_power.jobs.run`'s boundary can only classify as ``INTERNAL``, i.e. "the
     library has a bug". A caller who fat-fingers a zone name would page the service's on-call
-    (walk defect D1). Raised as a network-validation issue instead, it reaches them as
+    on-call. Raised as a network-validation issue instead, it reaches them as
     ``VALIDATION`` with a ``DANGLING_REF`` issue whose ``path`` points at the option that is
     wrong, which is what a dangling reference is.
 
@@ -446,8 +446,10 @@ def _dispatch_rows(
     arr: NetworkArrays, p_mw: FloatArray, bound_dual: FloatArray
 ) -> list[GenDispatchResult]:
     """One :class:`~mambo_power.results.GenDispatchResult` per generator, in
-    ``NetworkArrays`` generator order -- :func:`~mambo_power.market.nodal.solve_nodal`'s own row
-    construction, shared here because both dispatch layers of this result need it."""
+    ``NetworkArrays`` generator order -- :func:`~mambo_power.market.nodal.solve_nodal`'s rule
+    **verbatim**, and a third inline copy of it rather than a shared helper (``market.nodal`` and
+    ``market.multiperiod`` each build these rows inline too). Extracting the two row builders to
+    one place is the obvious next seam; until someone does, a fix here needs the same fix there."""
     return [
         GenDispatchResult(
             id=gen_id,

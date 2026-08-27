@@ -327,19 +327,17 @@ def _assert_failed(out: SolveResult, code: str) -> StructuredError:
 
 
 def test_unknown_kind_is_a_failed_result(case14: Network) -> None:
-    # NOTE (M6/S7b/AC-7): "market.zonal" was this test's genuinely-unknown example through M5 --
-    # it registered here, in this slice, which makes it a bad example of an *unknown* kind. Moved
-    # to "market.agents" (docs/manual/jobs.md's own "later waves" placeholder, still unregistered)
-    # for the same reason wave M4/S6 moved this test off "market.nodal" when *that* kind
-    # registered: the assertion needs a kind that stays unknown, not a fixed string. The wave that
-    # registers "market.agents" must move this line, docs/manual/jobs.md's matching example, and
-    # examples/04_jobs_api.py's together -- the same three files this wave moved off
-    # "market.zonal".
-    out = run(SolveRequest(kind="market.agents", network=case14, job_id="u"))
+    # "pf.telepathy" is deliberately *fictional*, and that is the whole point of the choice.
+    # This test has already been moved twice -- off "market.nodal" and then off "market.zonal" --
+    # each time because the string it used as its example of an unknown kind got registered, which
+    # made the assertion silently stop testing what it names. A plausible-sounding placeholder is
+    # a time bomb on a fixed date nobody knows; a kind that can never become real is not.
+    # docs/manual/jobs.md and examples/04_jobs_api.py use the same string for the same reason.
+    out = run(SolveRequest(kind="pf.telepathy", network=case14, job_id="u"))
     error = _assert_failed(out, "UNKNOWN_KIND")
-    assert out.kind == "market.agents"
+    assert out.kind == "pf.telepathy"
     assert out.job_id == "u"
-    assert "market.agents" in error.message
+    assert "pf.telepathy" in error.message
     assert "pf.ac" in error.message and "pf.dc" in error.message
 
 
