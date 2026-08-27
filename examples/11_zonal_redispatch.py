@@ -92,7 +92,10 @@ print("genA @ zone A: 10 $/MWh   genB @ zone B: 50 $/MWh   load: 50 MW in A, 30 
 small_payment: dict[str, float] = {}
 for label, caps in (
     ("corridor capped at 20 MW", [market.CorridorLimit(zone1="A", zone2="B", cap_mw=20.0)]),
-    ("cap lifted (1e6 MW)", [market.CorridorLimit(zone1="A", zone2="B", cap_mw=1.0e6)]),
+    # The copper plate: the corridor stays in the LP with no bound, so the two balance rows
+    # collapse into one and the market clears as if the zones were one.  `cap_mw=None` *is*
+    # unbounded -- a large finite cap would only be unbounded for a network this small.
+    ("cap lifted (cap_mw=None)", [market.CorridorLimit(zone1="A", zone2="B", cap_mw=None)]),
     ("no corridor at all", []),
 ):
     res = market.solve_zonal(small_scenario, market.MarketZonalOptions(corridors=caps))
@@ -110,7 +113,7 @@ print("  rows decouple, each zone self-supplies, and the prices separate as far 
 print(
     "  redispatch_payment across the three:"
     f"  capped {small_payment['corridor capped at 20 MW']:+8.2f}"
-    f"   lifted {small_payment['cap lifted (1e6 MW)']:+8.2f}"
+    f"   lifted {small_payment['cap lifted (cap_mw=None)']:+8.2f}"
     f"   deleted {small_payment['no corridor at all']:+8.2f}  $/h"
 )
 print("  the last one is NEGATIVE: the settlement figure is >= 0 only where the zonal LP is a")

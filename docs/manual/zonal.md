@@ -219,7 +219,32 @@ With no exchange column, the zones' balance rows **decouple**: each zone must su
 the prices separate as far as they can possibly go. Only lifting the *cap* — leaving the column
 in place, unbounded — collapses the rows into one and produces a single price. On the worked
 example below, capping the corridor at 20 MW and deleting it outright both give prices
-`10 / 50`; only the lifted cap gives `10 / 10`.
+`10 / 50`; only `cap_mw=None` gives `10 / 10`.
+
+**Lifting the cap is spelled `None`.** `CorridorLimit.cap_mw` is `float | None`, and `None` *is*
+the unbounded corridor — not a stand-in for one:
+
+```python
+market.CorridorLimit(zone1="A", zone2="B", cap_mw=None)   # copper plate
+market.CorridorLimit(zone1="A", zone2="B", cap_mw=0.0)    # a tie that carries nothing
+```
+
+`float("inf")` is **not** accepted: the model rejects every non-finite float, as every other
+model in this package does. Nor is a large finite number a substitute — a cap of `1e6` is a
+number that happens to exceed *this* network, and the same request against a bigger system is a
+silently binding limit wearing the word "unbounded".
+
+On the wire `None` is JSON's own `null`, so a copper-plate request is ordinary RFC 8259 JSON:
+
+```json
+{"zone1": "A", "zone2": "B", "cap_mw": null}
+```
+
+and it **survives the round trip as `null`** — `run_json` echoes the options back in
+`provenance.options` with `"cap_mw": null`, not `Infinity` and not a large float. That matters to
+anyone writing a client: a bare `Infinity` token is a JSON extension that `json.loads` accepts and
+a browser's `JSON.parse` rejects, so a response carrying one is not parseable everywhere the
+request was.
 
 The trap has a second edge. A control case built by *removing* the corridor would also pass an
 engine with the corridor column's sign flipped, because there would be no column left to have a
@@ -495,7 +520,7 @@ The runnable example prints exactly that:
 
 ```text
   corridor capped at 20 MW   price A  10.00  price B  50.00   genA  70.00 MW  genB  10.00 MW
-  cap lifted (1e6 MW)        price A  10.00  price B  10.00   genA  80.00 MW  genB   0.00 MW
+  cap lifted (cap_mw=None)   price A  10.00  price B  10.00   genA  80.00 MW  genB   0.00 MW
   no corridor at all         price A  10.00  price B  50.00   genA  50.00 MW  genB  30.00 MW
 ```
 
@@ -572,11 +597,12 @@ does not converge.
 | What is wrong | What you get |
 | --- | --- |
 | A `Bus.zone` naming a `Zone` that does not exist | `NetworkValidationError` (code `DANGLING_REF`) at `Network` construction — before `solve_zonal` is reached |
-| An in-service bus with `zone is None` | `ValueError` naming the first offending bus and how many carry no zone |
+| An in-service bus with `zone is None` | `UnzonedBusError`, whose `bus_ids` carries *every* offending bus in `NetworkArrays` order rather than only the first. It is a **`ValueError` subclass**, so a direct caller's existing `except ValueError:` around `zone_partition` or `solve_zonal` keeps working unchanged. Through `jobs.run`: **`VALIDATION`**, with one `DANGLING_REF` issue per bus at `buses[i].zone` |
 | A corridor naming a zone no bus is assigned to | `NetworkValidationError` with a `DANGLING_REF` issue per offending end, each `path` pointing at the `options.corridors[i].zone1` or `.zone2` that is wrong. Reported in one pass, never stopping at the first. Through `jobs.run`: **`VALIDATION`** |
 | A corridor naming the same zone twice | pydantic `ValidationError` at **`MarketZonalOptions`** construction — a corridor joins two *distinct* zones. Through `jobs.run`: **`BAD_OPTIONS`** |
 | The same zone pair given twice, **in either order** | pydantic `ValidationError` at `MarketZonalOptions` construction — a corridor is keyed by an *unordered* pair, so give it exactly once. Through `jobs.run`: **`BAD_OPTIONS`** |
 | A negative `cap_mw` | pydantic `ValidationError` at `CorridorLimit` construction (the field is `ge=0`). A cap of exactly `0` is allowed: a tie that exists and can carry nothing. Through `jobs.run`: **`BAD_OPTIONS`** |
+| A non-finite `cap_mw` (`inf`, `NaN`) | pydantic `ValidationError` — the model rejects non-finite floats. The unbounded corridor is `cap_mw=None` / `"cap_mw": null`, never `inf`. Through `jobs.run`: **`BAD_OPTIONS`** |
 | More than `MAX_CORRIDORS` (500) corridors | pydantic `ValidationError` at `MarketZonalOptions` construction (`max_length`). Through `jobs.run`: **`BAD_OPTIONS`** — see [Jobs API › Request-size bounds](jobs.md#request-size-bounds) |
 | A non-convex generator cost or non-concave load bid | `NonConvexCostError` / `NonConcaveBidError`, both `ValueError` subclasses, raised by the shared extractor before any solver object exists |
 | Any of the three stages not reaching `Optimal` | **No exception.** `MarketZonalResult.status` carries the solver's own status and `message` names the stage: `"zonal clearing stage: ..."`, `"redispatch stage: ..."` or `"nodal reference stage: ..."`. Every row list is empty and every figure is `0.0` |
@@ -694,3 +720,29 @@ figures and the settlement identity.
 request's options like any other option field — which is what the JSON-round-trippable
 `CorridorLimit` shape above is for. See [Jobs API](jobs.md) for the request form and the
 structured-failure shape a non-`Optimal` solve comes back as.
+
+A request with one bounded corridor and one copper plate, through `run_json` — the copper plate is
+`null`, and the whole document is plain JSON in both directions:
+
+```python
+import json
+from mambo_power import jobs
+
+request = {
+    "kind": "market.zonal",
+    "scenario": {"network": json.loads(net.model_dump_json())},
+    "options": {"corridors": [{"zone1": "A", "zone2": "B", "cap_mw": None}]},
+}
+reply = json.loads(jobs.run_json(json.dumps(request)))
+print(reply["status"], [round(z["price"], 2) for z in reply["result"]["zones"]])
+print(reply["result"]["provenance"]["options"]["corridors"][0])
+```
+
+```text
+ok [10.0, 10.0]
+{'zone1': 'A', 'zone2': 'B', 'cap_mw': None}
+```
+
+Both zones price at 10 — that is the copper plate — and the echoed option comes back as
+`"cap_mw": None` in Python and `"cap_mw": null` in the JSON text. The request survives the round
+trip unchanged, which is the property every `jobs` request form has to have.
