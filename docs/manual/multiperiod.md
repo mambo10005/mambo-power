@@ -50,8 +50,9 @@ degenerate end of the same code path, and it reproduces `market.solve_nodal` bit
 [Degeneracy](#degeneracy-one-period-is-the-nodal-clearing), below).
 
 **Only load quantity varies by period.** Cost curves, bid curves, generator bounds, ratings and
-the network's topology are horizon-invariant. Per-period offers and bids are deliberately out of scope this wave —
-`Period` is shaped so a later wave can widen it additively rather than re-cut it. The PTDF matrix
+the network's topology are horizon-invariant. Per-period offers and bids are deliberately out of
+scope this wave — `Period` is shaped so a later wave can widen it additively rather than re-cut
+it. The PTDF matrix
 is computed **once** and reused for every period, which assumes a static topology over the
 horizon: no intra-horizon switching, no mid-day outage.
 
@@ -312,8 +313,8 @@ stays one.
 `market.NonConvexCostError` / `market.NonConcaveBidError` are raised before any solve, exactly as
 for the nodal clearing. A ramp limit of exactly zero never gets as far as `solve_multiperiod`:
 `Network` rejects it at construction with a `NetworkValidationError` (`BAD_RANGE`), which
-**subclasses `Exception`, not `ValueError`** — see [Validation](model.md#validation) — so a caller
-writing `except ValueError:` around either the constructor or the clearing catches nothing. (The
+**subclasses `Exception`, not `ValueError`** — see [Validation](model.md#validation) — so a
+caller writing `except ValueError:` around the constructor or the clearing catches nothing. (The
 array-level [`opf.multiperiod_dc_opf`](opf.md), which takes ramp limits as bare arrays with no
 `Network` behind them to have validated first, *does* raise `ValueError` for a zero entry.)
 `solve_multiperiod` never raises for an infeasible or unbounded LP/QP — that is reported

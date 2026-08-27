@@ -71,10 +71,10 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
 ### Added — wave M4 (nodal market)
 
 - `market.solve_nodal(scenario, options=None) -> MarketNodalResult`: a day-ahead nodal energy
-  market cleared as a welfare LP/QP — generation cost minimised, demand value maximised — subject
-  to the same linearised network `opf.dc_opf` solves, with per-bus LMPs and settlement. Built
-  directly on `opf.dc_opf` and `opf.dc_opf.lmp_decomposition`, called verbatim rather than
-  reimplemented.
+  market cleared as a welfare LP/QP — generation cost minimised, demand value maximised —
+  subject to the same linearised network `opf.dc_opf` solves, with per-bus LMPs and settlement.
+  Built directly on `opf.dc_opf` and `opf.dc_opf.lmp_decomposition`, called verbatim rather
+  than reimplemented.
 - `model.Scenario(network)`: the self-contained clearing input, embedding the `Network` directly,
   mirroring `jobs.SolveRequest`'s own pattern rather than an id/path cross-reference — no such
   resolution mechanism exists anywhere else in this codebase.
