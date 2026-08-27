@@ -421,23 +421,59 @@ def test_case300_flow_duals_are_degenerate_at_the_nodal_optimum() -> None:
 # reported shape and invariants
 
 
-def test_reported_deltas_are_netted_and_reconstruct_the_final_point() -> None:
-    """``final == p0 + delta_up − delta_down`` exactly, and ``delta_up · delta_down == 0``
-    exactly — on both sides of the market, whatever split HiGHS's own columns carried (module
-    docstring, "Reported deltas are netted")."""
+def test_reported_deltas_are_the_movement_to_an_independently_computed_final_point() -> None:
+    """The reported ``(Δ+, Δ−)`` pair is the **canonical netting** of the movement from ``(p0, d0)``
+    to the final point — measured against a final point this test computes without the reported
+    pair.
+
+    The earlier form of this test asserted ``final == p0 + Δ+ − Δ−`` and ``Δ+ · Δ− == 0`` against
+    the solution's own arrays. Production computes ``Δ+ = max(gen_net, 0)``, ``Δ− = max(−gen_net,
+    0)`` and ``dispatch = p0 + gen_net`` from a single ``gen_net``, and ``max(g,0) − max(−g,0) ≡ g``
+    and ``max(g,0)·max(−g,0) ≡ 0`` hold bit-exactly for every float and any solver output
+    whatsoever — so those clauses tested NumPy, not the module (review C13).
+
+    The oracle here is D1's theorem: the final point *is* ``dc_opf``'s optimum on the same network,
+    from a separate builder. So ``dc_opf`` supplies the target, the movement ``target − p0`` is
+    formed outside the solver, and the reported pair is held to it two ways: the **signed** sum
+    reproduces the movement (which the reconstruction clause also did) and the **unsigned** sum
+    reproduces its magnitude. The second is the netting claim: a report that padded both columns by
+    the same α would still reconstruct the point and still be non-negative, but its unsigned sum
+    would exceed the movement by 2α on every participant.
+
+    Non-vacuity is asserted, not hoped for: this fixture must move a real volume and must move it
+    in *both* directions, or the unsigned clause reduces to the signed one.
+    """
     net = _elastic_network("case30")
     relaxed_arr, cost_coeffs, _pwl, bid_coeffs, _pwlb, _e = _problem(_relax_intra_zone(net))
     zonal = dc_opf(relaxed_arr, cost_coeffs, OpfDcOptions(), demand_bid_coeffs=bid_coeffs or None)
     p0, d0 = zonal.dispatch_mw, zonal.demand_dispatch_mw
     solution = _redispatch(net, p0, d0)
 
-    assert np.array_equal(solution.dispatch_mw, p0 + solution.delta_up_mw - solution.delta_down_mw)
-    assert np.array_equal(
-        solution.demand_dispatch_mw,
-        d0 + solution.demand_delta_up_mw - solution.demand_delta_down_mw,
+    # The independent target: D1's theorem says the redispatched point is this one.
+    target = _nodal(net)
+    gen_movement = target.dispatch_mw - p0
+    demand_movement = target.demand_dispatch_mw - d0
+
+    assert solution.delta_up_mw - solution.delta_down_mw == pytest.approx(
+        gen_movement, abs=DISPATCH_TOL_MW
     )
-    assert np.all(solution.delta_up_mw * solution.delta_down_mw == 0.0)
-    assert np.all(solution.demand_delta_up_mw * solution.demand_delta_down_mw == 0.0)
+    assert solution.delta_up_mw + solution.delta_down_mw == pytest.approx(
+        np.abs(gen_movement), abs=DISPATCH_TOL_MW
+    ), "a non-netted split would reconstruct the point and still overstate the volume"
+    assert solution.demand_delta_up_mw - solution.demand_delta_down_mw == pytest.approx(
+        demand_movement, abs=DISPATCH_TOL_MW
+    )
+    assert solution.demand_delta_up_mw + solution.demand_delta_down_mw == pytest.approx(
+        np.abs(demand_movement), abs=DISPATCH_TOL_MW
+    )
+
+    # The premise: a real volume, moving both ways, or the unsigned clause says nothing extra.
+    assert float(np.sum(np.abs(gen_movement))) > 1.0
+    assert np.any(gen_movement > DISPATCH_TOL_MW) and np.any(gen_movement < -DISPATCH_TOL_MW), (
+        "every generator moving the same way would make the unsigned sum a restatement of the "
+        "signed one, and this fixture would stop being a test of netting"
+    )
+
     assert np.all(solution.delta_up_mw >= 0.0) and np.all(solution.delta_down_mw >= 0.0)
     assert np.all(solution.demand_delta_up_mw >= 0.0)
     assert np.all(solution.demand_delta_down_mw >= 0.0)

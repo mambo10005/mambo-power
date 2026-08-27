@@ -723,15 +723,23 @@ def _nodal_welfare(net: Network, nodal: MarketNodalResult) -> float:
 
 
 @pytest.mark.parametrize("fixture_name", ["case30", "case300"])
-def test_ac5a_the_zonal_clearing_is_a_relaxation_so_its_welfare_is_never_lower(
+def test_ac5a_zonal_welfare_is_never_lower_where_the_corridors_are_looser_than_the_network(
     fixture_name: str, request: pytest.FixtureRequest
 ) -> None:
-    """AC-5(a). The zonal LP drops every branch flow row and replaces them with corridor bounds
-    that do not imply them, so its feasible set contains the nodal one and its optimal welfare can
-    only be at least nodal's. The inequality holds on both fixtures; on rated case30 — where two
-    of three corridors bind (S3 measured (1,2) at 1.52 and (2,3) at 19.46 MVA) — it holds
-    **strictly**, with a real amount of redispatch behind it rather than a rounding-scale
-    difference.
+    """AC-5(a), with its premise in the name. The zonal LP drops every branch flow row and replaces
+    them with corridor bounds; **when those bounds do not imply the rows they replaced**, its
+    feasible set contains the nodal one and its optimal welfare can only be at least nodal's.
+
+    That premise holds here by construction, not by luck: ``tests/_zones.py``'s ``corridors()``
+    caps each corridor at the *sum* of its cut-set's ratings, which is looser than the cut-set's
+    branch limits taken individually and looser still once Kirchhoff's loop law is added back. It
+    is not a theorem about zonal markets — a real NTC is normally set *below* thermal capability,
+    and in that regime the inequality reverses. The paired case immediately below drives it there
+    and measures the reversal, so this test's premise is load-bearing rather than assumed.
+
+    The inequality holds on both fixtures; on rated case30 — where two of three corridors bind (S3
+    measured (1,2) at 1.52 and (2,3) at 19.46 MVA) — it holds **strictly**, with a real amount of
+    redispatch behind it rather than a rounding-scale difference.
     """
     net, result, nodal = request.getfixturevalue(fixture_name)
     zonal_welfare = _welfare(net, result, final=False)
@@ -750,6 +758,51 @@ def test_ac5a_the_zonal_clearing_is_a_relaxation_so_its_welfare_is_never_lower(
             row.delta_up_mw + row.delta_down_mw for row in result.redispatch_generators
         ) + sum(row.delta_restore_mw + row.delta_curtail_mw for row in result.redispatch_loads)
         assert volume > 1.0, f"a strict welfare gap with no redispatch behind it: {volume} MW"
+
+
+def test_ac5a_tight_corridors_reverse_the_inequality_and_the_payment_pays_inward() -> None:
+    """The paired case that makes the test above a *conditional* claim rather than a theorem, and
+    the regime a real market usually sits in (review C7).
+
+    Every corridor set committed anywhere in this wave is derived from the network's own cut-set
+    ratings, so every one of them is on the relaxation side. A real NTC is normally set *below*
+    thermal capability — the zonal LP is then a **restriction**, its feasible set is contained in
+    nodal's rather than containing it, and its welfare is strictly lower. Driven here by taking the
+    standard case30 fixture, multiplying every rating by 20 so the network can carry essentially
+    anything, and capping every corridor at 0 so the market cannot.
+
+    Measured: zonal welfare 301,846.65 against nodal's 301,857.89, i.e. **−11.24 $/h** — AC-5(a)'s
+    inequality fails by more than 11 $/h — and ``redispatch_payment`` is −11.24, the settlement
+    figure paying *inward* because redispatch moves the system to a point the zonal market's own
+    schedule was worse than. The result object's field descriptions and the manual both hedge this
+    correctly ("non-negative wherever the zonal LP is a relaxation of the nodal one"); until now
+    nothing on the test side had ever seen the other side of that hedge.
+    """
+    net = _elastic_zoned_network("case30")
+    for branch in net.branches:
+        if branch.rating_mva is not None:
+            branch.rating_mva *= 20.0
+    islanded = MarketZonalOptions(
+        corridors=[CorridorLimit(zone1=z1, zone2=z2, cap_mw=0.0) for z1, z2 in corridors(net)]
+    )
+    scenario = Scenario(network=net)
+    result = solve_zonal(scenario, islanded)
+    nodal = solve_nodal(scenario)
+    assert result.status == "Optimal"
+
+    zonal_welfare = _welfare(net, result, final=False)
+    margin = zonal_welfare - _nodal_welfare(net, nodal)
+    assert margin < -1.0, (
+        "with corridors tighter than the network, the zonal LP is a restriction and its welfare "
+        f"must be strictly lower -- if this passes the inequality above is unconditional after "
+        f"all and its premise is not load-bearing; got {margin} $/h"
+    )
+    assert result.redispatch_payment < -1.0, (
+        f"the settlement figure pays inward in this regime; got {result.redispatch_payment} $/h"
+    )
+    assert result.redispatch_payment == pytest.approx(margin, abs=IDENTITY_ATOL)
+    # D1 still holds here: the redispatched point is the nodal optimum whichever side we are on.
+    assert abs(result.welfare_gap) <= WELFARE_REL_TOL * abs(zonal_welfare)
 
 
 def test_ac5a_redispatch_payment_is_the_welfare_the_zonal_clearing_could_not_deliver(
