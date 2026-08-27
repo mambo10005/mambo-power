@@ -351,9 +351,11 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   nodal, multiperiod, zonal and redispatch builders cannot get them subtly different — they do
   not each implement them. Extracted and proved behaviour-preserving before any zonal row was
   written; no public behaviour changed. M6.
-- `Scenario.periods` accepts at most 200 entries. An unbounded list was an unbounded solve; 200
-  periods is more than eight days at hourly resolution and well past anything this package's
-  builders are sized for. M6.
+- `Scenario.periods` accepts at most 200 entries and `MarketZonalOptions.corridors` at most 500.
+  An unbounded list in a network-facing model is an unbounded solve; 200 periods is more than
+  eight days at hourly resolution, and 500 corridors is a complete graph on 32 zones. The corridor
+  list is echoed back in `provenance.options`, so its bound holds the response down too. Both are
+  listed on [Manual > Jobs API](manual/jobs.md#request-size-bounds). M6.
 - `jobs.SolveRequest` now takes **exactly one** of `network` and `scenario`; neither or both is a
   `ValueError`, and `BAD_REQUEST` through `run_json`. A request carrying only a `network` — every
   M2–M4 caller, and every stored request JSON — keeps working unchanged, wrapped as a

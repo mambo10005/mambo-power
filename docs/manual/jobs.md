@@ -49,6 +49,23 @@ a bare `Network` cannot supply `Scenario.periods`. What a runner actually receiv
 existing semantics. It is recomputed on each access rather than cached, so a `network`
 mutated in place after construction is still reflected.
 
+### Request-size bounds
+
+A `SolveRequest` is a wire format, so the lists inside it that multiply the size of the solve
+carry an explicit maximum. Both are enforced by the model, not by a future HTTP layer — added
+after the models were treated as stable, either bound would be a breaking change — and both come
+back as `BAD_OPTIONS` (or `BAD_REQUEST`, for a bound on the scenario itself) rather than as a
+solve that runs for a very long time.
+
+| Bound | Value | On |
+| --- | --- | --- |
+| `MAX_PERIODS` (`model.scenario`) | 200 | `Scenario.periods`. More than eight days at hourly resolution, and well past what these builders are sized for. |
+| `MAX_CORRIDORS` (`market.zonal`) | 500 | `MarketZonalOptions.corridors`. A complete graph on 32 zones; the list is also echoed back in `provenance.options`, so it bounds the response too. |
+
+Neither is a statement about what the solvers can handle — they are amplification guards. A small
+request expands into a large matrix (a 34 kB horizon expands to ~20 million matrix nonzeros), and
+an unbounded list in a network-facing model is an unbounded solve.
+
 ## `SolveResult`
 
 | Field | Type | Meaning |
