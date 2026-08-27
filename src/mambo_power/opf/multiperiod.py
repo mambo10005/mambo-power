@@ -159,14 +159,22 @@ class MultiperiodDuals:
     side binds, positive when the ramp-*down* side does — HiGHS's own row-dual sign, the same
     convention :attr:`flow_limit` carries. Shape ``(0, n_gen)`` when ``T == 1``."""
     soc_balance: FloatArray
-    """``(T, n_storage)`` — dual of each unit's per-period SoC equality row, $/MWh: the marginal
-    value of one more MWh in that unit at the end of that period."""
+    """``(T, n_storage)`` — dual of each unit's per-period SoC equality row, $/MWh, carrying
+    HiGHS's own row-dual sign (the convention :attr:`flow_limit` and :attr:`ramp` carry too). It
+    is the **negative** of the marginal value of stored energy, so it comes out *negative*
+    wherever an extra MWh in the unit is worth having: ``-lambda_t / eta_c`` where the unit
+    charges on an interior column and ``-eta_d * lambda_t`` where it discharges on one — e.g.
+    exactly ``-45.0`` against a 50 $/MWh price at ``eta_d = 0.9``, hand-derived from the KKT
+    conditions in ``tests/unit/test_opf_multiperiod.py``. Read the worth of an MWh as
+    ``-soc_balance``."""
     storage_power_limit: FloatArray
     """``(T, n_storage)`` — dual of the shared ``charge + discharge <= p_max_mw`` row; 0 unless
     the unit's combined throughput is at its converter rating."""
     storage_soc_bound: FloatArray
-    """``(T, n_storage)`` — reduced cost of the ``soc`` column's ``[0, energy_mwh]`` bound; the
-    shadow price of the energy cap when it binds (research §7.3's ``mu_soc``)."""
+    """``(T, n_storage)`` — reduced cost of the ``soc`` column's ``[0, energy_mwh]`` bound,
+    non-zero at **either** end of it: a unit sitting empty binds that bound exactly as much as a
+    unit sitting full, and an empty unit is the commoner reading of the two (research §7.3's
+    ``mu_soc`` is the full-end case). 0 only where the state of charge is strictly interior."""
     cyclic: FloatArray
     """``(n_storage,)`` — dual of the end-of-horizon ``soc[T-1] == soc_initial`` equality row: the
     cost the cyclic condition itself imposes, separable from the SoC dynamics above it."""
@@ -657,6 +665,26 @@ def multiperiod_dc_opf(
     storage_charge_mw = _read(charge_cols, col_value)
     storage_discharge_mw = _read(discharge_cols, col_value)
     storage_soc_mwh = _read(soc_cols, col_value)
+
+    # The row-order contract is declared in the module docstring's table, implemented once ~150
+    # lines above, and re-derived just below as a hand-maintained running sum. Nothing else ties
+    # those three together: a row family appended after tier 6 and not accounted for here shifts
+    # every dual index below it, silently and by exactly its own height. The ``.reshape`` calls
+    # below catch some of that, but only when a storage unit happens to exist. This does not
+    # depend on anything happening to exist.
+    n_epigraph = sum(len(segments_by_gen[i]) for i in pwl_gen_idxs)
+    n_hypograph = sum(len(demand_segments_by_load[i]) for i in demand_pwl_idxs)
+    expected_rows = (
+        n_periods * (1 + n_branch + 2 * n_storage)  # tiers 1-4
+        + n_storage  # tier 5 (cyclic), one per unit for the whole horizon
+        + (n_periods - 1) * n_ramped  # tier 6, empty at T == 1 or with nothing ramped
+        + n_periods * (n_epigraph + n_hypograph)  # tiers 7-8, one row per segment per period
+    )
+    assert h.getNumRow() == expected_rows, (
+        f"multiperiod_dc_opf built {h.getNumRow()} rows, but the row-order contract in this "
+        f"module's docstring accounts for {expected_rows} — every dual index below is read off "
+        "that contract, so they must agree"
+    )
 
     # row offsets, exactly the module docstring's table
     flow_base = n_periods

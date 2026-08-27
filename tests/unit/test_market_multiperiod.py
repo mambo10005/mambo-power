@@ -451,6 +451,39 @@ def test_ac5_analytic_arbitrage_optimum() -> None:
     )
 
 
+def test_the_storage_dual_signs_are_the_ones_the_fields_describe() -> None:
+    """:class:`~mambo_power.results.StorageDispatchResult`'s ``soc_dual`` and
+    ``energy_bound_dual`` say something specific about sign and about when they are zero. Both
+    statements are pinned here, because prose about a sign is exactly the thing that drifts:
+    a reader who takes ``soc_dual`` for "the value of an MWh" reads +45 where the field holds
+    -45, and one who takes ``energy_bound_dual`` for "0 unless the energy capacity binds" expects
+    0 in a period where this unit reports 45.
+
+    On AC-5's arbitrage horizon (eta_d = 0.9, LMP 10 then 50, E = 15 MWh):
+
+      * ``soc_dual`` carries the solver's row-dual sign, the negative of what an MWh is worth,
+        so it is negative in both periods and equals ``-eta_d * LMP`` = -45 at t=1. The *worth*
+        of an MWh there is ``-soc_dual`` = +45.
+      * ``energy_bound_dual`` is non-zero at **either** end of ``[0, energy_mwh]``: -33.89 at
+        t=0 where the unit is full, and +45 at t=1 where it is **empty** and 15 MWh below its
+        own capacity.
+    """
+    result = solve_multiperiod(_arbitrage_scenario())
+    assert result.status == "Optimal"
+    unit = [p.storage[0] for p in result.periods]
+    lmp = [p.buses[1].lmp for p in result.periods]
+    eta_discharge = 0.9
+
+    assert all(u.soc_dual < 0.0 for u in unit), [u.soc_dual for u in unit]
+    assert unit[1].soc_dual == pytest.approx(-eta_discharge * lmp[1], abs=1e-7)
+    assert -unit[1].soc_dual == pytest.approx(45.0, abs=1e-7)
+
+    assert unit[0].soc_mwh == pytest.approx(15.0, abs=1e-7)  # full: the energy cap binds
+    assert unit[0].energy_bound_dual == pytest.approx(-33.8888889, abs=1e-6)
+    assert unit[1].soc_mwh == pytest.approx(0.0, abs=1e-7)  # empty, 15 MWh below the cap
+    assert unit[1].energy_bound_dual == pytest.approx(45.0, abs=1e-7)
+
+
 def test_ac5_horizon_saving_equals_the_closed_form_profit() -> None:
     """AC-5, end to end: the generation cost storage removes from the system is exactly
     ``profit* = charge*(c_H*eta_c*eta_d - c_L) = 508.333333``."""
@@ -650,6 +683,35 @@ def test_a_load_absent_from_a_period_falls_back_to_its_own_p_mw() -> None:
     assert served[1] == pytest.approx({"lda": 30.0, "ldb": 70.0})
     dispatch = [p.generators[0].p_mw for p in result.periods]
     np.testing.assert_allclose(dispatch, [40.0, 100.0], atol=1e-7)
+
+
+def test_a_flat_case300_horizon_clears_and_matches_the_period_less_solve() -> None:
+    """The identity profile -- ``{ld.id: ld.p_mw}`` for every load, a horizon that changes
+    nothing -- on the one fixture that carries **negative** loads.
+
+    ``case300`` has eight of them (a net injection at a load bus), and ``Load.p_mw`` has no lower
+    bound, so this is where a ``Period`` range narrower than the field it overrides would show
+    up: ``market.multiperiod`` would raise a ``ValidationError`` building a flat horizon over a
+    network ``market.nodal`` clears without complaint. Each period must reproduce the
+    period-less solve, which is a different code path in the builder (``period_load_mw=None``
+    evaluates ``dc_opf``'s own fixed-load expression).
+    """
+    net = matpower.load(FIXTURES_DIR / "case300.m")
+    assert sum(1 for ld in net.loads if ld.p_mw < 0) == 8
+
+    identity = Period(load_p_mw={ld.id: ld.p_mw for ld in net.loads})
+    flat = solve_multiperiod(
+        Scenario(network=net, periods=[identity, identity.model_copy(deep=True)])
+    )
+    reference = solve_multiperiod(Scenario(network=net))
+
+    assert flat.status == "Optimal", flat.message
+    assert reference.status == "Optimal", reference.message
+    assert flat.n_periods == 2
+    assert flat.objective_cost == pytest.approx(2.0 * reference.objective_cost, rel=1e-12)
+    expected = [g.p_mw for g in reference.periods[0].generators]
+    for period in flat.periods:
+        np.testing.assert_allclose([g.p_mw for g in period.generators], expected, atol=1e-9)
 
 
 def test_a_period_override_moves_a_bid_loads_quantity_too() -> None:

@@ -4,16 +4,17 @@ Mirrors ``test_load_bid_scenario.py``'s discipline: construction, JSON round-tri
 dangling-reference / range invariants, each proved to actually fire rather than assumed.
 
 ``Period.load_p_mw`` is an id-keyed *override*, not a scale factor: a load id absent from the
-dict falls back to that ``Load``'s own ``p_mw`` (solver-side behaviour, out of scope for this
-slice -- nothing reads these fields yet, spec Design item 1 / Not Doing). ``Scenario.periods:
-list[Period] | None = None`` -- ``None`` means single-period, and must leave ``market.nodal``'s
-existing behaviour untouched (AC-4, discharged by a later slice); this file only proves the
-domain model itself is sound.
+dict falls back to that ``Load``'s own ``p_mw``. The solver-side half of that contract belongs
+to ``market.multiperiod`` and is proved in ``test_market_multiperiod.py``; this file proves the
+domain model itself is sound, including that the override's value range is exactly the range of
+the field it overrides. ``Scenario.periods: list[Period] | None = None`` -- ``None`` means
+single-period, and leaves ``market.nodal``'s existing behaviour untouched (AC-4).
 """
 
 import pytest
 from pydantic import ValidationError
 
+from mambo_power.io import matpower
 from mambo_power.model import (
     Bus,
     Generator,
@@ -23,6 +24,7 @@ from mambo_power.model import (
     Period,
     Scenario,
 )
+from tests._fixtures import FIXTURES_DIR
 
 
 def _slack() -> Bus:
@@ -57,16 +59,55 @@ def test_period_forbids_extra_fields() -> None:
         Period(load_p_mw={}, load_scale=1.5)  # type: ignore[call-arg]
 
 
-def test_period_rejects_negative_load_p_mw() -> None:
-    with pytest.raises(ValidationError):
-        Period(load_p_mw={"d1": -1.0})
-
-
 def test_period_accepts_zero_load_p_mw() -> None:
-    # Zero is a legitimate override (the load is fully curtailed that period); only negative
-    # values are rejected.
+    # Zero is a legitimate override: the load is fully curtailed that period.
     period = Period(load_p_mw={"d1": 0.0})
     assert period.load_p_mw["d1"] == 0.0
+
+
+def test_period_accepts_a_negative_load_p_mw() -> None:
+    """``Period.load_p_mw`` overrides ``Load.p_mw``, which has no lower bound, so it must accept
+    everything ``Load.p_mw`` accepts -- a negative load (a net injection at a load bus) included.
+
+    An override narrower than the field it overrides cannot express a network the model itself
+    is allowed to hold; :func:`test_the_case300_identity_profile_is_a_valid_scenario` is the
+    concrete fixture where that bites.
+    """
+    period = Period(load_p_mw={"d1": -1.0})
+    assert period.load_p_mw["d1"] == -1.0
+
+    net = _network_with_load(Load(id="d1", bus="b1", p_mw=-1.0, q_mvar=0.0))
+    scenario = Scenario(network=net, periods=[period])
+    assert scenario.periods is not None
+    assert scenario.periods[0].load_p_mw == {"d1": -1.0}
+
+
+def test_period_still_rejects_a_non_finite_load_p_mw() -> None:
+    """Dropping the sign rule does not drop ``allow_inf_nan=False``: no period has an infinite
+    or undefined demand, whatever its sign."""
+    for value in (float("inf"), float("-inf"), float("nan")):
+        with pytest.raises(ValidationError):
+            Period(load_p_mw={"d1": value})
+
+
+def test_the_case300_identity_profile_is_a_valid_scenario() -> None:
+    """``case300`` carries eight negative loads, so the identity profile -- a horizon that
+    changes nothing -- is the sharpest possible statement of the range rule above.
+
+    ``market.nodal`` clears this fixture; a ``Period`` range narrower than ``Load.p_mw``'s would
+    make ``market.multiperiod`` unable to express even a flat horizon over it.
+    """
+    net = matpower.load(FIXTURES_DIR / "case300.m")
+    negative = [ld.id for ld in net.loads if ld.p_mw < 0]
+    assert len(negative) == 8, negative
+
+    identity = Period(load_p_mw={ld.id: ld.p_mw for ld in net.loads})
+    scenario = Scenario(network=net, periods=[identity, identity.model_copy(deep=True)])
+
+    assert scenario.periods is not None
+    assert scenario.periods[0].load_p_mw["load-51"] == next(
+        ld.p_mw for ld in net.loads if ld.id == "load-51"
+    )
 
 
 # --- Scenario.periods: default, non-empty-if-present, JSON round-trip ----------------------

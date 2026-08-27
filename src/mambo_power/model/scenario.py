@@ -2,7 +2,7 @@
 
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mambo_power.model.network import Network
 
@@ -12,25 +12,27 @@ class Period(BaseModel):
 
     ``load_p_mw`` is an id-keyed **override** of each ``Load``'s ``p_mw`` for this period, not
     a scale factor: a load id absent from the dict falls back unchanged to that ``Load``'s own
-    ``p_mw`` (solver-side behaviour; nothing reads this field yet, wave M5 Design item 1). Every
-    key must resolve to a real ``Load`` id in the scenario's network — checked by
-    :class:`Scenario`, not here, since a bare ``Period`` has no network to check against — and
-    every value must be ``>= 0``.
+    ``p_mw``. :func:`mambo_power.market.multiperiod.solve_multiperiod` resolves it into that
+    period's fixed load *and*, for a load carrying a ``bid``, the upper bound of its elastic
+    column — ``Load.p_mw`` means both, so an override of it moves both. Every key must resolve to
+    a real ``Load`` id in the scenario's network, checked by :class:`Scenario` rather than here,
+    since a bare ``Period`` has no network to check against.
+
+    The value range is exactly ``Load.p_mw``'s, deliberately: an override may not be narrower
+    than the field it overrides, or a horizon could not express a load the network itself is
+    allowed to carry. ``Load.p_mw`` has no lower bound and ``case300`` ships eight **negative**
+    loads (a net injection at a load bus), so a ``>= 0`` rule here would reject even the
+    *identity* profile ``{ld.id: ld.p_mw for ld in case300.loads}`` — a horizon that changes
+    nothing — on a network ``market.nodal`` clears without complaint. ``allow_inf_nan=False``
+    still holds: a non-finite override is meaningless in any period.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=False, allow_inf_nan=False)
 
     load_p_mw: dict[str, float] = Field(
-        description="Per-load active-power override for this period, MW, keyed by Load id."
+        description="Per-load active-power override for this period, MW, keyed by Load id. The "
+        "same range as Load.p_mw, negatives included; must be finite."
     )
-
-    @field_validator("load_p_mw")
-    @classmethod
-    def _values_non_negative(cls, value: dict[str, float]) -> dict[str, float]:
-        negative = {load_id: p for load_id, p in value.items() if p < 0}
-        if negative:
-            raise ValueError(f"load_p_mw values must be >= 0, got {negative}")
-        return value
 
 
 class Scenario(BaseModel):

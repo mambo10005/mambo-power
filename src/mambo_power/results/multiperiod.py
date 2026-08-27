@@ -77,12 +77,16 @@ class StorageDispatchResult(BaseModel):
     discharge_mw: float = Field(description="Discharging power in this period, MW; >= 0.")
     soc_mwh: float = Field(description="State of charge at the *end* of this period, MWh.")
     soc_dual: float = Field(
-        description="Dual of the unit's SoC balance row for this period, $/MWh -- the marginal "
-        "value of one more MWh stored in this unit at the end of this period."
+        description="Dual of the unit's SoC balance row for this period, $/MWh, in the solver's "
+        "own row-dual sign: the *negative* of the marginal value of stored energy, so it is "
+        "negative wherever one more MWh in this unit is worth having (-LMP/efficiency_charge "
+        "while the unit charges on an interior column, -efficiency_discharge*LMP while it "
+        "discharges on one). The worth of an MWh is -soc_dual."
     )
     energy_bound_dual: float = Field(
-        description="Reduced cost of the unit's [0, energy_mwh] state-of-charge bound; 0 unless "
-        "the energy capacity binds."
+        description="Reduced cost of the unit's [0, energy_mwh] state-of-charge bound, non-zero "
+        "at either end of it: a unit sitting empty binds that bound as much as a unit sitting "
+        "full. 0 only when the state of charge is strictly between the two."
     )
     power_limit_dual: float = Field(
         description="Dual of the shared charge + discharge <= p_max_mw row; 0 unless the unit's "
