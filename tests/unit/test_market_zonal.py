@@ -173,8 +173,11 @@ here: 2.0e-14 MW of overload on case30 and 5.5e-10 MW on case300, with energy-ba
 COMPENSATION_ATOL = 1e-3
 """Closure of ``redispatch_payment + generation_cost_gap == value_zonal − value_final``, $/h.
 Measured: 6.1e-5 on the bid fixture and 2.6e-11 on the fixed-load one. The bid fixture's residual
-is float cancellation — the two bid values are ~3.0e5 $/h and differ by 0.94 — so the tolerance is
-pinned 16x above it and still three orders below the compensation term it must be able to see."""
+is *not* float cancellation between the two ~3.0e5 $/h bid values: the identity reduces exactly to
+``cost_final − cost_nodal`` (the test's own docstring derives it), and measured, the residual **is**
+that quantity to 0.0 — D1's generation-cost residual. So this tolerance is in practice a second,
+looser bound on D1: pinned 16x above the measurement and still three orders below the compensation
+term it must be able to see."""
 
 COMPENSATION_FLOOR = 0.5
 """Floor, $/h, on the compensation term where it is supposed to exist. Measured: 0.9411 on the bid
@@ -897,14 +900,31 @@ def test_ac5b_the_third_figure_is_the_curtailment_compensation(
     still hold with the compensation identically zero, which is exactly what the fixed-load case
     below shows (audit F4).
 
-    Measured on this build, with the right-hand side computed independently from the result's own
-    load rows and the network's bid curves:
+    Measured on this build, with the right-hand side built from the result's own load rows and
+    the network's bid curves:
 
     * bid fixture: ``+14.5134 + (−13.5723) = +0.94111`` against ``value_zonal − value_final =
-      +0.94105`` — 6.1e-5 apart on values of order 3.0e5 $/h, i.e. float cancellation;
+      +0.94105``, i.e. 6.05e-5 apart;
     * fixed load: ``+14.6367 + (−14.6367) = −2.6e-11`` against ``0`` exactly, because with no bid
       curve anywhere there is no curtailable value and the two genuinely independent quantities
       collapse to one.
+
+    **What that residual is, and what this test therefore cannot see.** The right-hand side is not
+    independent of the left. ``_served_bid_value`` calls ``_demand_value`` imported from
+    :mod:`mambo_power.market.zonal` — the same function production uses, fed the same numbers via
+    the result's own load rows — so the two value terms cancel bit-for-bit and the identity reduces
+    exactly to ``cost_final − cost_nodal``. Measured, ``(LHS − RHS) − (cost_final − cost_nodal)``
+    is **0.0 exactly** on both fixtures: the 6.05e-5 is D1's generation-cost residual, a physical
+    quantity, not float cancellation between two ~3.0e5 $/h bid values. Two consequences:
+
+    * ``_demand_value``, ``_generation_cost`` and ``load_bid_coeffs`` appear on both sides and
+      cancel, so **a wrong bid-curve evaluation is invisible to this test**. What it does catch is
+      ``redispatch_payment`` or ``generation_cost_gap`` combining the wrong terms — which is what
+      AC-5(b) claims, but it is not a check on the value arithmetic itself.
+    * A failure here may therefore be a defect in the **redispatch LP** rather than in the
+      settlement block this test is named after: if D1's cost clause ever degrades past
+      :data:`COMPENSATION_ATOL`, this test goes red with no settlement code involved. Read
+      ``test_ac4_the_redispatched_point_is_the_nodal_optimum`` before the settlement code.
     """
     net, result, _nodal = case30
     fixed_net, fixed_result, _fixed_nodal = case30_fixed_load
