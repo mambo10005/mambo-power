@@ -142,6 +142,16 @@ CASE300_FACE_IS_LOAD_BEARING_ATOL = 0.1
 of the disagreement is carried by the two at-rating-but-unpriced branches, which is what makes the
 face load-bearing rather than a set the fit did not need. 3x headroom."""
 
+CASE300_CONGESTION_ATOL = 0.5
+"""Sup-norm bound, $/MWh, on the two solves' **congestion** difference on case300. Measured:
+0.3188 — the whole degenerate face is 0.319 wide, so 0.5 is 1.6x headroom on the measurement, not
+a blanket LMP tolerance. Clauses 2 and 3 *locate* the difference and are least-squares fits, so
+they are invariant under any rescaling that keeps it in the same span; without this clause nothing
+bounds its **size** and the test is green with the chain's congestion component sign-flipped
+(2.69 $/MWh out on a 40 $/MWh system), doubled, x10 or zeroed. Together with
+:data:`CASE300_FACE_IS_LOAD_BEARING_ATOL` it brackets the difference in [0.1, 0.5], which is what
+"the disagreement is exactly the known degeneracy" means."""
+
 WELFARE_REL_TOL = 1e-9
 """``welfare_gap`` as a fraction of the welfare being compared. Measured: 1.37e-14 on case30 and
 8.28e-13 on case300, against welfare of order 3.0e5 and 1.8e6 $/h. Pinned relative, not absolute,
@@ -582,19 +592,23 @@ def test_ac4_case300_prices_agree_except_across_the_degenerate_face(
     to 0.319 $/MWh on a ~41 $/MWh system. The earlier form of this test asserted only ``priced ⊆
     at_rating`` from the chain's own primal and dual rows — that is complementary slackness, which
     every optimal solve satisfies including one that landed on the wrong point, so it could not
-    distinguish agreement from a defect (audit F2). Three clauses replace it, and all three read a
-    **second, independent** solve:
+    distinguish agreement from a defect (audit F2). Four clauses replace it, and every one of
+    them reads a **second, independent** solve:
 
     1. **The energy components agree** to :data:`CASE300_ENERGY_ATOL`. Degeneracy is freedom in the
        *dual of the flow rows*; the balance dual is the system-wide price level and every vertex of
        the optimal face shares it. This is the price comparison case300 was missing.
-    2. **The congestion difference is confined to the at-rating branches** — re-expressible as flow
+    2. **The congestion difference is no wider than the face itself**, to
+       :data:`CASE300_CONGESTION_ATOL` in sup-norm. Clauses 3 and 4 say *where* the difference
+       lives; they are least-squares fits and cannot see its magnitude, so this clause is what
+       stops a defect that scales, flips or erases the whole congestion component from passing.
+    3. **The congestion difference is confined to the at-rating branches** — re-expressible as flow
        duals on those seven alone, to :data:`CASE300_DEGENERATE_FACE_ATOL` in a 300-dimensional
        space. Prices differ *only* in how a fixed amount of congestion is attributed among branches
        that are all genuinely binding.
-    3. **The unpriced part of that face carries the disagreement.** Refit over the branches the
+    4. **The unpriced part of that face carries the disagreement.** Refit over the branches the
        chain actually prices and at least :data:`CASE300_FACE_IS_LOAD_BEARING_ATOL` of the
-       difference survives — so clause 2 is a real constraint on where the difference lives, not a
+       difference survives — so clause 3 is a real constraint on where the difference lives, not a
        subspace large enough to absorb anything. Measured, the fit puts −0.319 $/MWh on
        ``branch-48`` and −0.319 on ``branch-360``: one solve prices the pair one way round and the
        other the other way, which is the degeneracy, named.
@@ -622,7 +636,7 @@ def test_ac4_case300_prices_agree_except_across_the_degenerate_face(
     assert priced <= at_rating, f"priced but not at rating: {sorted(priced - at_rating)}"
     assert len(at_rating) > len(priced), (
         "expected strictly more at-rating branches than priced ones -- that inequality *is* the "
-        f"degeneracy A20 records, and clause 3 below has nothing to measure without it; got "
+        f"degeneracy A20 records, and clause 4 below has nothing to measure without it; got "
         f"{len(at_rating)} at rating and {len(priced)} priced"
     )
 
@@ -630,12 +644,18 @@ def test_ac4_case300_prices_agree_except_across_the_degenerate_face(
         [chain[i].congestion - reference[i].congestion for i in bus_ids], dtype=float
     )
     assert np.max(np.abs(difference)) > CASE300_FACE_IS_LOAD_BEARING_ATOL, (
-        "the two solves' congestion components agree on this build -- clauses 2 and 3 are then "
+        "the two solves' congestion components agree on this build -- clauses 3 and 4 are then "
         "vacuous and AC-4's price clause should simply be asserted flat on case300"
     )
 
-    # 2. the disagreement lives on the at-rating branches, and
-    # 3. specifically on the ones neither solve had to price.
+    # 2. and it is no wider than the face is.
+    assert np.max(np.abs(difference)) <= CASE300_CONGESTION_ATOL, (
+        "the congestion components differ by more than the measured degenerate face is wide -- "
+        "that is a price defect, not the known degeneracy"
+    )
+
+    # 3. the disagreement lives on the at-rating branches, and
+    # 4. specifically on the ones neither solve had to price.
     assert (
         _congestion_residual_off(difference, ptdf_matrix, at_rating_rows)
         <= CASE300_DEGENERATE_FACE_ATOL
@@ -645,7 +665,7 @@ def test_ac4_case300_prices_agree_except_across_the_degenerate_face(
         _congestion_residual_off(difference, ptdf_matrix, priced_rows)
         > CASE300_FACE_IS_LOAD_BEARING_ATOL
     ), (
-        "the priced branches alone reproduce the difference -- then clause 2 says nothing about "
+        "the priced branches alone reproduce the difference -- then clause 3 says nothing about "
         "the degenerate face and this test is fitting noise"
     )
 
