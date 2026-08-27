@@ -23,7 +23,23 @@ capacity.
 S4's own sabotage sweep (record/wave-05-multiperiod.plan.md Assumption A10) found that swapping
 ``eta_charge``/``eta_discharge`` in the SoC row was a silent no-op on every one of its fixtures,
 because every one of them had ``eta_c == eta_d``; using distinct values here is what lets a
-transposition sabotage on this fixture actually fail.
+transposition sabotage on this fixture actually fail. **Measured, not hoped for**: transposing
+the two coefficients in the engine's own SoC row moves
+``tests/parity/test_market_multiperiod_vs_pypsa.py``'s state-of-charge comparison by 5.088e-2 MWh
+against its 1e-2 tolerance, and that module's own
+``test_the_fixture_can_tell_which_efficiency_is_which`` keeps the margin asserted.
+
+Two things about that proof belong here, because both have already misled a reader of this
+module. First, **the transposition is invisible to every comparison except the SoC one**:
+``eta_c * eta_d`` is symmetric, so a transposed engine converts grid-in to grid-out at the same
+ratio and -- no SoC bound binding on that fixture -- chooses the same charge/discharge schedule.
+A sabotage sweep reporting only dispatch and net-power residuals will see nothing and conclude,
+wrongly, that the fixture is powerless here. Second, **transposing the two constants in this
+module is not a sabotage at all**: :func:`storage_for_network`'s unit is handed to *both* engines
+-- ``mambo_power``'s own ``Storage`` and the oracle's ``efficiency_store``/``efficiency_dispatch``
+-- so swapping them relabels both sides of the comparison at once. That is a no-op by
+construction, as it would be for any parity fixture however strong, and it says nothing about
+this one. The sabotage that means something goes on the engine, not on this file.
 
 **Siting.** :func:`storage_for_network` places the unit, by default, at the bus carrying the
 largest aggregate load in ``net`` (summed over every load at that bus) -- a deterministic,

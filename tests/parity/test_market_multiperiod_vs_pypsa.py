@@ -81,7 +81,23 @@ STORAGE_ABS_TOL_MW = 1e-2
 """Margin over the measured worst-case net storage-power (discharge - charge) residual,
 1.10e-4 MW."""
 SOC_ABS_TOL_MWH = 1e-2
-"""Margin over the measured worst-case state-of-charge residual, 1.25e-4 MWh."""
+"""Margin over the measured worst-case state-of-charge residual, 1.25e-4 MWh.
+
+**This is the tolerance that carries the efficiency-orientation proof, and loosening it would
+cost the wave that proof.** Transposing ``eta_charge``/``eta_discharge`` in the engine's own SoC
+row (``mambo_power.opf.multiperiod``, tier 3) leaves the objective, the generator dispatch, the
+net storage power and the LMPs *all* comfortably inside their own tolerances here -- the
+round-trip product is symmetric, so the grid-side charge/discharge schedule is invariant under
+the transposition -- and moves the SoC trajectory alone, by a measured **5.088e-2 MWh** against
+this 1e-2. That sabotage, run against this file unmodified, returns ``1 failed, 9 passed`` with
+:func:`test_soc_matches_pypsa_every_period` the single failure.
+:func:`test_the_fixture_can_tell_which_efficiency_is_which` pins the margin from the fixture's
+own solved dispatch so that it cannot quietly evaporate."""
+TRANSPOSITION_SIGNAL_MIN_MWH = 3e-2
+"""Floor under the measured transposition signal, 5.10e-2 MWh
+(:func:`test_the_fixture_can_tell_which_efficiency_is_which`), and itself 3x
+:data:`SOC_ABS_TOL_MWH` -- so the fixture's detection power fails loudly, with a named number,
+before the detection itself goes silent."""
 LMP_ABS_TOL = 1e-3
 """Margin over the measured worst-case per-bus, per-period LMP residual, 4.24e-5 $/MWh."""
 SIMULTANEITY_ABS_TOL_MW = 1e-6
@@ -198,7 +214,14 @@ def _run_pypsa_oracle(
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         status, cond = n.optimize(solver_name="highs")
-    obj = float(n.objective) + c0_sum if status == "ok" else float("nan")
+    # PyPSA has no constant-term concept at all (``marginal_cost`` and
+    # ``marginal_cost_quadratic`` only), so our own convention -- gencost's ``c0`` is a cost per
+    # *hour*, charged once in every period (``objective_cost``, verified directly at T in
+    # {1, 2, 5, 24}) -- has to be added back here, ``len(periods)`` times and not once.
+    # Currently inert either way: every gencost file in ``fixtures/`` carries ``c0 == 0.0``
+    # exactly on all 5 OPF cases (measured), so this multiplication is what a future
+    # ``c0``-bearing fixture needs rather than something this fixture exercises.
+    obj = float(n.objective) + len(periods) * c0_sum if status == "ok" else float("nan")
     return n, status, cond, obj
 
 
@@ -333,6 +356,51 @@ def test_ramp_and_storage_are_both_genuinely_engaged(case: Case) -> None:
     )
     assert ramp_binds, "gen-1's ramp row never binds -- the fixture cannot test the ramp term"
     assert storage_moves, "storage never moves -- the fixture cannot test the storage term"
+
+
+def test_the_fixture_can_tell_which_efficiency_is_which(case: Case) -> None:
+    """The fixture-power precondition behind :data:`SOC_ABS_TOL_MWH`: this fixture distinguishes
+    ``eta_charge`` from ``eta_discharge``, not merely their product.
+
+    ``test_ramp_and_storage_are_both_genuinely_engaged`` only requires storage to move *at all*
+    (> 1e-6 MW). That is far too weak to carry efficiency orientation, because the transposition
+    is invisible to four of this module's five comparisons: ``eta_c * eta_d == eta_d * eta_c``, so
+    a transposed engine converts grid-in to grid-out at exactly the same ratio and -- with no SoC
+    bound and no energy cap binding on this fixture -- picks the *same* charge/discharge schedule.
+    The objective, the dispatch, the net storage power and the LMPs therefore all agree. What
+    moves is the SoC trajectory, and only the SoC trajectory.
+
+    So the detectable signal is a closed form in the fixture's own solved schedule::
+
+        soc_transposed[t] - soc_true[t]
+            = sum_{tau <= t} [ (eta_d - eta_c) * charge[tau]
+                               - (1/eta_c - 1/eta_d) * discharge[tau] ]
+
+    Its worst-case magnitude is what has to clear :data:`SOC_ABS_TOL_MWH`, and it is proportional
+    to the unit's *throughput*: the same 0.92/0.88 efficiencies on a horizon where the unit sat
+    idle would leave the transposition genuinely undetectable. Measured here: **5.10e-2 MWh**
+    predicted from the frozen schedule, against **5.088e-2 MWh** actually observed when the
+    engine's tier-3 SoC row is transposed and this whole module re-run -- agreement to 0.3%, and
+    5.1x over the tolerance that catches it.
+    """
+    unit = case.unit
+    eta_c, eta_d = unit.efficiency_charge, unit.efficiency_discharge
+    assert eta_c != eta_d, "equal efficiencies make the transposition a no-op by construction"
+
+    charge = np.array([p.storage[0].charge_mw for p in case.ours.periods])
+    discharge = np.array([p.storage[0].discharge_mw for p in case.ours.periods])
+    soc0 = unit.soc_initial * unit.energy_mwh
+
+    soc_true = soc0 + np.cumsum(eta_c * charge - discharge / eta_d)
+    soc_transposed = soc0 + np.cumsum(eta_d * charge - discharge / eta_c)
+
+    # the closed form must first be shown to be the engine's own SoC, or it proves nothing
+    reported = np.array([p.storage[0].soc_mwh for p in case.ours.periods])
+    assert np.abs(reported - soc_true).max() <= 1e-9, np.abs(reported - soc_true).max()
+
+    signal = float(np.abs(soc_true - soc_transposed).max())
+    assert signal >= TRANSPOSITION_SIGNAL_MIN_MWH, (signal, charge.sum(), discharge.sum())
+    assert signal > SOC_ABS_TOL_MWH, (signal, SOC_ABS_TOL_MWH)
 
 
 # --- the oracle itself must actually have solved ------------------------------------------------
