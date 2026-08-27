@@ -48,9 +48,11 @@ print("round trip gives", type(typed.result).__name__, end="; ")
 print("equal to the direct run:", typed.result.buses == dc.result.buses)
 
 # --- 3. Failures are structured results ----------------------------------------------------
-# A deliberately fictional kind, not a real-but-unbuilt one: `market.zonal` stood here until
-# it was registered, at which point this example stopped demonstrating an unknown kind.
-unknown = jobs.run(jobs.SolveRequest(kind="pf.telepathy", network=net))
+# `market.zonal` stood here until it was registered, at which point this example stopped
+# demonstrating an unknown kind and the assertion below failed.  `market.agents` is the next
+# still-unregistered kind (see the Jobs API manual page's own `kind` row), and the wave that
+# registers it must move this line, `docs/manual/jobs.md` and `tests/unit/test_jobs.py` together.
+unknown = jobs.run(jobs.SolveRequest(kind="market.agents", network=net))
 assert unknown.error is not None
 print("\nunknown kind ->", unknown.status, unknown.error.code, "|", unknown.error.message)
 
