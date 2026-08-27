@@ -11,3 +11,8 @@ build/
 site/
 .env
 .env.*
+
+# Windows/git-bash crash dumps and local tool state — recur in the main checkout each wave
+# (M3, M4 and M5 each swept these by hand; M4's continuation record asked for this entry).
+*.stackdump
+.playwright-cli/
