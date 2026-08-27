@@ -36,6 +36,7 @@ from mambo_power.model import (
     Load,
     Network,
     Period,
+    PolynomialBid,
     PolynomialCost,
     Scenario,
     Shunt,
@@ -649,6 +650,66 @@ def test_a_load_absent_from_a_period_falls_back_to_its_own_p_mw() -> None:
     assert served[1] == pytest.approx({"lda": 30.0, "ldb": 70.0})
     dispatch = [p.generators[0].p_mw for p in result.periods]
     np.testing.assert_allclose(dispatch, [40.0, 100.0], atol=1e-7)
+
+
+def test_a_period_override_moves_a_bid_loads_quantity_too() -> None:
+    """A ``Period.load_p_mw`` override on a **bid-carrying** load must move that load's served
+    quantity, exactly as it does for a load with no bid.
+
+    ``Load.p_mw`` means two things at once: a fixed load's whole demand, and an elastic load's
+    *maximum served quantity* (``Load.bid``'s own field description -- the bid "covers this
+    Load's entire p_mw"). ``Period.load_p_mw`` overrides ``p_mw``, so it has to move both. The
+    failure this pins is a silent one: the period value is subtracted from the fixed-load total
+    while the elastic column's bound stays at the network's base ``p_mw``, and the two cancel
+    exactly, leaving the bid load flat across the whole horizon while its non-bidding neighbour
+    tracks the profile.
+
+    Both loads sit at b2 behind an unrated branch, so nothing but the profile can move them:
+
+      g1: c1 = 10, [0, 500]        LMP is 10 $/MWh in every period
+      ld_bid:   p_mw = 100, flat linear bid at 80 $/MWh -- 80 > 10, so it is a price taker and
+                clears at its own upper bound in every period, whatever that bound is
+      ld_fixed: p_mw = 50, no bid  -- must-serve at whatever the period says
+      profile:  x0.8 then x1.2 on both
+
+    so served demand is [80, 120] and [40, 60], and g1 covers the sum: [120, 180].
+    """
+    net = Network(
+        base_mva=100.0,
+        buses=[Bus(id="b1", base_kv=138.0, type="slack"), Bus(id="b2", base_kv=138.0, type="pq")],
+        branches=[Branch(id="br12", from_bus="b1", to_bus="b2", r=0.0, x=0.1, b=0.0)],
+        generators=[_gen("g1", "b1", 0.0, 500.0, 10.0)],
+        loads=[
+            Load(
+                id="ld_bid",
+                bus="b2",
+                p_mw=100.0,
+                q_mvar=0.0,
+                bid=PolynomialBid(coefficients=[0.0, 80.0, 0.0]),
+            ),
+            Load(id="ld_fixed", bus="b2", p_mw=50.0, q_mvar=0.0),
+        ],
+    )
+    scenario = Scenario(
+        network=net,
+        periods=[
+            Period(load_p_mw={"ld_bid": 80.0, "ld_fixed": 40.0}),
+            Period(load_p_mw={"ld_bid": 120.0, "ld_fixed": 60.0}),
+        ],
+    )
+
+    result = solve_multiperiod(scenario)
+
+    assert result.status == "Optimal"
+    served = [{ld.id: ld.p_mw for ld in p.loads} for p in result.periods]
+    assert served[0] == pytest.approx({"ld_bid": 80.0, "ld_fixed": 40.0}, abs=1e-7)
+    assert served[1] == pytest.approx({"ld_bid": 120.0, "ld_fixed": 60.0}, abs=1e-7)
+    # the bid load must not simply sit at its own base p_mw in both periods (the bug's signature)
+    assert served[0]["ld_bid"] != pytest.approx(100.0, abs=1e-3)
+    assert served[1]["ld_bid"] != pytest.approx(100.0, abs=1e-3)
+    np.testing.assert_allclose(
+        [p.generators[0].p_mw for p in result.periods], [120.0, 180.0], atol=1e-7
+    )
 
 
 def test_generator_ramp_limits_are_read_off_the_model() -> None:

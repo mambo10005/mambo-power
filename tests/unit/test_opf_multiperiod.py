@@ -708,6 +708,324 @@ def test_single_period_matches_dc_opf_on_a_real_fixture(case: str) -> None:
     assert single.objective_cost == reference.objective_cost
 
 
+# --- period-varying elastic demand, and the PWL paths at T > 1 ---------------------------------
+#
+# Everything below exists because the T=1 reductions above cannot see it: at T=1 the second-tier
+# column base is ``n_dispatch_total + 0 * per_period_free``, every ``gen_cols[t]`` is
+# ``gen_cols[0]``, and every per-unit stride is a stride of one period, so a whole family of
+# index arithmetic is exercised only from T >= 2.
+
+
+def _scaled_loads(net: Network, factor: float) -> Network:
+    """A copy of ``net`` with every ``Load.p_mw`` multiplied by ``factor``, nothing else touched.
+
+    The reference path for an *uncoupled* horizon: with no storage and no ramp limit, period
+    ``t`` of a ``T``-period solve is a standalone ``dc_opf`` on the network whose loads are that
+    period's own, and ``dc_opf`` is a separate builder reached through a separate call.
+    """
+    out = net.model_copy(deep=True)
+    for load in out.loads:
+        load.p_mw = load.p_mw * factor
+    return out
+
+
+def _profile(net: Network, arr: NetworkArrays, factors: tuple[float, ...]) -> np.ndarray:
+    """``(T, n_load)`` MW in ``NetworkArrays.load_ids`` order — ``factors[t]`` x the base load."""
+    loads_by_id = {load.id: load for load in net.loads}
+    base = np.array([loads_by_id[load_id].p_mw for load_id in arr.load_ids], dtype=np.float64)
+    return np.array([factor * base for factor in factors], dtype=np.float64)
+
+
+def _elastic_network(p_mw: float = 100.0, fixed_mw: float | None = 50.0) -> Network:
+    """b1 (slack, one 10 $/MWh generator) — unrated br12 — b2 carrying the elastic load."""
+    loads = [Load(id="elastic", bus="b2", p_mw=p_mw, q_mvar=0.0)]
+    if fixed_mw is not None:
+        loads.append(Load(id="fixed", bus="b2", p_mw=fixed_mw, q_mvar=0.0))
+    return Network(
+        base_mva=100.0,
+        buses=[Bus(id="b1", base_kv=138.0, type="slack"), Bus(id="b2", base_kv=138.0, type="pq")],
+        branches=[Branch(id="br12", from_bus="b1", to_bus="b2", r=0.0, x=0.1, b=0.0)],
+        generators=[_gen("g1", "b1", 0.0, 500.0)],
+        loads=loads,
+    )
+
+
+def test_a_period_profile_moves_an_elastic_columns_upper_bound() -> None:
+    """An elastic load's column bound is **that period's** demand, not the network's base
+    ``Load.p_mw``.
+
+    ``Load.p_mw`` is an elastic load's maximum served quantity, and ``period_load_mw`` overrides
+    it, so it has to move that column's upper bound as well as the fixed-load total. The two
+    cancel exactly if only the total moves, which makes the failure silent: the bidding load
+    sits flat at its base ``p_mw`` across the whole horizon while the profile appears to work
+    perfectly on every load that does *not* bid.
+
+    Hand-derived: one 10 $/MWh generator at the slack, one elastic load at b2 bidding a flat
+    80 $/MWh — 80 > 10, so it is a price taker and clears at whatever its own bound is — and one
+    ordinary load beside it. Profile x0.8 then x1.2 on both, so the elastic load must serve 80
+    then 120 MW and the fixed one 40 then 60.
+    """
+    net = _elastic_network()
+    arr = NetworkArrays.from_network(net)
+    elastic = arr.load_ids.index("elastic")
+
+    sol = multiperiod_dc_opf(
+        arr,
+        _linear_costs([10.0]),
+        2,
+        period_load_mw=_profile(net, arr, (0.8, 1.2)),
+        demand_bid_coeffs={elastic: (0.0, 80.0, 0.0)},
+    )
+
+    assert sol.status == "Optimal"
+    np.testing.assert_allclose(sol.demand_dispatch_mw, [[80.0], [120.0]], atol=1e-7)
+    np.testing.assert_allclose(sol.dispatch_mw, [[120.0], [180.0]], atol=1e-7)
+
+
+def test_pwl_generator_costs_are_period_specific_at_t2() -> None:
+    """``pwl_costs`` at T=2: each period gets its **own** epigraph rows over its **own**
+    generator and ``cost_g`` columns.
+
+    ``case14_pwl.m``'s piecewise generators reach ``multiperiod_dc_opf`` only at T=1 anywhere
+    else in this suite, where ``t * per_period_free`` is 0 and every ``gen_cols[t]`` is
+    ``gen_cols[0]`` — so the tier-2 column stride and the per-period epigraph wiring are both
+    invisible there. Here they are not.
+
+    Oracle: with no storage and no ramp limit the horizon is *uncoupled*, so it must equal two
+    independent ``dc_opf`` solves on the networks carrying each period's own loads — a separate
+    builder reached through a separate call, not a readback of this one. ``case14_pwl``'s own
+    module docstring records a genuine LP tie between gen-2's and gen-3's 30 $/MWh segments, so
+    the per-generator split is not unique; total cost, the price, and each period's total
+    dispatch are, and those are what is asserted.
+    """
+    net = matpower.load(FIXTURES_DIR / "derived" / "case14_pwl.m")
+    arr = NetworkArrays.from_network(net)
+    coeffs, pwl = gen_cost_coeffs(net, arr)
+    assert pwl, "case14_pwl must carry piecewise generator costs for this test to mean anything"
+    factors = (0.9, 1.15)
+
+    horizon = multiperiod_dc_opf(
+        arr, coeffs, 2, period_load_mw=_profile(net, arr, factors), pwl_costs=pwl
+    )
+    assert horizon.status == "Optimal"
+    assert horizon.duals is not None
+
+    references = []
+    for factor in factors:
+        scaled = _scaled_loads(net, factor)
+        scaled_arr = NetworkArrays.from_network(scaled)
+        scaled_coeffs, scaled_pwl = gen_cost_coeffs(scaled, scaled_arr)
+        reference = dc_opf(scaled_arr, scaled_coeffs, OpfDcOptions(), pwl_costs=scaled_pwl)
+        assert reference.status == "Optimal"
+        references.append(reference)
+
+    assert horizon.objective_cost == pytest.approx(
+        sum(r.objective_cost for r in references), abs=1e-6
+    )
+    for t, reference in enumerate(references):
+        assert reference.duals is not None
+        assert horizon.duals.balance[t] == pytest.approx(reference.duals.balance, abs=1e-7)
+        assert horizon.dispatch_mw[t].sum() == pytest.approx(reference.dispatch_mw.sum(), abs=1e-6)
+    # and the profile really did move the periods apart, so the equality above has content
+    assert horizon.dispatch_mw[1].sum() > horizon.dispatch_mw[0].sum() + 1.0
+
+
+BID_POINTS = [(0.0, 0.0), (40.0, 3200.0), (100.0, 3500.0)]
+"""A 2-segment concave bid: marginal value 80 $/MWh on [0, 40], then 5 $/MWh on [40, 100]."""
+
+
+def test_pwl_demand_bids_are_period_specific_at_t2() -> None:
+    """``demand_pwl_bids`` at T=2 — the argument nothing else in this repository passes to this
+    builder at all, so its per-period hypograph rows and its ``val_d`` column stride are
+    otherwise unexercised.
+
+    Hand-derived on the same two-bus network (one 10 $/MWh generator, unrated branch, so the
+    price is 10 $/MWh in both periods). The bid's first segment is worth 80 $/MWh and its second
+    only 5, so the load wants exactly ``min(bound, 40)`` MW:
+
+      * period 0, bound 30 MW -> its own bound binds -> 30 MW served
+      * period 1, bound 90 MW -> the *bid* binds     -> 40 MW served
+
+    Both regimes on one horizon, and the two periods' answers are formed by different rows —
+    which is exactly what a hypograph row pinned to period 0 cannot reproduce.
+    """
+    net = _elastic_network(fixed_mw=None)
+    arr = NetworkArrays.from_network(net)
+    bids = {arr.load_ids.index("elastic"): BID_POINTS}
+
+    sol = multiperiod_dc_opf(
+        arr,
+        _linear_costs([10.0]),
+        2,
+        period_load_mw=np.array([[30.0], [90.0]]),
+        demand_pwl_bids=bids,
+    )
+
+    assert sol.status == "Optimal"
+    np.testing.assert_allclose(sol.demand_dispatch_mw, [[30.0], [40.0]], atol=1e-7)
+    np.testing.assert_allclose(sol.dispatch_mw, [[30.0], [40.0]], atol=1e-7)
+    assert sol.objective_cost == pytest.approx(10.0 * 70.0, abs=1e-7)
+
+    # the same uncoupled-horizon oracle as the generator-side test: period t must equal a
+    # standalone dc_opf on the network carrying that period's own load.
+    for t, p_mw in enumerate((30.0, 90.0)):
+        scaled_arr = NetworkArrays.from_network(_scaled_loads(net, p_mw / 100.0))
+        reference = dc_opf(scaled_arr, _linear_costs([10.0]), OpfDcOptions(), demand_pwl_bids=bids)
+        assert reference.status == "Optimal"
+        np.testing.assert_allclose(
+            sol.demand_dispatch_mw[t], reference.demand_dispatch_mw, atol=1e-7
+        )
+
+
+# --- heterogeneous units: the per-unit strides every other fixture in this module hides --------
+#
+# Every other storage-bearing network here has exactly one storage unit, and every ramped network
+# exactly one ramped generator, so ``np.tile(x, T)`` and ``np.repeat(x, T)`` are the *same array*
+# and a per-unit/per-period transposition in the tier-4 or tier-6 bounds cannot be observed at
+# all. The two networks below carry two genuinely different units of each kind.
+
+
+def _hetero_storage_network() -> Network:
+    """Two storage units differing in power, energy **and** efficiency, both at b2.
+
+    b1 (slack): gcheap c1=10 [0, 60]; gexp c1=50 [0, 200]. br12 unrated.
+    b2: ld2 (profile [20, 100, 20]); st_small P=10 E=10 eta=0.8/0.8; st_big P=30 E=30 eta=1/1.
+    """
+    return Network(
+        base_mva=100.0,
+        buses=[Bus(id="b1", base_kv=138.0, type="slack"), Bus(id="b2", base_kv=138.0, type="pq")],
+        branches=[Branch(id="br12", from_bus="b1", to_bus="b2", r=0.0, x=0.1, b=0.0)],
+        generators=[_gen("gcheap", "b1", 0.0, 60.0), _gen("gexp", "b1", 0.0, 200.0)],
+        loads=[Load(id="ld2", bus="b2", p_mw=20.0, q_mvar=0.0)],
+        storage=[
+            Storage(
+                id="st_small",
+                bus="b2",
+                p_max_mw=10.0,
+                energy_mwh=10.0,
+                soc_initial=0.0,
+                efficiency_charge=0.8,
+                efficiency_discharge=0.8,
+            ),
+            Storage(
+                id="st_big",
+                bus="b2",
+                p_max_mw=30.0,
+                energy_mwh=30.0,
+                soc_initial=0.0,
+                efficiency_charge=1.0,
+                efficiency_discharge=1.0,
+            ),
+        ],
+    )
+
+
+def test_two_storage_units_keep_their_own_power_limits() -> None:
+    """Hand derivation, written before this network was ever solved.
+
+    Charging at t0 pays only while it displaces ``gexp`` at t1. ``gcheap`` has 40 MW of headroom
+    at t0 (60 - 20), so 40 MW of charging is available at 10 $/MWh and the 41st MW would cost
+    50 $/MWh to store *and* 50 $/MWh to replace — never worth it. 40 MW is exactly what the two
+    units can take together: st_big at its 30 MW rating (which fills its 30 MWh in one period at
+    eta=1) and st_small at its 10 MW rating (storing 8 MWh at eta_c=0.8). The split is not free:
+    st_big is strictly the better unit and is already at both of its own caps, so st_small takes
+    the remainder.
+
+        t0  gcheap 60, gexp 0;   charge [10, 30];  soc [8, 30]
+        t1  discharge [6.4, 30] = 36.4 MW;  gcheap 60;  gexp = 100 - 60 - 36.4 = 3.6
+        t2  gcheap 20, gexp 0; both units are already empty, which is what the cyclic row wants
+        objective = 10*(60 + 60 + 20) + 50*3.6 = 1580
+
+    A tier-4 bound transposed across units (``np.tile`` -> ``np.repeat``) hands st_big
+    st_small's 10 MW rating at t0, capping the charge that drives every number above.
+    """
+    net = _hetero_storage_network()
+    arr = NetworkArrays.from_network(net)
+    assert arr.storage_ids == ["st_small", "st_big"]
+
+    sol = multiperiod_dc_opf(
+        arr,
+        _linear_costs([10.0, 50.0]),
+        3,
+        period_load_mw=np.array([[20.0], [100.0], [20.0]]),
+    )
+
+    assert sol.status == "Optimal"
+    np.testing.assert_allclose(
+        sol.storage_charge_mw, [[10.0, 30.0], [0.0, 0.0], [0.0, 0.0]], atol=1e-7
+    )
+    np.testing.assert_allclose(
+        sol.storage_discharge_mw, [[0.0, 0.0], [6.4, 30.0], [0.0, 0.0]], atol=1e-7
+    )
+    np.testing.assert_allclose(
+        sol.storage_soc_mwh, [[8.0, 30.0], [0.0, 0.0], [0.0, 0.0]], atol=1e-7
+    )
+    np.testing.assert_allclose(sol.dispatch_mw, [[60.0, 0.0], [60.0, 3.6], [20.0, 0.0]], atol=1e-7)
+    assert sol.objective_cost == pytest.approx(1580.0, abs=1e-6)
+
+
+def _hetero_ramp_network() -> Network:
+    """Three generators at the slack bus, two of them ramp-limited and *differently* so.
+
+    gA c1=10 [0, 100] up 20 / down 30; gB c1=20 [0, 100] up 5 / down 8; gC c1=99 [0, 500] with
+    no ramp data at all (so it gets no ramp row, and is the filler that keeps every period
+    feasible). One load at b2 behind an unrated branch, profile [0, 100, 200, 20].
+    """
+    return Network(
+        base_mva=100.0,
+        buses=[Bus(id="b1", base_kv=138.0, type="slack"), Bus(id="b2", base_kv=138.0, type="pq")],
+        branches=[Branch(id="br12", from_bus="b1", to_bus="b2", r=0.0, x=0.1, b=0.0)],
+        generators=[
+            _gen("gA", "b1", 0.0, 100.0, ramp_up_mw=20.0, ramp_down_mw=30.0),
+            _gen("gB", "b1", 0.0, 100.0, ramp_up_mw=5.0, ramp_down_mw=8.0),
+            _gen("gC", "b1", 0.0, 500.0),
+        ],
+        loads=[Load(id="ld2", bus="b2", p_mw=20.0, q_mvar=0.0)],
+    )
+
+
+def test_two_ramped_generators_keep_their_own_ramp_limits() -> None:
+    """Hand derivation, written before this network was ever solved, period by period.
+
+        t0  load 0   -> every generator is at 0: generation is non-negative and must sum to 0.
+        t1  load 100 -> gA <= 0 + 20 and gB <= 0 + 5, and both are cheaper than gC, so both go
+                        to their own ramp ceiling: gA 20, gB 5, gC 75.
+        t2  load 200 -> the same argument one period on: gA 40, gB 10, gC 150.
+        t3  load 20  -> now the ramp-*down* rows bind: gA >= 40 - 30 = 10, gB >= 10 - 8 = 2. gC
+                        is 89 $/MWh dearer than gA and 79 than gB, so the 20 MW goes to gA down
+                        to gB's own floor: gA 18, gB 2, gC 0.
+
+        objective = (10*20 + 20*5 + 99*75) + (10*40 + 20*10 + 99*150) + (10*18 + 20*2)
+                  = 7725 + 15450 + 220 = 23395
+
+    Holding t2's units at their ceilings is right despite t3's floors: dropping gB 1 MW at t2
+    would save 10 $ at t3 (gA displacing gB) and cost 79 $ at t2 (gC displacing gB).
+
+    A tier-6 bound transposed across generators (``np.tile`` -> ``np.repeat``) gives gB gA's
+    20 MW ramp-up at t1 and gA gB's 5 MW at t2, moving every number above.
+    """
+    net = _hetero_ramp_network()
+    arr = NetworkArrays.from_network(net)
+    assert arr.gen_ids == ["gA", "gB", "gC"]
+
+    sol = multiperiod_dc_opf(
+        arr,
+        _linear_costs([10.0, 20.0, 99.0]),
+        4,
+        period_load_mw=np.array([[0.0], [100.0], [200.0], [20.0]]),
+        ramp_up_mw=_ramp_arrays([20.0, 5.0, None], 3),
+        ramp_down_mw=_ramp_arrays([30.0, 8.0, None], 3),
+    )
+
+    assert sol.status == "Optimal"
+    np.testing.assert_allclose(
+        sol.dispatch_mw,
+        [[0.0, 0.0, 0.0], [20.0, 5.0, 75.0], [40.0, 10.0, 150.0], [18.0, 2.0, 0.0]],
+        atol=1e-7,
+    )
+    assert sol.objective_cost == pytest.approx(23395.0, abs=1e-6)
+
+
 # --- input validation --------------------------------------------------------------------------
 
 

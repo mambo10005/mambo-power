@@ -80,9 +80,15 @@ never part of :class:`MultiperiodDuals`' shape.
   Not configurable: M5's scope answer 2 is "cyclic", and a free or fixed-target end state would be
   a third code path this wave deliberately does not ship.
 
-**Period-varying data.** Only the *fixed load* varies by period (``period_load_mw``), matching
-:class:`~mambo_power.model.Period`, which carries a per-load override and nothing else. Costs,
-bids, bounds, ratings and the PTDF matrix are horizon-invariant — the PTDF is computed **once**
+**Period-varying data.** Only the *load* varies by period (``period_load_mw``), matching
+:class:`~mambo_power.model.Period`, which carries a per-load override and nothing else. That one
+array moves two things, because ``Load.p_mw`` means two things: a fixed load's whole demand, and
+an elastic load's *maximum served quantity* (M4's elastic-demand contract). So a period's value
+sets both the fixed-load total in that period's balance/flow rows **and** the upper bound of that
+load's elastic column, if it has one. Moving only the first would be a silent no-op on every load
+that bids: the two cancel exactly. Costs, **bids**, generator bounds, ratings and the PTDF matrix
+are horizon-invariant — a bid load's willingness-to-pay curve is fixed by hour even though the
+quantity it is bid against is not — and the PTDF is computed **once**
 and reused across every period, which assumes a static topology over the horizon (no intra-horizon
 switching or outage), consistent with the wave's Not-Doing list (research §2.2).
 
@@ -427,7 +433,19 @@ def multiperiod_dc_opf(
     p_max = arr.gen_p_max_pu * arr.base_mva
     elastic_idx_arr = np.asarray(elastic_load_idxs, dtype=np.int64)
     demand_p_min = arr.load_p_min_pu[elastic_idx_arr] * arr.base_mva
-    demand_p_max = arr.load_p_max_pu[elastic_idx_arr] * arr.base_mva
+    # ``(n_periods, n_demand)``: a bid load's upper bound is **that period's** own demand, not the
+    # network's base one. ``Load.p_mw`` is the largest quantity an elastic load's bid can clear
+    # (M4's elastic-demand contract) and ``Period.load_p_mw`` overrides ``p_mw``, so the override
+    # has to move this bound with it. A bound frozen at ``arr.load_p_max_pu`` would cancel the
+    # override exactly: the period's own value is already removed from the fixed-load total below
+    # (the double-counting contract), so the column would re-serve the *base* quantity and a
+    # profile would have no effect at all on any load that bids. The bid itself stays
+    # horizon-invariant -- what moves is the quantity anchor, not the willingness-to-pay curve.
+    # ``load_p_min_pu`` is not derived from ``p_mw``, so it does not move.
+    if period_load_mw is None:
+        demand_p_max = np.tile(arr.load_p_max_pu[elastic_idx_arr] * arr.base_mva, (n_periods, 1))
+    else:
+        demand_p_max = period_load_mw[:, elastic_idx_arr]
     storage_p_max = arr.storage_p_max_pu * arr.base_mva
     storage_energy = arr.storage_energy_pu * arr.base_mva
     soc_initial_mwh = arr.storage_soc_initial * storage_energy
@@ -439,7 +457,7 @@ def multiperiod_dc_opf(
             h.addVars(n_gen, p_min, p_max)
             h.changeColsCost(n_gen, gen_cols[t], c1)
         if n_demand:
-            h.addVars(n_demand, demand_p_min, demand_p_max)
+            h.addVars(n_demand, demand_p_min, demand_p_max[t])
             # minimising sum(cost_g) - sum(value_d): the demand column's linear coefficient is -v1
             h.changeColsCost(n_demand, demand_cols[t], -v1)
         if n_storage:
