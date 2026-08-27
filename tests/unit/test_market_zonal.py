@@ -152,6 +152,13 @@ bounds its **size** and the test is green with the chain's congestion component 
 :data:`CASE300_FACE_IS_LOAD_BEARING_ATOL` it brackets the difference in [0.1, 0.5], which is what
 "the disagreement is exactly the known degeneracy" means."""
 
+CORRIDOR_PREMISE_ATOL = 1e-9
+"""Slack, MVA, on AC-5(a)'s premise ``cap >= sum of that corridor's cut-set ratings``. Measured:
+0.0 on all six corridors of the two fixtures — the premise holds *with equality* everywhere, so it
+sits exactly on its own boundary and the assertion below is the only thing that would notice it
+being crossed. Asserted with slack anyway (spec A3); 1e-9 MVA is far below any real de-rating,
+which would be a percentage of caps of order 1.5–213 MVA."""
+
 WELFARE_REL_TOL = 1e-9
 """``welfare_gap`` as a fraction of the welfare being compared. Measured: 1.37e-14 on case30 and
 8.28e-13 on case300, against welfare of order 3.0e5 and 1.8e6 $/h. Pinned relative, not absolute,
@@ -753,7 +760,12 @@ def test_ac5a_zonal_welfare_is_never_lower_where_the_corridors_are_looser_than_t
 
     That premise holds here by construction, not by luck: ``tests/_zones.py``'s ``corridors()``
     caps each corridor at the *sum* of its cut-set's ratings, which is looser than the cut-set's
-    branch limits taken individually and looser still once Kirchhoff's loop law is added back. It
+    branch limits taken individually and looser still once Kirchhoff's loop law is added back —
+    and the test **checks that** before it asserts the inequality, recomputing each cut-set from
+    ``net``'s own branch rows rather than trusting the helper. Measured, the premise holds with
+    *equality* on all six corridors of the two fixtures, i.e. it sits exactly on its boundary: a
+    helper that ever derived a tighter cap would break it silently, and the failure would look
+    like the theorem breaking rather than the fixture leaving its own regime. It
     is not a theorem about zonal markets — a real NTC is normally set *below* thermal capability,
     and in that regime the inequality reverses. The paired case immediately below drives it there
     and measures the reversal, so this test's premise is load-bearing rather than assumed.
@@ -763,6 +775,29 @@ def test_ac5a_zonal_welfare_is_never_lower_where_the_corridors_are_looser_than_t
     redispatch behind it rather than a rounding-scale difference.
     """
     net, result, nodal = request.getfixturevalue(fixture_name)
+
+    # The premise, asserted rather than assumed (see the note above). Cut-set ratings are summed
+    # here from ``net``'s own rows, *not* read back out of ``corridors()``, so if that helper ever
+    # derived a tighter cap — a de-rating factor, ``min`` instead of ``sum`` — this fails by name
+    # instead of sending the inequality below red as though the relaxation theorem had broken.
+    caps = corridors(net)
+    zone_of = {bus.id: bus.zone for bus in net.buses}
+    cut_set: dict[tuple[str, str], float] = dict.fromkeys(caps, 0.0)
+    for branch in net.branches:
+        z_from, z_to = zone_of.get(branch.from_bus), zone_of.get(branch.to_bus)
+        if not branch.in_service or z_from is None or z_to is None or z_from == z_to:
+            continue
+        assert branch.rating_mva is not None, f"unrated crossing branch {branch.id}"
+        pair = (z_from, z_to) if z_from < z_to else (z_to, z_from)
+        cut_set[pair] = cut_set.get(pair, 0.0) + branch.rating_mva
+    assert set(cut_set) == set(caps), f"cut-set pairs {sorted(cut_set)} != corridors {sorted(caps)}"
+    for pair, cap in caps.items():
+        assert cap >= cut_set[pair] - CORRIDOR_PREMISE_ATOL, (
+            f"corridor {pair} is capped at {cap} MW, below its own cut-set's {cut_set[pair]} MVA "
+            "of rating -- the zonal LP is a *restriction* here, not a relaxation, and AC-5(a)'s "
+            "inequality is not expected to hold. See the paired reversal test below."
+        )
+
     zonal_welfare = _welfare(net, result, final=False)
     final_welfare = _welfare(net, result, final=True)
     slack = WELFARE_REL_TOL * abs(zonal_welfare)
