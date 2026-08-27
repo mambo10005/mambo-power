@@ -142,10 +142,11 @@ for t in (TROUGH_HOUR, 16):
         f"  {p.total_storage_charge_payment:11.3f}  {p.total_storage_discharge_revenue:12.3f}"
         f"  {p.congestion_rent:11.3f}"
     )
-# An hour with no binding rating has one price everywhere, so the surplus must be *exactly* zero
-# -- and it is, only because storage is settled.  Leaving the two storage columns out of the sum
-# (M4's nodal form of the identity, which had no storage to settle) reads a large number instead:
-# the arbitrage profit the unit is making at the market operator's expense on paper.
+# An hour with no binding rating has one price everywhere, so the surplus is zero -- to the LP
+# solver's own precision, which is what the printed exponent below is: a residual, not a real
+# imbalance.  It reads that way only because storage is settled.  Leaving the two storage columns
+# out of the sum (M4's nodal form of the identity, which had no storage to settle) reads a large
+# number instead: the arbitrage profit the unit is making at the operator's expense on paper.
 uncongested = [p for t, p in enumerate(result.periods) if t not in congested]
 worst = max(abs(p.congestion_rent) for p in uncongested)
 unsettled = max(abs(p.total_load_payment - p.total_generator_receipts) for p in uncongested)
