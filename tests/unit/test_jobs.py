@@ -936,17 +936,72 @@ def test_market_zonal_with_empty_corridors_islands_the_zones_and_is_not_an_error
     assert len(set(prices.values())) == 3  # islanded: every zone prices independently
 
 
-def test_market_zonal_corridor_naming_an_unknown_zone_is_a_failed_result_not_a_crash(
+def test_market_zonal_corridor_naming_an_unknown_zone_is_a_validation_failure(
     case30_zoned: Network,
 ) -> None:
-    """A corridor naming a zone no bus is assigned to is ``solve_zonal``'s own documented
-    ``ValueError`` (``opf.zonal._normalise_corridors``); ``jobs.run``'s boundary catches it the
-    same as any other runner bug -- ``INTERNAL``, not a raised exception."""
+    """A corridor naming a zone no bus is assigned to is a *caller* mistake about the network, so
+    it lands as ``VALIDATION`` with a ``DANGLING_REF`` issue naming the offending option path --
+    not ``INTERNAL``, which the jobs manual defines as "anything else the runner raised (singular
+    matrix, a bug)". Walk defect D1: a service author maps ``INTERNAL`` to a 5xx and a pager, so
+    every customer who fat-fingers a zone name would page them.
+
+    It cannot be caught at the options model, which has no access to the network -- hence the
+    network-level code rather than ``BAD_OPTIONS``.
+    """
     scenario = Scenario(network=case30_zoned)
     bad_options = {"corridors": [{"zone1": "1", "zone2": "no-such-zone", "cap_mw": 10.0}]}
     out = run(SolveRequest(kind="market.zonal", scenario=scenario, options=bad_options))
-    error = _assert_failed(out, "INTERNAL")
+    error = _assert_failed(out, "VALIDATION")
     assert "no-such-zone" in error.message
+    assert error.issues
+    assert [issue.code for issue in error.issues] == ["DANGLING_REF"]
+    assert "corridors[0].zone2" in error.issues[0].path
+
+
+@pytest.mark.parametrize(
+    ("corridors", "fragment"),
+    [
+        pytest.param(
+            [{"zone1": "1", "zone2": "1", "cap_mw": 10.0}], "same zone twice", id="self-pair"
+        ),
+        pytest.param(
+            [
+                {"zone1": "1", "zone2": "2", "cap_mw": 10.0},
+                {"zone1": "1", "zone2": "2", "cap_mw": 999.0},
+            ],
+            "more than once",
+            id="duplicate-same-order",
+        ),
+        pytest.param(
+            [
+                {"zone1": "1", "zone2": "2", "cap_mw": 10.0},
+                {"zone1": "2", "zone2": "1", "cap_mw": 999.0},
+            ],
+            "more than once",
+            id="duplicate-reversed",
+        ),
+    ],
+)
+def test_market_zonal_malformed_corridor_list_is_bad_options(
+    case30_zoned: Network, corridors: list[dict[str, object]], fragment: str
+) -> None:
+    """A corridor list the options model can judge without the network -- a self-pair, or the same
+    unordered pair given twice in either order -- is rejected at step 2 of ``run``'s pipeline, so
+    the caller gets ``BAD_OPTIONS`` and pydantic's own ``details``.
+
+    The same-order duplicate is the one review F1 found: ``corridor_map()`` is a dict
+    comprehension, so before this validator the second entry silently overwrote the first and the
+    market cleared at 999 MW with nothing said. The reversed one already raised, deeper down, as
+    ``INTERNAL``.
+    """
+    scenario = Scenario(network=case30_zoned)
+    out = run(
+        SolveRequest(kind="market.zonal", scenario=scenario, options={"corridors": corridors})
+    )
+    error = _assert_failed(out, "BAD_OPTIONS")
+    assert fragment in error.message or any(
+        fragment in str(detail) for detail in (error.details or [])
+    )
 
 
 def test_market_zonal_through_resolved_scenario_invalid_network_is_a_failed_validation_result(

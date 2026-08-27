@@ -85,8 +85,15 @@ figure this module reports, and the reason its description insists it is not sig
 
 **Never raises for a solve that does not converge.** A non-``Optimal`` stage — zonal, redispatch
 or nodal — comes back as ``status`` plus a ``message`` naming that stage, this package's standing
-convention. Malformed *input* still raises up front: a bus with no zone, a corridor naming an
-unknown zone, a non-convex generator cost or a non-concave load bid.
+convention. Malformed *input* still raises up front, and **which** exception it raises decides how
+a caller of :func:`mambo_power.jobs.run` is told whose mistake it was. A corridor list that is
+ambiguous on its own — a self-pair, the same unordered pair twice — is rejected by
+:class:`MarketZonalOptions`'s validator before any solve, so it arrives as ``BAD_OPTIONS``. A
+corridor naming a zone the network does not have is only detectable once both are in hand, so
+:func:`_reject_corridors_naming_absent_zones` raises
+:class:`~mambo_power.model.NetworkValidationError` with a ``DANGLING_REF`` issue and it arrives as
+``VALIDATION``. A bus with no zone, a non-convex generator cost and a non-concave load bid still
+raise their own ``ValueError``/typed errors.
 """
 
 from __future__ import annotations
@@ -96,10 +103,10 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import mambo_power
-from mambo_power.model import Network, Scenario
+from mambo_power.model import Network, NetworkValidationError, Scenario, ValidationIssue
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.opf import gen_cost_coeffs
 from mambo_power.opf.dc_opf import (
@@ -157,8 +164,15 @@ class CorridorLimit(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    zone1: str = Field(description="One end of the corridor: a zone id present in the network.")
-    zone2: str = Field(description="The other end; must differ from ``zone1``.")
+    zone1: str = Field(
+        description="One end of the corridor: a zone id present in the network. A zone id no bus "
+        "carries is rejected at solve time, when the network is in hand (jobs: VALIDATION)."
+    )
+    zone2: str = Field(
+        description="The other end; must differ from ``zone1``, and the resulting unordered pair "
+        "must not appear elsewhere in the list. Both are enforced on MarketZonalOptions itself, "
+        "before any solve (jobs: BAD_OPTIONS)."
+    )
     cap_mw: float = Field(
         ge=0.0,
         description="Transfer capacity, MW, as a magnitude: the corridor is bounded at "
@@ -187,11 +201,89 @@ class MarketZonalOptions(BaseModel):
         "corridor of capacity 0 only in that no capacity shadow price is reported for it.",
     )
 
+    @model_validator(mode="after")
+    def _each_pair_is_two_distinct_zones_named_once(self) -> MarketZonalOptions:
+        """Reject a corridor list whose meaning is not determined by the list itself.
+
+        Two shapes are ambiguous and both used to get through. A **self-pair** contradicts
+        :attr:`CorridorLimit.zone2`'s own description ("must differ from ``zone1``") and would only
+        surface from the array-level builder at solve time. A **repeated unordered pair** is worse
+        in one direction: :meth:`corridor_map` is a dict comprehension, so the same pair given
+        twice in the *same* order silently kept the last entry and cleared the market on a capacity
+        the caller never asked for, while the reversed order raised — from deep enough that
+        ``jobs.run`` classified a caller's typo as an engine bug (review F1, walk D1).
+
+        Checking it here rather than in the builder is what makes it a *request* error: an options
+        model validates before any solve, so :func:`mambo_power.jobs.run` reports ``BAD_OPTIONS``
+        with pydantic's own details. The third corridor mistake — a zone id the network does not
+        have — cannot be checked here, because an options model has no network; it is caught at
+        resolution time by :func:`_reject_corridors_naming_absent_zones`.
+        """
+        seen: dict[ZoneKey, int] = {}
+        for index, entry in enumerate(self.corridors):
+            if entry.zone1 == entry.zone2:
+                raise ValueError(
+                    f"corridors[{index}] names the same zone twice ({entry.zone1!r}) -- a corridor "
+                    "joins two *distinct* zones; a zone is a copper plate, so an intra-zone tie is "
+                    "not a thing this model has"
+                )
+            key: ZoneKey = (
+                (entry.zone1, entry.zone2)
+                if entry.zone1 < entry.zone2
+                else (entry.zone2, entry.zone1)
+            )
+            if key in seen:
+                raise ValueError(
+                    f"zone pair {key!r} appears more than once in corridors (at index {seen[key]} "
+                    f"and index {index}) -- a corridor is keyed by an *unordered* pair, so give it "
+                    "exactly once, in either order"
+                )
+            seen[key] = index
+        return self
+
     def corridor_map(self) -> dict[ZoneKey, float]:
         """:attr:`corridors` as the ``{(zone1, zone2): cap_mw}`` mapping
         :func:`~mambo_power.opf.zonal.zonal_dc_opf` takes. Keys are left in the order given; the
-        builder normalises each to sorted order and rejects a pair listed twice."""
+        builder normalises each to sorted order. This is a dict comprehension and so cannot report
+        a repeated key -- which is exactly why the repeat is rejected on the model above, before
+        any mapping is built."""
         return {(entry.zone1, entry.zone2): entry.cap_mw for entry in self.corridors}
+
+
+def _reject_corridors_naming_absent_zones(
+    opts: MarketZonalOptions, partition: Mapping[str, str]
+) -> None:
+    """Raise :class:`~mambo_power.model.NetworkValidationError` if any corridor names a zone no bus
+    is assigned to.
+
+    This is the one corridor mistake :class:`MarketZonalOptions`'s own validator cannot make: it
+    is a statement about the *pair* (options, network), and an options model sees only the first
+    half. The array-level builder catches it too — :func:`~mambo_power.opf.zonal.zonal_dc_opf`'s
+    guard is what a caller driving the arrays directly relies on — but it raises ``ValueError``,
+    which :func:`mambo_power.jobs.run`'s boundary can only classify as ``INTERNAL``, i.e. "the
+    library has a bug". A caller who fat-fingers a zone name would page the service's on-call
+    (walk defect D1). Raised as a network-validation issue instead, it reaches them as
+    ``VALIDATION`` with a ``DANGLING_REF`` issue whose ``path`` points at the option that is
+    wrong, which is what a dangling reference is.
+
+    Every offending end of every corridor is reported in one pass, following
+    :class:`~mambo_power.model.NetworkValidationError`'s own convention of never stopping at the
+    first.
+    """
+    known = set(partition.values())
+    issues = [
+        ValidationIssue(
+            code="DANGLING_REF",
+            path=f"options.corridors[{index}].{field}",
+            message=f"corridor names zone {zone!r}, which no bus is assigned to (zones present: "
+            f"{sorted(known)})",
+        )
+        for index, entry in enumerate(opts.corridors)
+        for field, zone in (("zone1", entry.zone1), ("zone2", entry.zone2))
+        if zone not in known
+    ]
+    if issues:
+        raise NetworkValidationError(issues)
 
 
 def zone_partition(net: Network, arr: NetworkArrays) -> dict[str, str]:
@@ -417,6 +509,7 @@ def solve_zonal(scenario: Scenario, options: MarketZonalOptions | None = None) -
     demand_bid_coeffs, demand_pwl_bids = load_bid_coeffs(net, arr)
     elastic_idxs = sorted(set(demand_bid_coeffs) | set(demand_pwl_bids))
     partition = zone_partition(net, arr)
+    _reject_corridors_naming_absent_zones(opts, partition)
     corridor_caps = opts.corridor_map()
 
     def _provenance() -> ResultProvenance:

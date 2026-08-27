@@ -247,6 +247,13 @@ def _normalise_corridors(
     negative or not a number. A cap of exactly ``0`` is *allowed*: it is the honest encoding of a
     tie that exists but can carry nothing, and it keeps that corridor's own capacity price readable
     instead of requiring the caller to delete the entry.
+
+    The duplicate guard can only ever see the *reversed* ordering, because ``corridors`` is a
+    ``Mapping``: a pair repeated in the same order is one key here, whatever the caller wrote. That
+    is not a hole in this function -- it is the shape of its input -- but it is a hole one layer up,
+    where the caller writes a *list*, so
+    :class:`~mambo_power.market.zonal.MarketZonalOptions` rejects the repeat on the list before it
+    is ever collapsed into a mapping (review F1).
     """
     known = set(zone_ids)
     out: dict[ZoneKey, float] = {}

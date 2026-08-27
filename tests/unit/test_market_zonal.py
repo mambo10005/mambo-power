@@ -68,6 +68,7 @@ from mambo_power.model import (
     Generator,
     Load,
     Network,
+    NetworkValidationError,
     PiecewiseBid,
     PolynomialCost,
     Scenario,
@@ -1068,6 +1069,73 @@ def test_the_options_round_trip_through_json_which_a_tuple_keyed_mapping_would_n
     options = _hand_options(BRANCH_RATING)
     assert MarketZonalOptions.model_validate_json(options.model_dump_json()) == options
     assert options.corridor_map() == {("A", "B"): BRANCH_RATING}
+
+
+@pytest.mark.parametrize(
+    ("entries", "match"),
+    [
+        pytest.param([("A", "A", 10.0)], "same zone twice", id="self-pair"),
+        pytest.param([("A", "B", 10.0), ("A", "B", 999.0)], "more than once", id="same-order"),
+        pytest.param([("A", "B", 10.0), ("B", "A", 999.0)], "more than once", id="reversed"),
+        pytest.param(
+            [("A", "B", 10.0), ("A", "B", 10.0)], "more than once", id="same-order-same-cap"
+        ),
+    ],
+)
+def test_a_corridor_list_that_cannot_mean_one_thing_is_rejected_by_the_options_model(
+    entries: list[tuple[str, str, float]], match: str
+) -> None:
+    """:class:`~mambo_power.market.zonal.MarketZonalOptions` rejects a corridor list whose meaning
+    is not determined by the list itself — before any network is consulted, so ``jobs.run`` reports
+    it as ``BAD_OPTIONS``.
+
+    Two shapes qualify. A **self-pair** was documented (``zone2``'s description says "must differ
+    from ``zone1``") and unchecked. A **repeated unordered pair** was worse than unchecked in one
+    direction: ``corridor_map()`` is a dict comprehension, so ``[(A,B,10), (A,B,999)]`` silently
+    kept the last entry and cleared the market at 999 MW, while ``[(A,B,10), (B,A,999)]`` raised
+    from the array-level builder (review F1). The identical-cap case is rejected too — the caller
+    who writes a pair twice has said something ambiguous about their intent even where the two
+    numbers agree, and accepting it would make the rule depend on the values rather than the shape.
+    """
+    with pytest.raises(ValueError, match=match):
+        MarketZonalOptions(
+            corridors=[CorridorLimit(zone1=z1, zone2=z2, cap_mw=cap) for z1, z2, cap in entries]
+        )
+
+
+def test_distinct_corridors_sharing_one_zone_are_accepted() -> None:
+    """The paired positive for the rule above: a zone may sit on any number of corridors, so only a
+    repeat of the same *pair* is a duplicate. Without this, a validator that rejected any repeated
+    zone id would pass every test in the pair above and break every real fixture."""
+    options = MarketZonalOptions(
+        corridors=[
+            CorridorLimit(zone1="A", zone2="B", cap_mw=10.0),
+            CorridorLimit(zone1="A", zone2="C", cap_mw=20.0),
+            CorridorLimit(zone1="C", zone2="B", cap_mw=30.0),
+        ]
+    )
+    assert options.corridor_map() == {("A", "B"): 10.0, ("A", "C"): 20.0, ("C", "B"): 30.0}
+
+
+def test_a_corridor_naming_a_zone_the_network_does_not_have_is_a_network_level_error() -> None:
+    """The third corridor mistake, and the one the options model cannot catch: it has no access to
+    the network, so a zone id that simply does not exist there is only detectable at solve time.
+
+    It is raised as a :class:`~mambo_power.model.NetworkValidationError` carrying a
+    ``DANGLING_REF`` issue whose path points at the offending option — which is what makes
+    ``jobs.run`` report it as ``VALIDATION`` instead of ``INTERNAL`` (walk defect D1). The message
+    still names the zone and lists the ones that exist, as ``opf.zonal``'s own guard did.
+    """
+    net = _hand_network()
+    options = MarketZonalOptions(
+        corridors=[CorridorLimit(zone1="A", zone2="Z", cap_mw=BRANCH_RATING)]
+    )
+    with pytest.raises(NetworkValidationError) as excinfo:
+        solve_zonal(Scenario(network=net), options)
+    assert [issue.code for issue in excinfo.value.issues] == ["DANGLING_REF"]
+    assert excinfo.value.issues[0].path == "options.corridors[0].zone2"
+    assert "'Z'" in excinfo.value.issues[0].message
+    assert "'A'" in excinfo.value.issues[0].message  # the zones that do exist
 
 
 def test_a_bus_with_no_zone_is_rejected_rather_than_defaulted() -> None:
