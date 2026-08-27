@@ -57,6 +57,19 @@ constructions, not a tautology.
 * ``welfare_gap = welfare(nodal) - welfare(final)`` — the exactness row; ``0`` by D1.
 * ``generation_cost_gap = cost(zonal) - cost(nodal)`` — the unsigned diagnostic.
 
+**The three are two quantities and a combination, and the combination is worth naming.** Under D1
+``cost(final) == cost(nodal)``, so with ``A = cost(final) - cost(zonal)`` and
+``B = value(d_zonal) - value(d_final)`` the three fields are ``A + B``, ``0`` and ``-A``. Hence
+
+    ``redispatch_payment + generation_cost_gap == value(d_zonal) - value(d_final)``
+
+exactly: adding the diagnostic to the settlement cancels the generation-cost term and leaves the
+**curtailment compensation** on its own. That is the whole of what the third field adds — on a
+network where no load carries a bid curve it is identically zero and ``generation_cost_gap`` is
+precisely ``-redispatch_payment``, while on rated case30 with bids it is 0.94 of a 14.51 $/h
+payment. Read the pair that way and the fields stop looking redundant; read them as three
+independent numbers and a sign flip will pass for information.
+
 **A note on the third figure's definition.** The wave's research (§6) defined
 ``generation_cost_gap`` as ``cost(final) - cost(nodal)``, which was the informative quantity under
 the *anchored-rate* redispatch objective it assumed (§3a) — that objective lands somewhere other

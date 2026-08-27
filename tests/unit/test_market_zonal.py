@@ -147,6 +147,18 @@ constant, reused deliberately so the two slices' feasibility claims are the same
 here: 2.0e-14 MW of overload on case30 and 5.5e-10 MW on case300, with energy-balance residuals of
 0.0 and 2.5e-10 MW."""
 
+COMPENSATION_ATOL = 1e-3
+"""Closure of ``redispatch_payment + generation_cost_gap == value_zonal − value_final``, $/h.
+Measured: 6.1e-5 on the bid fixture and 2.6e-11 on the fixed-load one. The bid fixture's residual
+is float cancellation — the two bid values are ~3.0e5 $/h and differ by 0.94 — so the tolerance is
+pinned 16x above it and still three orders below the compensation term it must be able to see."""
+
+COMPENSATION_FLOOR = 0.5
+"""Floor, $/h, on the compensation term where it is supposed to exist. Measured: 0.9411 on the bid
+fixture, 6.5% of that fixture's ``redispatch_payment``. Without this floor the identity above is
+satisfied by ``0 == 0`` and AC-5(b)'s third field is a definitional restatement of the first — the
+exact reading audit F4 found in the criterion's original wording."""
+
 IDENTITY_ATOL = 1e-6
 """Settlement-identity closure, $/h. Measured: 8.53e-14 on case30 and 4.97e-14 on the hand
 fixture, against a congestion rent of 31.85 and 800 $/h respectively."""
@@ -417,10 +429,23 @@ def _elastic_zoned_network(case: str) -> Network:
     return with_bids(net, bid_ids, interior_load_ids=bid_ids[:2])
 
 
-def _cleared(case: str) -> tuple[Network, MarketZonalResult, MarketNodalResult]:
+def _fixed_load_zoned_network(case: str) -> Network:
+    """The same fixture with :mod:`tests._bids` left off, so every load is a fixed withdrawal.
+
+    Its only use is as the *paired* case for the compensation term (AC-5(b)): with no bid curve
+    anywhere, no load can be curtailed for money, so the term must vanish. Keeping the two
+    networks otherwise identical — same ratings, same zones, same corridors — is what makes the
+    pair a comparison of the elasticity rather than of two unrelated fixtures.
+    """
+    return rated_network(promote_areas_to_zones(load_matpower(FIXTURES_DIR / f"{case}.m")))
+
+
+def _cleared(
+    case: str, *, elastic: bool = True
+) -> tuple[Network, MarketZonalResult, MarketNodalResult]:
     """``(network, solve_zonal result, solve_nodal result)`` on ``case``, corridors derived from
     the fixture's own cut-set ratings by ``tests/_zones.py``."""
-    net = _elastic_zoned_network(case)
+    net = _elastic_zoned_network(case) if elastic else _fixed_load_zoned_network(case)
     caps = corridors(net)
     options = MarketZonalOptions(
         corridors=[CorridorLimit(zone1=z1, zone2=z2, cap_mw=cap) for (z1, z2), cap in caps.items()]
@@ -432,6 +457,11 @@ def _cleared(case: str) -> tuple[Network, MarketZonalResult, MarketNodalResult]:
 @pytest.fixture(scope="module")
 def case30() -> tuple[Network, MarketZonalResult, MarketNodalResult]:
     return _cleared("case30")
+
+
+@pytest.fixture(scope="module")
+def case30_fixed_load() -> tuple[Network, MarketZonalResult, MarketNodalResult]:
+    return _cleared("case30", elastic=False)
 
 
 @pytest.fixture(scope="module")
@@ -653,6 +683,23 @@ def _welfare(net: Network, result: MarketZonalResult, *, final: bool) -> float:
     )
 
 
+def _served_bid_value(net: Network, result: MarketZonalResult, *, final: bool) -> float:
+    """The bid *value* of served demand, $/h, at either of the result's two dispatch layers —
+    :func:`_welfare`'s first term on its own.
+
+    Split out because AC-5(b)'s compensation term is a difference of two *values* with the cost
+    side cancelled, and evaluating it as ``_welfare(zonal) − _welfare(final)`` would fold the cost
+    difference back in and reproduce ``redispatch_payment``'s definition instead of testing it.
+    """
+    arr = NetworkArrays.from_network(net)
+    bid_coeffs, pwl_bids = load_bid_coeffs(net, arr)
+    elastic = sorted(set(bid_coeffs) | set(pwl_bids))
+    load_rows = result.loads_final if final else result.loads
+    d_by_id = {row.id: row.p_mw for row in load_rows}
+    d_mw = np.array([d_by_id[arr.load_ids[i]] for i in elastic])
+    return _demand_value(bid_coeffs, pwl_bids, d_mw, elastic)
+
+
 def _nodal_welfare(net: Network, nodal: MarketNodalResult) -> float:
     """Welfare at the nodal optimum, evaluated on the same true curves and by the same helpers as
     :func:`_welfare` — so AC-5(a)'s inequality compares two numbers that differ only in the
@@ -717,26 +764,64 @@ def test_ac5a_redispatch_payment_is_the_welfare_the_zonal_clearing_could_not_del
     assert result.redispatch_payment > 0.0
 
 
-def test_ac5b_the_three_figures_differ_on_case30(
+def test_ac5b_the_third_figure_is_the_curtailment_compensation(
     case30: tuple[Network, MarketZonalResult, MarketNodalResult],
+    case30_fixed_load: tuple[Network, MarketZonalResult, MarketNodalResult],
 ) -> None:
-    """AC-5(b) on the real fixture: three fields, three different numbers, each with its own
-    meaning intact.
+    """AC-5(b): the three fields are two independent quantities and a combination of them, and the
+    combination is named — so the third field's content is asserted rather than assumed.
 
-    Measured on this build: ``redispatch_payment = +14.51`` (a settlement the operator pays),
-    ``welfare_gap = -4.1e-9`` (zero, the exactness row) and ``generation_cost_gap = -13.57``
-    (a diagnostic, negative here — the zonal clearing's schedule is genuinely *cheaper* to generate
-    than nodal's while being infeasible, exactly the inversion research §4(b) warned a conflated
-    field would hide). The three are asserted apart by their own scale, not by a shared epsilon:
-    the payment is strictly positive, the cost gap strictly negative, and the welfare gap is
-    negligible against both.
+    ``redispatch_payment = (cost_final − cost_zonal) + (value_zonal − value_final)`` and
+    ``generation_cost_gap = cost_zonal − cost_nodal``. Under D1 ``cost_final == cost_nodal``, so the
+    second is exactly minus the first's leading term and
+
+        ``redispatch_payment + generation_cost_gap == value_zonal − value_final``
+
+    — the **curtailment compensation**: what the operator pays elastic demand for the bid value it
+    was scheduled and did not receive. Everything the earlier form of this test asserted (payment
+    positive, cost gap negative, the two far apart) is satisfied by that sign flip alone and would
+    still hold with the compensation identically zero, which is exactly what the fixed-load case
+    below shows (audit F4).
+
+    Measured on this build, with the right-hand side computed independently from the result's own
+    load rows and the network's bid curves:
+
+    * bid fixture: ``+14.5134 + (−13.5723) = +0.94111`` against ``value_zonal − value_final =
+      +0.94105`` — 6.1e-5 apart on values of order 3.0e5 $/h, i.e. float cancellation;
+    * fixed load: ``+14.6367 + (−14.6367) = −2.6e-11`` against ``0`` exactly, because with no bid
+      curve anywhere there is no curtailable value and the two genuinely independent quantities
+      collapse to one.
     """
     net, result, _nodal = case30
-    scale = abs(_welfare(net, result, final=True))
+    fixed_net, fixed_result, _fixed_nodal = case30_fixed_load
+
+    # the two figures that are not the combination still behave as their descriptions say.
     assert result.redispatch_payment > 1.0
     assert result.generation_cost_gap < -1.0
-    assert abs(result.welfare_gap) <= WELFARE_REL_TOL * scale
-    assert result.redispatch_payment != pytest.approx(result.generation_cost_gap, abs=1.0)
+    assert abs(result.welfare_gap) <= WELFARE_REL_TOL * abs(_welfare(net, result, final=True))
+
+    compensation = _served_bid_value(net, result, final=False) - _served_bid_value(
+        net, result, final=True
+    )
+    assert result.redispatch_payment + result.generation_cost_gap == pytest.approx(
+        compensation, abs=COMPENSATION_ATOL
+    )
+    assert compensation > COMPENSATION_FLOOR, (
+        "the bid fixture must actually curtail some elastic demand between the zonal and final "
+        "points, or the third field has no independent content here either"
+    )
+
+    fixed_compensation = _served_bid_value(
+        fixed_net, fixed_result, final=False
+    ) - _served_bid_value(fixed_net, fixed_result, final=True)
+    assert fixed_compensation == pytest.approx(0.0, abs=COMPENSATION_ATOL)
+    assert fixed_result.redispatch_payment + fixed_result.generation_cost_gap == pytest.approx(
+        0.0, abs=COMPENSATION_ATOL
+    )
+    assert fixed_result.redispatch_payment > 1.0, (
+        "the paired case is only informative while the payment itself is large: it shows the two "
+        "fields cancelling, not both being small"
+    )
 
 
 def test_ac5c_the_settlement_identity_closes_from_the_result_object_alone_on_case30(

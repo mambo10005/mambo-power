@@ -42,7 +42,19 @@ conclusion from either. So there are three fields, not one:
 * :attr:`~MarketZonalResult.generation_cost_gap` — a **diagnostic**, explicitly not
   sign-constrained.
 
-Each field's own description says which of the three it is; none is derived from another.
+Each field's own description says which of the three it is.
+
+**How the three relate, stated so a reader does not have to derive it.** They are two independent
+quantities and a combination, not three independent ones. Writing ``A = cost_final − cost_zonal``
+and ``B = value_zonal − value_final``, the fields are ``A + B``, ``0`` and ``−A``, so
+
+    ``redispatch_payment + generation_cost_gap == value_zonal − value_final``
+
+exactly — the **curtailment compensation**, the bid value elastic demand was scheduled and did not
+receive. On a network with no bid curves it is identically zero and ``generation_cost_gap`` is
+exactly ``−redispatch_payment``; on one with elastic demand it is the whole of what the third field
+adds (measured: 0.94 of a 14.51 $/h payment on rated case30). The identity is asserted in
+``tests/unit/test_market_zonal.py`` on both a bid fixture and its fixed-load pair.
 """
 
 from __future__ import annotations
@@ -202,7 +214,10 @@ class MarketZonalResult(BaseModel):
         "(a load *restored* above its zonal schedule contributes negatively, paying back at the "
         "same bid value). Equivalently and exactly, welfare(zonal) - welfare(final): the welfare "
         "the zonal clearing promised and the network could not deliver, which is why this figure "
-        "is >= 0 whenever the zonal LP is a relaxation of the nodal one. 0.0 when not Optimal.",
+        "is >= 0 whenever the zonal LP is a relaxation of the nodal one. Adding "
+        "generation_cost_gap to this cancels the cost term and leaves the compensation alone: "
+        "redispatch_payment + generation_cost_gap == value(d_zonal) - value(d_final). "
+        "0.0 when not Optimal.",
     )
     welfare_gap: float = Field(
         default=0.0,
@@ -220,5 +235,8 @@ class MarketZonalResult(BaseModel):
         "*welfare*, not generation cost, and a zonal clearing that serves less (or less valuable) "
         "demand can have strictly lower generation cost than the nodal optimum while being "
         "welfare-worse (research §4b). Do not read it as 'how far zonal lands from nodal'; only "
-        "welfare answers that. 0.0 when not Optimal.",
+        "welfare answers that. Because design decision D1 makes cost(final) == cost(nodal), this "
+        "is exactly -(cost(final) - cost(zonal)) -- minus redispatch_payment's leading term -- so "
+        "the two fields sum to the curtailment compensation value(d_zonal) - value(d_final) and "
+        "are equal and opposite whenever no load carries a bid curve. 0.0 when not Optimal.",
     )
