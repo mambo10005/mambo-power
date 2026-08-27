@@ -573,10 +573,11 @@ does not converge.
 | --- | --- |
 | A `Bus.zone` naming a `Zone` that does not exist | `NetworkValidationError` (code `DANGLING_REF`) at `Network` construction — before `solve_zonal` is reached |
 | An in-service bus with `zone is None` | `ValueError` naming the first offending bus and how many carry no zone |
-| A corridor naming a zone no bus is assigned to | `ValueError` naming the key, the zone, and the zones that are present |
-| A corridor naming the same zone twice | `ValueError` — a corridor joins two *distinct* zones. Not caught at `CorridorLimit` construction; raised at solve time |
-| The same zone pair given twice, in either order | `ValueError` — a corridor is keyed by an unordered pair, so give it once |
-| A negative `cap_mw` | pydantic `ValidationError` at `CorridorLimit` construction (the field is `ge=0`). A cap of exactly `0` is allowed: a tie that exists and can carry nothing |
+| A corridor naming a zone no bus is assigned to | `NetworkValidationError` with a `DANGLING_REF` issue per offending end, each `path` pointing at the `options.corridors[i].zone1` or `.zone2` that is wrong. Reported in one pass, never stopping at the first. Through `jobs.run`: **`VALIDATION`** |
+| A corridor naming the same zone twice | pydantic `ValidationError` at **`MarketZonalOptions`** construction — a corridor joins two *distinct* zones. Through `jobs.run`: **`BAD_OPTIONS`** |
+| The same zone pair given twice, **in either order** | pydantic `ValidationError` at `MarketZonalOptions` construction — a corridor is keyed by an *unordered* pair, so give it exactly once. Through `jobs.run`: **`BAD_OPTIONS`** |
+| A negative `cap_mw` | pydantic `ValidationError` at `CorridorLimit` construction (the field is `ge=0`). A cap of exactly `0` is allowed: a tie that exists and can carry nothing. Through `jobs.run`: **`BAD_OPTIONS`** |
+| More than `MAX_CORRIDORS` (500) corridors | pydantic `ValidationError` at `MarketZonalOptions` construction (`max_length`). Through `jobs.run`: **`BAD_OPTIONS`** — see [Jobs API › Request-size bounds](jobs.md#request-size-bounds) |
 | A non-convex generator cost or non-concave load bid | `NonConvexCostError` / `NonConcaveBidError`, both `ValueError` subclasses, raised by the shared extractor before any solver object exists |
 | Any of the three stages not reaching `Optimal` | **No exception.** `MarketZonalResult.status` carries the solver's own status and `message` names the stage: `"zonal clearing stage: ..."`, `"redispatch stage: ..."` or `"nodal reference stage: ..."`. Every row list is empty and every figure is `0.0` |
 
@@ -585,6 +586,18 @@ subclasses `Exception` on purpose, so that pydantic cannot convert it and hide i
 list. Everything else in the table is a `ValueError` (pydantic's own `ValidationError` included).
 `except ValueError:` will not catch a dangling zone reference; catch `NetworkValidationError` by
 name. See [Network model › Validation](model.md#validation).
+
+**If you reach this through `jobs.run`, every corridor mistake above is a caller error and is
+reported as one.** That is what the `BAD_OPTIONS` / `VALIDATION` column is saying: none of them
+comes back as `INTERNAL`, which the [Jobs API](jobs.md#structurederror) page defines as a bug in
+this library, so a service can tell a bad request from its own outage without reading the message
+text.
+
+One behaviour changed: **a repeated zone pair now raises in either order.** It previously raised
+only when the pair was given reversed, and cleared the market silently when the pair was repeated
+in the *same* order — `corridor_map()` is a dict comprehension, so the last entry simply won. If
+you built against that, a request that used to return `status="ok"` on a capacity you did not
+choose now returns `BAD_OPTIONS`, which is the point.
 
 A zonal market with a zone that cannot supply itself and no corridor to import over is
 infeasible, and comes back as data:

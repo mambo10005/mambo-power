@@ -307,11 +307,28 @@ carry (a transfer capacity is administratively negotiated, not a network invaria
 every other kind's options it is not solver tuning — see
 `mambo_power.market.zonal.CorridorLimit`. `corridors` defaults to `[]`, which is not shorthand
 for "no limit": with no corridors at all, every zone must supply itself, a legitimate (and
-often infeasible) market design in its own right. `jobs.run` validates it the same way as
-every other kind's options — a corridor naming a zone the network has no bus assigned to is
-caught before any solve is attempted — and its three-stage chain (zonal clearing, redispatch,
-nodal reference) reports whichever stage first failed to reach `Optimal` through the same
-`INFEASIBLE_LP` / `UNBOUNDED_LP` translation the other market kinds use.
+often infeasible) market design in its own right.
+
+Every way of getting the corridor list wrong is a **caller** error and is classified as one —
+none of them reaches you as `INTERNAL`, and all of them are caught before any solve is
+attempted:
+
+| The mistake | Code |
+| --- | --- |
+| A corridor naming the same zone twice | `BAD_OPTIONS` |
+| The same zone pair given twice, **in either order** | `BAD_OPTIONS` |
+| A negative `cap_mw`, or more than `MAX_CORRIDORS` entries | `BAD_OPTIONS` |
+| A corridor naming a zone no bus is assigned to | `VALIDATION`, with a `DANGLING_REF` issue whose `path` is the offending `options.corridors[i].zone1` or `.zone2` |
+
+The first three are decided by `MarketZonalOptions` itself, so they come back with pydantic's own
+`details`. The fourth cannot be — an options model has no network to check against — so it is
+raised at resolution time as a network-validation issue, which is what a dangling reference is,
+and every offending end of every corridor is reported in one pass rather than stopping at the
+first.
+
+Its three-stage chain (zonal clearing, redispatch, nodal reference) reports whichever stage first
+failed to reach `Optimal` through the same `INFEASIBLE_LP` / `UNBOUNDED_LP` translation the other
+market kinds use.
 
 ## Relationship to the module-level functions
 
