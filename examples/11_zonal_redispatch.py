@@ -89,6 +89,7 @@ small_scenario = Scenario(network=small)
 
 print("=== 1. Two zones, three buses, one corridor ===")
 print("genA @ zone A: 10 $/MWh   genB @ zone B: 50 $/MWh   load: 50 MW in A, 30 MW in B")
+small_payment: dict[str, float] = {}
 for label, caps in (
     ("corridor capped at 20 MW", [market.CorridorLimit(zone1="A", zone2="B", cap_mw=20.0)]),
     ("cap lifted (1e6 MW)", [market.CorridorLimit(zone1="A", zone2="B", cap_mw=1.0e6)]),
@@ -97,6 +98,7 @@ for label, caps in (
     res = market.solve_zonal(small_scenario, market.MarketZonalOptions(corridors=caps))
     prices = {z.id: z.price for z in res.zones}
     schedule = {g.id: g.p_mw for g in res.generators}
+    small_payment[label] = res.redispatch_payment
     print(
         f"  {label:<26} price A {prices['A']:6.2f}  price B {prices['B']:6.2f}"
         f"   genA {schedule['genA']:6.2f} MW  genB {schedule['genB']:6.2f} MW"
@@ -105,6 +107,15 @@ print("  the 40 $/MWh price split is exactly genB's cost minus genA's -- it is t
 print("  own capacity shadow price, and it vanishes the moment the corridor stops binding.")
 print("  deleting the corridor is NOT the copper plate: with no exchange column the two balance")
 print("  rows decouple, each zone self-supplies, and the prices separate as far as they can go.")
+print(
+    "  redispatch_payment across the three:"
+    f"  capped {small_payment['corridor capped at 20 MW']:+8.2f}"
+    f"   lifted {small_payment['cap lifted (1e6 MW)']:+8.2f}"
+    f"   deleted {small_payment['no corridor at all']:+8.2f}  $/h"
+)
+print("  the last one is NEGATIVE: the settlement figure is >= 0 only where the zonal LP is a")
+print("  relaxation of the nodal one, i.e. where no corridor cap restricts an exchange more than")
+print("  the network itself would.  Island the zones and the operator collects instead.")
 
 # --- 2. case30: three areas promoted to zones, corridors from the cut-set ratings --------------
 # case30's ZONE column is a single group, but its AREA column carries three real ones.  Branch
@@ -222,12 +233,21 @@ print(
 
 # --- 4. The three figures, and the one that is not sign-constrained ----------------------------
 print("\n=== 4. What the zonal design cost ===")
-print(f"  redispatch_payment  {result.redispatch_payment:+12.6f} $/h   settlement figure, >= 0")
+print(f"  redispatch_payment  {result.redispatch_payment:+12.6f} $/h   settlement figure")
 print(f"  welfare_gap         {result.welfare_gap:+12.3e} $/h   exactness row, 0 by construction")
 print(f"  generation_cost_gap {result.generation_cost_gap:+12.6f} $/h   diagnostic, ANY sign")
 print("  the third figure is negative here: the zonal clearing burns less fuel than the nodal")
 print("  optimum.  It is not therefore cheaper -- it is serving the same demand from a dispatch")
 print("  the network cannot carry, and the payment above is what un-carrying it costs.")
+print("  the first figure is >= 0 here but not in general -- see part 1's deleted corridor.")
+# The three figures are two independent quantities plus a check.  Under the theorem below,
+# cost(final) == cost(nodal), so generation_cost_gap is exactly minus the payment's fuel term
+# and the two published figures sum to the curtailment-compensation term alone -- zero on this
+# fixture, which has no elastic demand, and the third field's entire independent content.
+compensation = result.redispatch_payment + result.generation_cost_gap
+print(f"  redispatch_payment + generation_cost_gap = {compensation:+.3e} $/h -- the curtailment")
+print("  compensation term, and 0 on this fixed-load fixture: with no bids the third figure")
+print("  carries nothing the first does not.  Put bids on the same case30 and it is +0.94 $/h.")
 
 nodal = market.solve_nodal(scenario)
 nodal_dispatch = {g.id: g.p_mw for g in nodal.generators}

@@ -222,14 +222,15 @@ def solve(body: jobs.SolveRequest) -> jobs.SolveResult:
 
 ### Failures are data
 
-`"market.zonal"` stood in the example below as the not-yet-registered kind until wave M6
-registered it; `"market.agents"` is the next still-unregistered kind. The wave that registers
-*it* must move this line, `examples/04_jobs_api.py`'s matching example, and
-`tests/unit/test_jobs.py`'s `test_unknown_kind_is_a_failed_result` together, the same three
-files this wave moved off `"market.zonal"`.
+The demo below uses `"pf.telepathy"`, which is **deliberately fictional**. An unknown-kind
+example has to name a kind that can never become real: `"market.zonal"` stood here until wave M6
+registered it, at which point this page, `examples/04_jobs_api.py` and
+`tests/unit/test_jobs.py`'s `test_unknown_kind_is_a_failed_result` all stopped demonstrating what
+they claimed — three sites breaking on the same day. Naming the *next* planned kind only re-arms
+that. A kind nobody will ever implement never does.
 
 ```python
-bad_kind = jobs.run(jobs.SolveRequest(kind="market.agents", network=net))  # not registered yet
+bad_kind = jobs.run(jobs.SolveRequest(kind="pf.telepathy", network=net))  # never registered
 print(bad_kind.status, bad_kind.error.code, "|", bad_kind.error.message)
 
 bad_opts = jobs.run(jobs.SolveRequest(kind="pf.ac", network=net, options={"tol": "x"}))
@@ -246,7 +247,7 @@ print(noslack.status, noslack.error.code, "|", noslack.error.message)
 ```
 
 ```text
-failed UNKNOWN_KIND | unknown kind "market.agents"; registered kinds: market.multiperiod, market.nodal, market.zonal, n1, opf.dc, pf.ac, pf.dc
+failed UNKNOWN_KIND | unknown kind "pf.telepathy"; registered kinds: market.multiperiod, market.nodal, market.zonal, n1, opf.dc, pf.ac, pf.dc
 failed BAD_OPTIONS | [{'type': 'float_parsing', 'loc': ['tol'], 'msg': 'Input should be a valid number, unable to parse string as a number'}]
 failed VALIDATION | ['DANGLING_REF at branches[0].to_bus: branch "branch-1": to_bus references missing bus "bus-999"']
 failed NO_SLACK_GENERATOR | slack bus "bus-1" (position 0) has no in-service generator; a power flow cannot close the balance
