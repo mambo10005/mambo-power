@@ -27,11 +27,14 @@ untested.
 
 * **A20** — rated case300 is primal-degenerate at the nodal optimum: 7 branches sit exactly at
   their rating, only 5 carry a nonzero dual, and the two builders legitimately select different
-  active sets. So AC-4's LMP clause is asserted *tightly* on case30 and, on case300, as the
-  committed structural property (both priced sets inside the at-rating set, at-rating strictly
-  larger) with the primal quantities still held to their pinned tolerances. A blanket
-  1 $/MWh LMP tolerance was rejected upstream: it would admit real regressions to hide a known
-  degeneracy.
+  active sets. So AC-4's LMP clause is asserted *tightly* on case30 and, on case300, as a
+  comparison against the same independent ``solve_nodal`` that decomposes the disagreement rather
+  than tolerating it: the energy components must agree to 1e-3 $/MWh, and the congestion
+  difference must be reproducible by flow duals on the at-rating branches alone and *not* by the
+  priced ones alone. A blanket 1 $/MWh LMP tolerance was rejected upstream because it would admit
+  real regressions to hide a known degeneracy; an earlier ``priced ⊆ at_rating`` check was removed
+  for the opposite failing — computed from one solve's own rows, it is complementary slackness and
+  every optimal solve passes it (audit F2).
 * **A21** — ``pf.dc`` pins the slack bus at angle 0 and lets it absorb whatever mismatch the
   declared injections carry, so a rating-respecting flow vector does **not** imply a balanced
   dispatch. Every feasibility readback below therefore asserts the energy balance too.
@@ -70,7 +73,7 @@ from mambo_power.model import (
     Scenario,
     Zone,
 )
-from mambo_power.numerics import NetworkArrays
+from mambo_power.numerics import NetworkArrays, ptdf
 from mambo_power.opf import gen_cost_coeffs
 from mambo_power.opf.dc_opf import NonConcaveBidError, NonConvexCostError
 from mambo_power.opf.redispatch import redispatch_dc_opf
@@ -110,7 +113,28 @@ optimal face. ~5x headroom, against a 92 MW redispatch volume."""
 CASE30_LMP_ATOL = 1e-3
 """AC-4's LMP agreement on rated case30, $/MWh. Measured: 8.92e-6 on prices of order 6.8 $/MWh.
 Deliberately *not* applied to case300 (A20): there the same measurement is 0.32 $/MWh, and it is
-degeneracy rather than disagreement — see the structural test that replaces it."""
+degeneracy rather than disagreement — see the test that decomposes it below."""
+
+CASE300_ENERGY_ATOL = 1e-3
+"""Agreement between the chain's and ``solve_nodal``'s **energy** component of the LMP on rated
+case300, $/MWh. Measured: 5.40e-6 on a price level of 40.876 $/MWh. This is the half of the price
+comparison degeneracy does *not* excuse: the balance dual is the system-wide price level, it is
+one number shared by every bus in both solves, and no choice among the optimal face's vertices
+moves it. Pinned ~185x above the measurement and ~300x below the 0.32 $/MWh the *congestion*
+components differ by, so the tolerance cannot be met by this fixture's degeneracy."""
+
+CASE300_DEGENERATE_FACE_ATOL = 1e-6
+"""Residual, $/MWh, when the chain-minus-nodal **congestion** difference is re-expressed as flow
+duals living only on the branches that sit exactly at their rating. Measured: 4.02e-16 against a
+difference of 0.3188 $/MWh in sup-norm — exact. Seven at-rating branches span a 7-dimensional
+subspace of R^300, so landing inside it to 4e-16 is a statement about where the disagreement
+lives, not an artefact of dimension; the paired assertion measures what is left of the difference
+when the two *unpriced* at-rating branches are taken away (0.298 $/MWh, i.e. nearly all of it)."""
+
+CASE300_FACE_IS_LOAD_BEARING_ATOL = 0.1
+"""Floor, $/MWh, on that paired residual. Measured: 0.2977 on a 0.3188 sup-norm difference — 93%
+of the disagreement is carried by the two at-rating-but-unpriced branches, which is what makes the
+face load-bearing rather than a set the fit did not need. 3x headroom."""
 
 WELFARE_REL_TOL = 1e-9
 """``welfare_gap`` as a fraction of the welfare being compared. Measured: 1.37e-14 on case30 and
@@ -477,35 +501,116 @@ def test_ac4_final_lmps_equal_the_nodal_lmps_on_case30(
     )
 
 
-def test_ac4_case300_flow_duals_are_degenerate_at_the_nodal_optimum(
+def _at_rating_branch_indices(
+    net: Network, result: MarketZonalResult, arr: NetworkArrays
+) -> tuple[list[int], set[str]]:
+    """``(column indices into the PTDF, ids)`` of the branches sitting exactly at their rating at
+    the chain's final point, in ``arr.branch_ids`` order."""
+    rating = {br.id: br.rating_mva for br in net.branches if br.rating_mva is not None}
+    flow = {row.id: row.p_from_mw for row in result.branches}
+    ids = {
+        bid
+        for bid in arr.branch_ids
+        if bid in rating and abs(abs(flow[bid]) - rating[bid]) <= CASE300_QUANTITY_ATOL
+    }
+    return [k for k, bid in enumerate(arr.branch_ids) if bid in ids], ids
+
+
+def _congestion_residual_off(
+    difference: np.ndarray, ptdf_matrix: np.ndarray, branch_rows: Sequence[int]
+) -> float:
+    """Sup-norm of what is left of ``difference`` (a per-bus congestion vector) after the best fit
+    by flow duals living **only** on ``branch_rows``.
+
+    A congestion component is by construction ``PTDFᵀ mu`` for a dual vector ``mu`` supported on the
+    binding branches, so two solves' congestion components differ by ``PTDFᵀ(mu_a − mu_b)``. Asking
+    which branch rows can reproduce that difference asks *where the two solvers disagreed*, and a
+    least-squares fit answers it without either solver having to hand over its dual vector.
+    """
+    if not branch_rows:
+        return float(np.max(np.abs(difference)))
+    columns = ptdf_matrix[list(branch_rows), :].T
+    coefficients, *_ = np.linalg.lstsq(columns, difference, rcond=None)
+    return float(np.max(np.abs(columns @ coefficients - difference)))
+
+
+def test_ac4_case300_prices_agree_except_across_the_degenerate_face(
     case300: tuple[Network, MarketZonalResult, MarketNodalResult],
 ) -> None:
-    """A20's structural property, standing in for a price tolerance on case300 — and stated as a
-    property rather than waived, because the reason the LMPs differ there is a fact about the
-    nodal LP, not about either builder.
+    """AC-4's price clause on case300, where a flat LMP tolerance cannot be asserted (A20) — so
+    the disagreement is *located* instead of excused.
 
     case300's nodal optimum is **primal-degenerate**: strictly more branches sit exactly at their
-    rating than carry a nonzero flow-limit dual, so the optimal face has several vertices and two
-    correct solvers may report different (equally valid) dual vectors. The committed claim is
-    therefore about the *structure* of the active set, not about the numbers on it: every branch
-    the chain prices, and every branch the nodal reference prices, is one that is genuinely at its
-    rating — and the at-rating set is strictly larger than either, which is what degeneracy means.
-    The primal quantities and the welfare are still held to their pinned tolerances by the tests
-    above and below; only the price *decomposition* is where the two solvers are free to differ.
+    rating than carry a nonzero flow-limit dual, so the optimal face has several vertices and the
+    chain and ``solve_nodal`` legitimately select different ones. Measured, their LMPs differ by up
+    to 0.319 $/MWh on a ~41 $/MWh system. The earlier form of this test asserted only ``priced ⊆
+    at_rating`` from the chain's own primal and dual rows — that is complementary slackness, which
+    every optimal solve satisfies including one that landed on the wrong point, so it could not
+    distinguish agreement from a defect (audit F2). Three clauses replace it, and all three read a
+    **second, independent** solve:
+
+    1. **The energy components agree** to :data:`CASE300_ENERGY_ATOL`. Degeneracy is freedom in the
+       *dual of the flow rows*; the balance dual is the system-wide price level and every vertex of
+       the optimal face shares it. This is the price comparison case300 was missing.
+    2. **The congestion difference is confined to the at-rating branches** — re-expressible as flow
+       duals on those seven alone, to :data:`CASE300_DEGENERATE_FACE_ATOL` in a 300-dimensional
+       space. Prices differ *only* in how a fixed amount of congestion is attributed among branches
+       that are all genuinely binding.
+    3. **The unpriced part of that face carries the disagreement.** Refit over the branches the
+       chain actually prices and at least :data:`CASE300_FACE_IS_LOAD_BEARING_ATOL` of the
+       difference survives — so clause 2 is a real constraint on where the difference lives, not a
+       subspace large enough to absorb anything. Measured, the fit puts −0.319 $/MWh on
+       ``branch-48`` and −0.319 on ``branch-360``: one solve prices the pair one way round and the
+       other the other way, which is the degeneracy, named.
     """
-    net, result, _nodal = case300
-    rating = {br.id: br.rating_mva for br in net.branches if br.rating_mva is not None}
-    at_rating = {
-        row.id
-        for row in result.branches
-        if row.id in rating and abs(abs(row.p_from_mw) - rating[row.id]) <= CASE300_QUANTITY_ATOL
-    }
+    net, result, nodal = case300
+    arr = NetworkArrays.from_network(net)
+    ptdf_matrix = ptdf(arr)
+
+    chain = {row.id: row for row in result.buses}
+    reference = {row.id: row for row in nodal.buses}
+    assert set(chain) == set(reference)
+    bus_ids = list(arr.bus_ids)
+
+    # 1. the price level itself, against an independent solve.
+    assert_allclose(
+        np.array([chain[i].energy for i in bus_ids]),
+        np.array([reference[i].energy for i in bus_ids]),
+        rtol=0.0,
+        atol=CASE300_ENERGY_ATOL,
+    )
+
+    at_rating_rows, at_rating = _at_rating_branch_indices(net, result, arr)
     priced = {row.id for row in result.branches if row.flow_limit_dual != 0.0}
     assert priced, "case300 should have at least one congested branch at the final point"
     assert priced <= at_rating, f"priced but not at rating: {sorted(priced - at_rating)}"
     assert len(at_rating) > len(priced), (
         "expected strictly more at-rating branches than priced ones -- that inequality *is* the "
-        f"degeneracy A20 records; got {len(at_rating)} at rating and {len(priced)} priced"
+        f"degeneracy A20 records, and clause 3 below has nothing to measure without it; got "
+        f"{len(at_rating)} at rating and {len(priced)} priced"
+    )
+
+    difference = np.array(
+        [chain[i].congestion - reference[i].congestion for i in bus_ids], dtype=float
+    )
+    assert np.max(np.abs(difference)) > CASE300_FACE_IS_LOAD_BEARING_ATOL, (
+        "the two solves' congestion components agree on this build -- clauses 2 and 3 are then "
+        "vacuous and AC-4's price clause should simply be asserted flat on case300"
+    )
+
+    # 2. the disagreement lives on the at-rating branches, and
+    # 3. specifically on the ones neither solve had to price.
+    assert (
+        _congestion_residual_off(difference, ptdf_matrix, at_rating_rows)
+        <= CASE300_DEGENERATE_FACE_ATOL
+    ), "the congestion difference is not explained by duals on the at-rating branches"
+    priced_rows = [k for k, bid in enumerate(arr.branch_ids) if bid in priced]
+    assert (
+        _congestion_residual_off(difference, ptdf_matrix, priced_rows)
+        > CASE300_FACE_IS_LOAD_BEARING_ATOL
+    ), (
+        "the priced branches alone reproduce the difference -- then clause 2 says nothing about "
+        "the degenerate face and this test is fitting noise"
     )
 
 
