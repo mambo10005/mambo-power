@@ -39,8 +39,10 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   minimum-cost move from a zonal operating point to a network-feasible one, with Δ⁺/Δ⁻ columns on
   **both** sides of the market (demand can be restored, not only curtailed) and bounds shifted by
   the starting point so the final point ranges over exactly the box the nodal problem has.
-  Reported deltas are netted to the canonical representative, so `final == p0 + delta_up -
-  delta_down` and `delta_up * delta_down == 0` hold exactly whatever vertex the solver returns.
+  Reported deltas are netted to the canonical representative, so `final == p0 + up - down` and
+  `up * down == 0` hold exactly whatever vertex the solver returns. The two sides are named for
+  what happens to the participant: `delta_up_mw` / `delta_down_mw` on a generator row,
+  `delta_restore_mw` / `delta_curtail_mw` on a `MarketZonalResult` load row.
 - `results.zonal`: `MarketZonalResult` with `ZonePriceResult`, `GenRedispatchResult` and
   `LoadRedispatchResult`. Three deliberately separate figures — `redispatch_payment` (a
   settlement figure), `welfare_gap` (an exactness row, `0` by the theorem above) and

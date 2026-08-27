@@ -44,6 +44,19 @@ flowchart LR
    it is the thing the wave's tests assert, and inferring the reference from the thing under
    test would make that assertion vacuous.
 
+!!! warning "`generators` is the schedule that was *sold*, not the one that is delivered"
+    `MarketZonalResult.generators` and `.loads` carry the **zonal clearing's** schedule — what
+    the market sold before the network was consulted. The dispatch the network actually delivers
+    is in `.generators_final` and `.loads_final`.
+
+    This is a trap because the name is shared across a closed union: on
+    [`MarketNodalResult`](market.md) and on every power-flow result, `generators` *is* the
+    delivered dispatch, and code that switches on result type sees the same attribute mean two
+    different things. Anything that settles, reports or plots "the dispatch" wants the `_final`
+    pair here. On the case30 case built below every one of the six generators moves between the
+    two layers, 21.9 MW of instructed-up volume in total — silently reading the wrong one is
+    not a rounding error.
+
 ## What the comparison measures — and what it does not
 
 The redispatch objective is the **true** welfare function (generator cost curves and load bid
@@ -164,8 +177,14 @@ binds, and by exactly that corridor's own capacity shadow price.
 
 This has a consequence worth internalising before reading any zonal result: **the number of
 distinct prices is a property of which corridors bind, not of how many zones you drew.** case30
-has three zones and produces two prices, because zones 1 and 3 are joined by a slack corridor
-whose interior exchange column forces their two balance duals equal.
+has three zones and produces two distinct prices *to solver precision*, because zones 1 and 3 are
+joined by a slack corridor whose interior exchange column forces their two balance duals equal.
+
+The qualifier is not a hedge, it is the literal state of the numbers: the three prices come back
+as `3.759145`, `3.880504` and `3.759147` \$/MWh, so `len({z.price for z in result.zones})` is
+**3**, not 2. Zones 1 and 3 agree to about `2e-6` \$/MWh — equal as far as the model is
+concerned, and not equal as far as `==` or `set()` is concerned. Compare zone prices with a
+tolerance, never by identity.
 
 ### The corridor capacity price
 
@@ -258,9 +277,24 @@ The objective depends on each pair only through \(u = \Delta^{+} - \Delta^{-}\),
 \(\alpha\). Which split the solver returns is an implementation accident, not a modelling fact.
 
 `RedispatchSolution` and `MarketZonalResult` therefore report the canonical representative —
-`delta_up = max(u, 0)`, `delta_down = max(-u, 0)` — so that `final == p0 + delta_up -
-delta_down` and `delta_up * delta_down == 0` hold exactly, on every platform, whatever vertex the
-solver picked. The raw columns are never surfaced.
+`up = max(u, 0)`, `down = max(-u, 0)` — so that `final == p0 + up - down` and `up * down == 0`
+hold exactly, on every platform, whatever vertex the solver picked. The raw columns are never
+surfaced.
+
+**The two sides carry different field names, and only the generator side is `up`/`down`.** A
+generator is instructed up or down; a load is *curtailed* or *restored*, which is the same
+algebra under a name that says what happened to a consumer. Writing `delta_up_mw` on a load row
+raises `AttributeError`:
+
+| Layer | Generator side | Load / demand side |
+| --- | --- | --- |
+| `MarketZonalResult.redispatch_generators` (`GenRedispatchResult`) | `delta_up_mw`, `delta_down_mw` | — |
+| `MarketZonalResult.redispatch_loads` (`LoadRedispatchResult`) | — | `delta_restore_mw`, `delta_curtail_mw` |
+| `opf.redispatch.RedispatchSolution` (arrays) | `delta_up_mw`, `delta_down_mw` | `demand_delta_up_mw`, `demand_delta_down_mw` |
+
+So the identity reads `p_final == p_zonal + delta_up_mw - delta_down_mw` on a generator row and
+`d_final == d_zonal + delta_restore_mw - delta_curtail_mw` on a load row. Restoring demand is the
+`up` direction: a load served *above* its zonal schedule has a positive `delta_restore_mw`.
 
 Two nonnegative fields rather than one signed one, for the same reason storage gets separate
 charge and discharge columns: a signed net number erases which direction was actually
@@ -301,6 +335,38 @@ Algebraically it is exactly `welfare(zonal) − welfare(final)`, which is why it
 wherever the zonal LP is a relaxation of the nodal one — it is the welfare the zonal clearing
 promised and the network could not deliver.
 
+#### When `redispatch_payment` goes negative
+
+"Wherever the zonal LP is a relaxation" is a real condition, not a formality, and this page's own
+worked variations break it. The zonal problem is a relaxation exactly when its feasible set
+*contains* the nodal one — when no corridor cap restricts an exchange more tightly than the
+network would have restricted it anyway. Where that fails the zonal clearing is welfare-*worse*
+than the nodal optimum, the redispatch improves welfare rather than paying for it, and the
+settlement figure runs inward: the operator collects.
+
+Two ordinary ways to land there:
+
+- **Corridor caps set tighter than the network can carry.** A negotiated NTC is normally set
+  *below* thermal capability, so this is the common regime in practice, not an exotic one.
+- **Islanded zones** — corridors omitted, or capped at `0`. With no exchange column at all the
+  zonal problem is strictly more constrained than the nodal one in every direction at once. This
+  is the same trap as *[Deleting a corridor is not the copper
+  plate](#deleting-a-corridor-is-not-the-copper-plate)*, seen from the settlement side.
+
+On the three-bus fixture below, omitting the corridors (or capping at `0`) gives
+`redispatch_payment` of **−800.00 \$/h** against **+400.00 \$/h** with the cap lifted. On case30 with
+branch ratings loosened 20x and every corridor capped at `0`, it is **−11.053 \$/h**.
+
+The condition is a *comparison*, though, so neither half is a rule of thumb on its own. On the
+case30 case the runnable example builds — ratings derived at 1.2x the base-case flow, which is a
+very tight network — even islanding the zones still leaves the zonal problem the looser of the
+two, and the payment stays positive at **+3.805 \$/h**. Tight caps make the payment negative only
+when the caps are tight *relative to the network*.
+
+If your application needs the figure to be a payment in the accounting sense, assert the sign
+rather than assuming it, and treat a negative value as the diagnostic it is: the corridor set,
+not the network, is what bound the market.
+
 `welfare_gap` is the exactness row. A nonzero value means the chain is wrong, not that zonal
 clearing is expensive.
 
@@ -315,16 +381,60 @@ clearing is expensive.
     **+14.637 \$/h** is what un-carrying it costs. Reading the negative number as "zonal beat
     nodal" is precisely the error the three fields are separated to prevent.
 
-    (The two figures being exact negatives of each other is a property of *this* fixture, which
-    has no elastic demand: with fixed loads, welfare is minus cost, so
-    `redispatch_payment == −generation_cost_gap` identically. With bids in play they are
-    independent numbers.)
+    (The two figures being exact negatives of each other on this fixture is not a coincidence,
+    and it is not confined to this fixture either — see *The three figures are two independent
+    quantities plus a check* immediately below.)
 
 The third figure's definition deserves a note, because the obvious alternative is empty. Defining
 it as `cost(final) − cost(nodal)` would make it identically zero — the same theorem that zeroes
 `welfare_gap` zeroes that difference too, so it would ship as a second copy of the exactness row
 rather than a diagnostic. The quantity that survives is the **zonal** point's cost against
 nodal's.
+
+### The three figures are two independent quantities plus a check
+
+The three fields answer three different questions, but they are not three free numbers. Design
+decision D1's theorem, which makes the redispatched point *be* the nodal optimum, also ties two of
+them together exactly.
+
+Write the payment's two halves as
+
+\[
+A = \mathrm{cost}(\text{final}) - \mathrm{cost}(\text{zonal}),
+\qquad
+B = \mathrm{value}(d_{\text{zonal}}) - \mathrm{value}(d_{\text{final}}),
+\]
+
+so `redispatch_payment` is \(A + B\): the extra fuel, plus what curtailed load is compensated.
+Under D1 the final point is the nodal optimum, so `cost(final) == cost(nodal)`, and therefore
+
+\[
+\texttt{generation\_cost\_gap} = \mathrm{cost}(\text{zonal}) - \mathrm{cost}(\text{nodal})
+= \mathrm{cost}(\text{zonal}) - \mathrm{cost}(\text{final}) = -A .
+\]
+
+Adding the two published figures cancels the fuel term and leaves the compensation term alone:
+
+\[
+\texttt{redispatch\_payment} + \texttt{generation\_cost\_gap} = B .
+\]
+
+Three consequences worth carrying:
+
+- **On a fixed-load network the third figure carries nothing the first does not.** With no bids
+  there is no served-demand value to move, so \(B = 0\) and `generation_cost_gap` is exactly
+  `−redispatch_payment`. The sign inversion is still a useful *reading* — it is what stops
+  "cheaper to fuel" being mistaken for "better" — but it is not an independent measurement.
+- **`B` is the whole independent content of the third field**, and it is only nonzero when
+  demand is elastic. On the wave's own bid fixture (case30, five bid loads, two of them interior)
+  the sum is **+0.941 \$/h** against a payment of **+14.513 \$/h**: about 6% of the figure.
+- **`B` is not sign-constrained either.** It is negative whenever the redispatch lands on *more*
+  valuable served demand than the zonal clearing sold — the same case300 bid fixture gives
+  **−13.943 \$/h**.
+
+So read the trio as: `redispatch_payment` = what the move costs; `generation_cost_gap` = which way
+the fuel bill went, and (with `redispatch_payment`) the compensation term; `welfare_gap` = a check
+that the chain is right, `0` by construction and never a measurement.
 
 ## Settlement, from the result object alone
 
