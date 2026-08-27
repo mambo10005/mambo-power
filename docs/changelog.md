@@ -61,7 +61,11 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   three MATPOWER `AREA` groups to real `Zone` entities and derives each corridor's capacity as the
   sum of `rating_mva` over its cut-set; case300's four real `ZONE` groups are used directly.
 - [Manual › Zonal market](manual/zonal.md) and a new [runnable
-  example](examples/index.md#11-zonal-redispatch).
+  example](examples/index.md#11-zonal-redispatch). [Manual › Results](manual/results.md) gains a
+  section per market result type, [Design › Decisions](design/decisions.md) gains ADR-006 through
+  ADR-009, and the zonal page names the two things its own worked variations make true and its
+  prose did not say: when `redispatch_payment` is negative, and that
+  `redispatch_payment + generation_cost_gap` is exactly the curtailment compensation.
 
 ### Added — wave M5 (multiperiod market)
 
@@ -337,6 +341,12 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
 
 ### Changed
 
+- The API reference renders every pydantic model's fields. Result and options models put their
+  prose in `Field(description=...)`, which is a call argument rather than a docstring, so the
+  documentation generator saw undocumented attributes and dropped them: `mambo_power.results`
+  published two field entries across every result type on it, and `MarketZonalResult`'s field
+  names occurred nowhere on the site. They now render with their descriptions, and an attribute's
+  shown default is the field's actual default rather than the whole `Field(...)` call. M6.
 - `opf.dc_opf`'s cost/bid extraction and both convexity guards are one shared helper, so the
   nodal, multiperiod, zonal and redispatch builders cannot get them subtly different — they do
   not each implement them. Extracted and proved behaviour-preserving before any zonal row was
