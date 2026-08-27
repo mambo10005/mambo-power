@@ -32,8 +32,10 @@ def _model_fields(cls: griffe.Class) -> dict[str, Any] | None:
     try:
         module = importlib.import_module(module_path)
         obj = getattr(module, cls.name, None)
-    except Exception as exc:  # pragma: no cover - a broken import must not fail the build
-        _logger.debug(f"pydantic_fields: could not import {module_path}: {exc}")
+    except Exception as exc:
+        # Loud, not silent: if this stops working the field lists vanish from the site again and
+        # nothing else notices. Under ``mkdocs build --strict`` a warning fails the build.
+        _logger.warning(f"pydantic_fields: could not import {module_path}: {exc}")
         return None
     fields = getattr(obj, "model_fields", None)
     # ``model_fields`` on a non-model is anything at all; require the pydantic shape.
@@ -101,4 +103,12 @@ class PydanticFieldDescriptions(griffe.Extension):
                 elif isinstance(member, griffe.Class):
                     stack.append(member)
                     attached += _document(member)
-        _logger.info(f"pydantic_fields: documented {attached} field(s) in {pkg.path}")
+        if attached:
+            _logger.info(f"pydantic_fields: documented {attached} field(s) in {pkg.path}")
+        else:
+            # Same reasoning: zero means the extension ran and did nothing, which is exactly the
+            # state this exists to prevent, so it must not pass a strict build quietly.
+            _logger.warning(
+                f"pydantic_fields: documented NO fields in {pkg.path} -- pydantic field "
+                "descriptions will not be published on the API pages"
+            )
