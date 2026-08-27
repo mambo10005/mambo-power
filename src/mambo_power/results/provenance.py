@@ -20,12 +20,7 @@ class ResultProvenance(BaseModel):
     form is always a ``Z``-suffixed instant.
     """
 
-    model_config = ConfigDict(
-        extra="forbid", frozen=True, allow_inf_nan=False, ser_json_inf_nan="constants"
-    )
-    """``allow_inf_nan=False`` still governs this model's own float, :attr:`elapsed_s`.
-    ``ser_json_inf_nan`` reaches only inside :attr:`options`, whose values pydantic does not
-    validate — see that field's description."""
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     engine: Literal["mambo-power"] = Field(description="Producing engine; always this package.")
     version: str = Field(min_length=1, description="``mambo_power.__version__`` at solve time.")
@@ -37,11 +32,7 @@ class ResultProvenance(BaseModel):
     elapsed_s: float = Field(ge=0.0, description="Wall-clock duration of the solve, seconds.")
     options: dict[str, Any] = Field(
         default_factory=dict,
-        description="The options the solver ran with, echoed verbatim. JSON-native values, with "
-        "one documented exception: market.zonal's CorridorLimit.cap_mw may be ``inf`` (the copper "
-        "plate), which serialises as the bare token ``Infinity`` -- json.loads reads it, a "
-        "browser's JSON.parse does not. No other option field in the package accepts a non-finite "
-        "value, and every model reachable from a request's network or scenario forbids one.",
+        description="The options the solver ran with, JSON-native values only.",
     )
 
     @field_validator("started_at")

@@ -61,6 +61,7 @@ from mambo_power.market.zonal import (
     MAX_CORRIDORS,
     CorridorLimit,
     MarketZonalOptions,
+    UnzonedBusError,
     _demand_value,
     _generation_cost,
     solve_zonal,
@@ -1174,26 +1175,37 @@ def test_distinct_corridors_sharing_one_zone_are_accepted() -> None:
     assert options.corridor_map() == {("A", "B"): 10.0, ("A", "C"): 20.0, ("C", "B"): 30.0}
 
 
-def test_an_infinite_cap_is_the_copper_plate_and_the_only_non_finite_value_accepted() -> None:
-    """:attr:`~mambo_power.market.zonal.CorridorLimit.cap_mw` is the one float in this package that
-    may be non-finite, because an unbounded transfer capacity means something the array level has
-    always accepted — the copper plate — and the options model used to be unable to say it (walk
-    D3, review C12: two layers, two rules on infinite caps).
+def test_a_null_cap_is_the_copper_plate_and_inf_is_not_a_second_spelling() -> None:
+    """An unbounded corridor is ``cap_mw=None``, which is ``null`` on the wire.
 
-    The scoping is the field's own ``ge=0.0``, not ``allow_inf_nan``, which is a model-wide switch:
-    ``-inf`` fails the bound, and so does ``NaN``, since every comparison with ``NaN`` is false. So
-    ``+inf`` is the only non-finite value that gets through, and the round trip carries it —
-    ``ser_json_inf_nan="constants"``, the bare token ``Infinity`` — instead of writing ``null`` and
-    then refusing to read it back, which is what pydantic's default did.
+    The array level has always accepted an infinite cap and mapped it to ``kHighsInf``, and the
+    manual has always taught the copper plate as a *lifted* cap rather than a deleted corridor —
+    but the options model could not say it at all, so through :func:`solve_zonal` the copper plate
+    was only reachable as a large finite number. ``None`` says it, and says it in a token every
+    JSON parser reads: RFC 8259 has no ``Infinity``, and this model is on a wire format.
+
+    ``inf`` is rejected rather than accepted as a synonym, so there is exactly one spelling. It is
+    rejected by ``allow_inf_nan=False``, negatives by the field's own ``ge=0.0``; ``0`` stays legal
+    and means a tie that exists and can carry nothing, which is a third thing again.
+    :meth:`~mambo_power.market.zonal.MarketZonalOptions.corridor_map` is where ``None`` becomes the
+    ``inf`` the builder wants.
     """
-    unbounded = CorridorLimit(zone1="A", zone2="B", cap_mw=math.inf)
-    assert unbounded.cap_mw == math.inf
-    assert "Infinity" in unbounded.model_dump_json()
+    unbounded = CorridorLimit(zone1="A", zone2="B", cap_mw=None)
+    assert unbounded.cap_mw is None
+    assert unbounded.model_dump_json() == '{"zone1":"A","zone2":"B","cap_mw":null}'
     assert CorridorLimit.model_validate_json(unbounded.model_dump_json()) == unbounded
+    assert MarketZonalOptions(corridors=[unbounded]).corridor_map() == {("A", "B"): math.inf}
 
-    for rejected in (-math.inf, math.nan):
-        with pytest.raises(ValidationError, match="greater than or equal to 0"):
+    for rejected, match in (
+        (math.inf, "finite number"),
+        (-math.inf, "finite number"),
+        (math.nan, "finite number"),
+        (-1.0, "greater than or equal to 0"),
+    ):
+        with pytest.raises(ValidationError, match=match):
             CorridorLimit(zone1="A", zone2="B", cap_mw=rejected)
+
+    assert CorridorLimit(zone1="A", zone2="B", cap_mw=0.0).cap_mw == 0.0
 
 
 def test_a_lifted_cap_clears_one_price_where_the_true_rating_clears_two() -> None:
@@ -1201,13 +1213,15 @@ def test_a_lifted_cap_clears_one_price_where_the_true_rating_clears_two() -> Non
     unbounded both zones clear at the cheap zone's cost, and at the tie's true rating they do not.
 
     Paired against the true rating rather than against corridor *deletion*, which is a different
-    market again — deleting the entry islands the zones (S3's A22(i)) and would also pass a
-    sign-flipped corridor column, so it is not the control this claim needs.
+    market again — deleting the entry islands the zones and would also pass a sign-flipped corridor
+    column, so it is not the control this claim needs. Note that ``_hand_options(None)`` means the
+    *deleted* corridor and ``cap_mw=None`` means the *unbounded* one; they are opposite markets,
+    which is why this test builds its options inline rather than through the helper.
     """
     net = _hand_network()
     copper = solve_zonal(
         Scenario(network=net),
-        MarketZonalOptions(corridors=[CorridorLimit(zone1="A", zone2="B", cap_mw=math.inf)]),
+        MarketZonalOptions(corridors=[CorridorLimit(zone1="A", zone2="B", cap_mw=None)]),
     )
     assert copper.status == "Optimal"
     assert [zone.price for zone in copper.zones] == pytest.approx(
@@ -1298,11 +1312,36 @@ def test_a_corridor_naming_a_zone_the_network_does_not_have_is_a_network_level_e
 def test_a_bus_with_no_zone_is_rejected_rather_than_defaulted() -> None:
     """A zonal clearing cannot proceed on a partition with a hole: that bus's load and generation
     must enter *some* zone's balance row, and picking one would clear a market for a network the
-    caller did not describe. Raised up front, naming the count and the first offender."""
+    caller did not describe. Raised up front, naming the count and the first offender.
+
+    Still a plain ``ValueError`` to any caller who catches one — that is the point of raising a
+    *subclass*, and this assertion is what pins it: the type got narrower so ``jobs`` could tell it
+    apart, and callers were not asked to change.
+    """
     net = _hand_network()
     net.buses[1].zone = None
     with pytest.raises(ValueError, match="carry no zone"):
         solve_zonal(Scenario(network=net), _hand_options(BRANCH_RATING))
+
+
+def test_an_unzoned_bus_raises_a_distinguishable_subclass_carrying_every_offender() -> None:
+    """:class:`~mambo_power.market.zonal.UnzonedBusError` is what makes the jobs surface able to
+    report this as ``VALIDATION`` rather than ``INTERNAL``.
+
+    A bare ``ValueError`` cannot be told apart from any other ``ValueError`` a solve might raise,
+    and a runner that guessed would relabel real engine bugs as the caller's fault. So the type is
+    narrowed and carries the data the report needs: **every** offending bus, not just the first the
+    message names — following :class:`~mambo_power.model.NetworkValidationError`'s own convention
+    of never stopping at one.
+    """
+    net = _hand_network()
+    net.buses[0].zone = None
+    net.buses[2].zone = None
+    with pytest.raises(UnzonedBusError) as excinfo:
+        solve_zonal(Scenario(network=net), _hand_options(BRANCH_RATING))
+    assert isinstance(excinfo.value, ValueError)
+    assert excinfo.value.bus_ids == [net.buses[0].id, net.buses[2].id]
+    assert "2 of 3 in-service buses carry no zone" in str(excinfo.value)
 
 
 def test_the_shared_guards_fire_before_any_solve() -> None:

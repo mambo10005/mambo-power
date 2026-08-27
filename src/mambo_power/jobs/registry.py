@@ -31,8 +31,8 @@ from pydantic import BaseModel
 from mambo_power.contingency import N1Options, n1
 from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multiperiod
 from mambo_power.market.nodal import MarketNodalOptions, solve_nodal
-from mambo_power.market.zonal import MarketZonalOptions, solve_zonal
-from mambo_power.model import Scenario
+from mambo_power.market.zonal import MarketZonalOptions, UnzonedBusError, solve_zonal
+from mambo_power.model import NetworkValidationError, Scenario, ValidationIssue
 from mambo_power.opf import OpfDcOptions, solve_dc_opf
 from mambo_power.pf import AcOptions, solve_ac, solve_dc
 from mambo_power.results import (
@@ -171,11 +171,34 @@ def _run_market_zonal(scenario: Scenario, options: BaseModel | None) -> BaseMode
     zonal clearing, redispatch, nodal reference — did not reach Optimal) via the same shared
     :func:`_translate_non_optimal_status` the other market runners use — see
     :class:`InfeasibleLpError`. ``options.corridors`` is market design data
-    (:class:`~mambo_power.market.zonal.MarketZonalOptions`'s own docstring), not solved for, so
-    there is nothing else this runner does beyond the call and the status translation.
+    (:class:`~mambo_power.market.zonal.MarketZonalOptions`'s own docstring), not solved for.
+
+    The one other thing this runner does is translate
+    :class:`~mambo_power.market.zonal.UnzonedBusError` into a
+    :class:`~mambo_power.model.NetworkValidationError`, which :func:`mambo_power.jobs.run` already
+    maps to ``VALIDATION``. A bus carrying no zone is the caller's network data: ``Bus.zone`` is
+    optional in the model and every other kind solves such a network happily, so
+    :func:`~mambo_power.model.validate_network` cannot and should not reject it -- but this kind
+    cannot run on it, and reporting that as ``INTERNAL`` would tell a service its engine has a bug
+    when a customer mistyped a network. One issue per offending bus, at the same ``buses[i].zone``
+    path and under the same ``DANGLING_REF`` code ``validate_network`` uses for a bus whose zone
+    references a zone that does not exist -- the neighbouring failure, reported the same way.
     """
     assert isinstance(options, MarketZonalOptions)  # run(): options_model-validated
-    result = solve_zonal(scenario, options=options)
+    try:
+        result = solve_zonal(scenario, options=options)
+    except UnzonedBusError as exc:
+        index_of = {bus.id: index for index, bus in enumerate(scenario.network.buses)}
+        raise NetworkValidationError(
+            ValidationIssue(
+                code="DANGLING_REF",
+                path=f"buses[{index_of[bus_id]}].zone",
+                message=f'bus "{bus_id}": carries no zone, and a zonal clearing needs every bus '
+                "assigned to exactly one zone (set Bus.zone; every MATPOWER import populates it "
+                "from the ZONE column)",
+            )
+            for bus_id in exc.bus_ids
+        ) from exc
     if result.status != "Optimal":
         _translate_non_optimal_status("market.zonal", result.status, result.message)
     return result

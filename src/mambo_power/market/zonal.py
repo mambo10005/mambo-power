@@ -93,15 +93,19 @@ ambiguous on its own — a self-pair, the same unordered pair twice — is rejec
 corridor naming a zone the network does not have is only detectable once both are in hand, so
 :func:`_reject_corridors_naming_absent_zones` raises
 :class:`~mambo_power.model.NetworkValidationError` with a ``DANGLING_REF`` issue and it arrives as
-``VALIDATION``. A bus with no zone, a non-convex generator cost and a non-concave load bid still
-raise their own ``ValueError``/typed errors.
+``VALIDATION``. A bus carrying no zone is the same kind of mistake one layer further in, and
+arrives the same way: :func:`zone_partition` raises :class:`UnzonedBusError` and the runner
+translates it, one ``DANGLING_REF`` issue per offending bus. A non-convex generator cost and a
+non-concave load bid raise their own typed errors.
 """
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from typing import Annotated
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -155,8 +159,32 @@ __all__ = [
     "MarketZonalOptions",
     "NonConcaveBidError",
     "NonConvexCostError",
+    "UnzonedBusError",
     "solve_zonal",
 ]
+
+
+class UnzonedBusError(ValueError):
+    """A network :func:`zone_partition` cannot partition: at least one bus the solve keeps carries
+    no ``Bus.zone``.
+
+    A :class:`ValueError` **subclass**, deliberately. It has to stay a ``ValueError`` because that
+    is what :func:`zone_partition` has always raised and what a caller driving it directly catches.
+    It has to be a distinguishable *type* because ``jobs``' runner cannot otherwise tell this
+    apart from any other ``ValueError`` a solve might raise, and the difference matters: this one
+    is the caller's network data, so it belongs in a ``VALIDATION`` failure naming the buses, not
+    in the ``INTERNAL`` bucket the jobs manual defines as "anything else the runner raised
+    (singular matrix, a bug)".
+
+    :attr:`bus_ids` carries every offending bus, in ``NetworkArrays`` order, so the runner can
+    report all of them rather than the first.
+    """
+
+    bus_ids: list[str]
+
+    def __init__(self, bus_ids: Sequence[str], message: str) -> None:
+        self.bus_ids = list(bus_ids)
+        super().__init__(message)
 
 
 class CorridorLimit(BaseModel):
@@ -180,34 +208,7 @@ class CorridorLimit(BaseModel):
     the one stored, and the mapping is derived on the way to the builder.
     """
 
-    model_config = ConfigDict(
-        extra="forbid", frozen=True, allow_inf_nan=True, ser_json_inf_nan="constants"
-    )
-    """The one model in this package that does **not** set ``allow_inf_nan=False``, and the reason
-    is :attr:`cap_mw`'s alone.
-
-    Everywhere else a non-finite float is meaningless — an infinite ``base_kv`` or ``p_max_mw``
-    describes nothing — so the package refuses them at the wire. An infinite *transfer capacity*
-    does describe something, and something the array level already accepts and the manual already
-    teaches: the **copper plate**, a corridor left in place with its bound lifted, which is not the
-    same market as deleting the corridor (that islands the zones). Before this, the two layers
-    disagreed — :func:`~mambo_power.opf.zonal.zonal_dc_opf`'s own guard says "give a number, 0, or
-    inf" and maps ``inf`` to ``kHighsInf``, while this model rejected it with ``finite_number`` and
-    left ``solve_zonal`` unable to express the copper plate at all. This model is the one that
-    yields.
-
-    ``allow_inf_nan`` is a model-wide switch, but the *scoping* is done by ``cap_mw``'s own
-    ``ge=0.0``, which rejects ``-inf`` and ``NaN`` (a ``NaN`` comparison is false), so ``+inf`` is
-    the only non-finite value that gets through — and ``zone1``/``zone2`` are strings.
-
-    ``ser_json_inf_nan="constants"`` writes it as the bare token ``Infinity``, which is what
-    :func:`json.dumps` emits and :func:`json.loads` accepts, so ``run_json``'s output stays
-    readable by the standard library and by pydantic. It is a JSON *extension*, not RFC 8259 — a
-    browser's ``JSON.parse`` will reject it — so a caller who needs strict JSON should send a large
-    finite cap instead. The default (``"null"``) was not an option: it serialises the cap to
-    ``null`` and then refuses to read it back, which is a one-way round trip that looks fine until
-    something reads it.
-    """
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     zone1: str = Field(
         description="One end of the corridor: a zone id present in the network. A zone id no bus "
@@ -218,15 +219,14 @@ class CorridorLimit(BaseModel):
         "must not appear elsewhere in the list. Both are enforced on MarketZonalOptions itself, "
         "before any solve (jobs: BAD_OPTIONS)."
     )
-    cap_mw: float = Field(
-        ge=0.0,
+    cap_mw: Annotated[float, Field(ge=0.0)] | None = Field(
         description="Transfer capacity, MW, as a magnitude: the corridor is bounded at "
         "[-cap_mw, +cap_mw], so it constrains both directions equally. ``0`` is allowed and means "
-        "a tie that exists but can carry nothing; ``inf`` is allowed and means the copper plate -- "
-        "the corridor stays in the LP, with no bound, which is a different market from deleting "
-        "the entry (that islands the two zones). ``NaN`` and ``-inf`` are rejected by this field's "
-        "own ``ge=0.0``. On the wire an infinite cap is the bare token ``Infinity``, a JSON "
-        "extension that json.loads reads and a browser's JSON.parse does not.",
+        "a tie that exists but can carry nothing. **null means unbounded** -- the copper plate: "
+        "the corridor stays in the LP with no bound at all, which is a different market from "
+        "deleting the entry (that islands the two zones and reports no capacity price for them). "
+        "A number must be finite: ``inf`` is rejected, so the copper plate has exactly one "
+        "spelling on this model and it is one every JSON parser reads.",
     )
 
 
@@ -299,8 +299,18 @@ class MarketZonalOptions(BaseModel):
         :func:`~mambo_power.opf.zonal.zonal_dc_opf` takes. Keys are left in the order given; the
         builder normalises each to sorted order. This is a dict comprehension and so cannot report
         a repeated key -- which is exactly why the repeat is rejected on the model above, before
-        any mapping is built."""
-        return {(entry.zone1, entry.zone2): entry.cap_mw for entry in self.corridors}
+        any mapping is built.
+
+        This is also where the copper plate changes spelling. On the wire an unbounded corridor is
+        ``null``, because that is what JSON has; the array-level builder wants ``inf``, because
+        that is what HiGHS has (it maps it to ``kHighsInf``). Neither layer has to know about the
+        other's, and the translation is one line here rather than a non-standard token in every
+        request and response body.
+        """
+        return {
+            (entry.zone1, entry.zone2): math.inf if entry.cap_mw is None else entry.cap_mw
+            for entry in self.corridors
+        }
 
 
 def _reject_corridors_naming_absent_zones(
@@ -348,19 +358,26 @@ def zone_partition(net: Network, arr: NetworkArrays) -> dict[str, str]:
     step for one more kind of network data, and a caller driving
     :func:`~mambo_power.opf.zonal.zonal_dc_opf` directly needs exactly this mapping.
 
-    Raises :class:`ValueError` naming the first offending bus if any kept bus has ``zone is
-    None``. A partition with a hole has no defensible repair -- that bus's load and generation
-    must enter *some* zone's balance row, and choosing one for the caller would clear a market for
-    a network they did not describe. (Buses ``NetworkArrays`` drops -- out of service, or on an
-    islanded component -- are not consulted: they have no columns and no load in the LP.)
+    Raises :class:`UnzonedBusError` -- a ``ValueError`` subclass carrying every offending bus id --
+    if any kept bus has ``zone is None``. A partition with a hole has no defensible repair: that
+    bus's load and generation must enter *some* zone's balance row, and choosing one for the caller
+    would clear a market for a network they did not describe. (Buses ``NetworkArrays`` drops -- out
+    of service, or on an islanded component -- are not consulted: they have no columns and no load
+    in the LP.)
+
+    ``Bus.zone`` is legitimately optional in the model, so this is not something
+    :func:`~mambo_power.model.validate_network` can catch: every other kind solves an unzoned
+    network happily. It is a requirement of *this* analysis, which is why it is raised here and
+    why the ``market.zonal`` runner is what translates it into a ``VALIDATION`` failure.
     """
     zone_of = {bus.id: bus.zone for bus in net.buses}
     missing = [bus_id for bus_id in arr.bus_ids if zone_of.get(bus_id) is None]
     if missing:
-        raise ValueError(
+        raise UnzonedBusError(
+            missing,
             f"{len(missing)} of {len(arr.bus_ids)} in-service buses carry no zone (first: "
             f'"{missing[0]}") -- a zonal clearing needs every bus assigned to exactly one zone. '
-            "Set Bus.zone (every MATPOWER import populates it from the ZONE column)."
+            "Set Bus.zone (every MATPOWER import populates it from the ZONE column).",
         )
     return {bus_id: str(zone_of[bus_id]) for bus_id in arr.bus_ids}
 

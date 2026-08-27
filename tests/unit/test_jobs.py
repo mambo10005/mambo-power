@@ -27,7 +27,6 @@ Contract under test (wave M2 design item 6, wave M3 design item 7, wave M4 desig
 from __future__ import annotations
 
 import json
-import math
 import warnings
 from typing import Any, NoReturn
 
@@ -939,19 +938,24 @@ def test_market_zonal_copper_plate_survives_the_json_round_trip_and_prices_as_on
     case30_zoned: Network,
 ) -> None:
     """Walk defect D3: the manual teaches the copper plate as "lifting the cap -- leaving the
-    column in place, unbounded", ``opf.zonal``'s own guard says "give a number, 0, or inf", and
-    ``CorridorLimit`` used to reject ``inf`` with ``finite_number``, so through ``solve_zonal`` the
-    copper plate could only be approximated by a large finite number.
+    column in place, unbounded", ``opf.zonal``'s own guard maps an infinite cap to ``kHighsInf``,
+    and ``CorridorLimit`` had no way to say it -- so through ``solve_zonal`` the copper plate could
+    only be approximated by a large finite number.
 
-    Proven here on the surface that made it hard -- ``run_json``, JSON text in and out -- and
-    proven as a *market* claim rather than a serialisation one: with every corridor unbounded the
-    three zones must clear at a single price, which is what a copper plate is. The paired negative
-    is committed next door, where an empty corridor list islands the same network and its three
-    zones price independently.
+    The spelling on this surface is ``null``, deliberately. ``SolveRequest``/``SolveResult`` are a
+    wire format, and RFC 8259 has no ``Infinity`` token: emitting one would make every client's
+    parser the engine's problem to carry a single edge value. ``null`` costs nothing and
+    ``corridor_map()`` turns it into the ``inf`` the builder wants.
+
+    Proven on the surface that made it hard -- ``run_json``, JSON text in and out -- and as a
+    *market* claim rather than a serialisation one: with every corridor unbounded the three zones
+    must clear at a single price, which is what a copper plate is. The paired negative is committed
+    next door, where an empty corridor list islands the same network and its three zones price
+    independently.
     """
     zone_ids = sorted({str(bus.zone) for bus in case30_zoned.buses if bus.zone is not None})
-    corridors = [
-        {"zone1": a, "zone2": b, "cap_mw": math.inf}
+    corridors: list[dict[str, object]] = [
+        {"zone1": a, "zone2": b, "cap_mw": None}
         for i, a in enumerate(zone_ids)
         for b in zone_ids[i + 1 :]
     ]
@@ -962,11 +966,11 @@ def test_market_zonal_copper_plate_survives_the_json_round_trip_and_prices_as_on
         job_id="copper-plate",
     )
     out_text = run_json(req.model_dump_json())
-    assert "Infinity" in out_text  # the wire form; json.loads reads it, JSON.parse does not
+    assert "Infinity" not in out_text, "the response must be RFC 8259 JSON"
     payload = json.loads(out_text)
     assert payload["status"] == "ok", payload.get("error")
     echoed = payload["provenance"]["options"]["corridors"]
-    assert [entry["cap_mw"] for entry in echoed] == [math.inf] * len(corridors)
+    assert [entry["cap_mw"] for entry in echoed] == [None] * len(corridors)
 
     out = SolveResult.model_validate_json(out_text)
     assert isinstance(out.result, MarketZonalResult)
@@ -975,6 +979,29 @@ def test_market_zonal_copper_plate_survives_the_json_round_trip_and_prices_as_on
     assert prices == pytest.approx([prices[0]] * 3, abs=1e-4), (
         f"an unbounded corridor between every pair is the copper plate: one price, got {prices}"
     )
+
+
+def test_market_zonal_with_an_unzoned_bus_is_a_validation_failure(case30_zoned: Network) -> None:
+    """A network whose buses do not all carry a zone is the caller's *data*, not an engine bug and
+    not a solver limit -- so it lands as ``VALIDATION`` with one ``DANGLING_REF`` issue per
+    offending bus, at the same path ``validate_network`` uses for a bus whose zone references a
+    zone that does not exist (``buses[i].zone``).
+
+    It is the last of the four caller mistakes the walk found reported as ``INTERNAL``. It cannot
+    be caught by ``validate_network`` itself, because ``Bus.zone`` is legitimately optional --
+    every other kind solves such a network happily. It is only ``market.zonal`` that needs it, so
+    it is only ``market.zonal``'s runner that reports it.
+    """
+    net = case30_zoned.model_copy(deep=True)
+    net.buses[3].zone = None
+    net.buses[7].zone = None
+    out = run(SolveRequest(kind="market.zonal", scenario=Scenario(network=net), options={}))
+    error = _assert_failed(out, "VALIDATION")
+    assert error.issues is not None
+    assert [issue.code for issue in error.issues] == ["DANGLING_REF", "DANGLING_REF"]
+    assert [issue.path for issue in error.issues] == ["buses[3].zone", "buses[7].zone"]
+    assert net.buses[3].id in error.issues[0].message
+    assert "carries no zone" in error.issues[0].message
 
 
 def test_market_zonal_corridor_naming_an_unknown_zone_is_a_validation_failure(
