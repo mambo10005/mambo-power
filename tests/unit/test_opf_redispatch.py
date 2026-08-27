@@ -178,6 +178,29 @@ def _overload_mw(net: Network, p_mw: FloatArray, d_mw: FloatArray) -> FloatArray
     return flow_mw - dispatched.rating_pu * dispatched.base_mva
 
 
+def _balance_residual_mw(net: Network, p_mw: FloatArray, d_mw: FloatArray) -> float:
+    """``Sum p - Sum d - (fixed load + shunts)`` at the point ``(p_mw, d_mw)``, MW.
+
+    :func:`_overload_mw` alone does **not** imply energy balance: ``pf.dc`` puts the slack bus at
+    angle 0 and lets it absorb whatever mismatch the declared injections carry, so an unbalanced
+    dispatch still produces a finite, possibly rating-respecting flow vector. A sign error
+    confined to the balance row is exactly that shape of defect, and the sabotage sweep found it
+    passing the flow readback on case30. So AC-3's "feasible" is asserted as both halves: the
+    flows respect every rating **and** the point closes the energy balance.
+    """
+    arr, *_rest, elastic = _problem(net)
+    elastic_idx = np.asarray(elastic, dtype=np.int64)
+    fixed_load_mw = arr.p_load_pu * arr.base_mva
+    if elastic_idx.size:
+        fixed_load_mw = fixed_load_mw - np.bincount(
+            arr.load_bus[elastic_idx],
+            weights=arr.load_p_max_pu[elastic_idx] * arr.base_mva,
+            minlength=arr.n_bus,
+        )
+    shunt_mw = arr.g_shunt_pu * arr.base_mva
+    return float(p_mw.sum() - d_mw.sum() - fixed_load_mw.sum() - shunt_mw.sum())
+
+
 def _bounds(net: Network) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
     """``(p_min, p_max, d_min, d_max)`` in MW, generator order and elastic-load order."""
     arr, *_rest, elastic = _problem(net)
@@ -232,6 +255,11 @@ def test_ac3_redispatch_restores_pf_dc_feasibility_from_an_infeasible_zonal_poin
     assert final_overload[worst] <= FLOW_TOL_MW, (
         f"{case}: branch index {worst} is still {final_overload[worst]!r} MW over its rating "
         "after redispatch"
+    )
+    # ...and the point closes the energy balance, which the flow readback above does not imply
+    # (see :func:`_balance_residual_mw`).
+    assert _balance_residual_mw(net, solution.dispatch_mw, solution.demand_dispatch_mw) == (
+        pytest.approx(0.0, abs=FLOW_TOL_MW)
     )
 
     # the point genuinely moved: a redispatch that changed nothing would pass the line above
