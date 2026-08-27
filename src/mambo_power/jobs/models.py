@@ -7,8 +7,9 @@ body of an HTTP request *is* a :class:`SolveRequest` and the body of the respons
 **How ``SolveResult.result`` is typed.** Its annotation is the closed union of the registered
 kinds' result models (``AcPowerFlowResult | DcPowerFlowResult`` in M2, widened to add
 ``OpfDcResult | N1Result`` in M3, ``MarketNodalResult`` in M4, ``MarketMultiperiodResult`` in
-M5). The type is *not* inferred from the payload's shape: a ``model_validator(mode="before")``
-looks the request ``kind`` up in :data:`~mambo_power.jobs.KINDS` and validates a dict ``result``
+M5, ``MarketZonalResult`` in M6). The type is *not* inferred from the payload's shape: a
+``model_validator(mode="before")`` looks the request ``kind`` up in :data:`~mambo_power.jobs.KINDS`
+and validates a dict ``result``
 with exactly that kind's ``result_model``; a second validator (``mode="after"``) then checks
 that the instance type equals the kind's model, and that ``status`` agrees with which of
 ``result`` / ``error`` is present. A pydantic discriminated union was not used because the
@@ -32,6 +33,7 @@ from mambo_power.results import (
     DcPowerFlowResult,
     MarketMultiperiodResult,
     MarketNodalResult,
+    MarketZonalResult,
     N1Result,
     OpfDcResult,
     ResultProvenance,
@@ -44,6 +46,7 @@ ResultModel = (
     | N1Result
     | MarketNodalResult
     | MarketMultiperiodResult
+    | MarketZonalResult
 )
 """The closed union of result types a ``SolveResult`` can carry (one per registered kind)."""
 

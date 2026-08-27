@@ -49,7 +49,8 @@ from mambo_power.jobs import (
     run_json,
 )
 from mambo_power.jobs import registry as jobs_registry
-from mambo_power.market import MarketMultiperiodOptions, MarketNodalOptions
+from mambo_power.market import CorridorLimit, MarketMultiperiodOptions, MarketNodalOptions
+from mambo_power.market.zonal import MarketZonalOptions
 from mambo_power.model import Network, Period, Scenario
 from mambo_power.numerics import SetpointConflictWarning
 from mambo_power.opf import OpfDcOptions
@@ -59,24 +60,37 @@ from mambo_power.results import (
     DcPowerFlowResult,
     MarketMultiperiodResult,
     MarketNodalResult,
+    MarketZonalResult,
     N1Result,
     OpfDcResult,
     ResultProvenance,
 )
 from tests._fixtures import FIXTURES_DIR
+from tests._rated import rated_network
+from tests._zones import corridors, promote_areas_to_zones
 
 DERIVED_DIR = FIXTURES_DIR / "derived"
 TIMING = {"provenance": {"started_at", "elapsed_s"}}
-# NOTE (S7/AC-7): widened from the M4 set of 5 to include "market.multiperiod" -- the one
-# deliberate edit to a pre-existing line in this file, unavoidable because this constant is
-# compared against jobs.KINDS by test_kinds_lists_exactly_the_m3_kinds/
+# NOTE (S7/AC-7, and again M6/S7b/AC-7): widened from the M4 set of 5 to include
+# "market.multiperiod" (M5), then to include "market.zonal" (M6) -- the one deliberate edit to a
+# pre-existing line in this file, unavoidable because this constant is compared against
+# jobs.KINDS by test_kinds_lists_exactly_the_m3_kinds/
 # test_register_adds_a_kind_and_refuses_duplicates, both of which assert the *current* set of
-# registered kinds. AC-7 itself requires "jobs.KINDS lists exactly 6 kinds", so leaving this at
-# 5 would make those two pre-existing tests assert something now false, not preserve a
+# registered kinds. Wave M6's AC-7 requires "jobs.KINDS lists exactly 7 kinds", so leaving this
+# at 6 would make those two pre-existing tests assert something now false, not preserve a
 # compatibility guarantee -- the same treatment wave M4 gave this identical line when it added
-# "market.nodal" as the 5th kind. No other pre-existing line in this file is touched; the
-# request/response *compatibility* tests below are added new, alongside the untouched originals.
-KNOWN_KINDS = {"pf.ac", "pf.dc", "opf.dc", "n1", "market.nodal", "market.multiperiod"}
+# "market.nodal" as the 5th kind, and wave M5 gave it again for the 6th. No other pre-existing
+# line in this file is touched; the request/response *compatibility* tests below are added new,
+# alongside the untouched originals.
+KNOWN_KINDS = {
+    "pf.ac",
+    "pf.dc",
+    "opf.dc",
+    "n1",
+    "market.nodal",
+    "market.multiperiod",
+    "market.zonal",
+}
 
 
 def _network(name: str = "case14") -> Network:
@@ -312,14 +326,16 @@ def _assert_failed(out: SolveResult, code: str) -> StructuredError:
 
 
 def test_unknown_kind_is_a_failed_result(case14: Network) -> None:
-    # "market.zonal" (spec Not Doing: zonal clearing is M6, not this wave) — genuinely unknown,
-    # unlike "market.nodal" which this wave (S6) registers; a still-unregistered example was
-    # needed after S6 landed.
-    out = run(SolveRequest(kind="market.zonal", network=case14, job_id="u"))
+    # NOTE (M6/S7b/AC-7): "market.zonal" was this test's genuinely-unknown example through M5 --
+    # it registered here, in this slice, which makes it a bad example of an *unknown* kind. Moved
+    # to "market.agents" (docs/manual/jobs.md's own "later waves" placeholder, still unregistered)
+    # for the same reason wave M4/S6 moved this test off "market.nodal" when *that* kind
+    # registered: the assertion needs a kind that stays unknown, not a fixed string.
+    out = run(SolveRequest(kind="market.agents", network=case14, job_id="u"))
     error = _assert_failed(out, "UNKNOWN_KIND")
-    assert out.kind == "market.zonal"
+    assert out.kind == "market.agents"
     assert out.job_id == "u"
-    assert "market.zonal" in error.message
+    assert "market.agents" in error.message
     assert "pf.ac" in error.message and "pf.dc" in error.message
 
 
@@ -541,7 +557,19 @@ def test_non_convergence_is_ok_with_converged_false(case14: Network) -> None:
 # SolveRequest(kind=..., network=...) construction or any pre-existing serialized JSON.
 # =================================================================================================
 
-ALL_SIX_KINDS = ("pf.ac", "pf.dc", "opf.dc", "n1", "market.nodal", "market.multiperiod")
+# NOTE (M6/S7b/AC-7): renamed from ALL_SIX_KINDS and widened with "market.zonal" -- the same kind
+# of unavoidable, count-bearing rename KNOWN_KINDS documents above (its own name would otherwise
+# assert a false "six" once a 7th kind exists). Its one usage (the purity parametrize below) and
+# the comment naming it were updated together; nothing else in this M5 section changed.
+ALL_SEVEN_KINDS = (
+    "pf.ac",
+    "pf.dc",
+    "opf.dc",
+    "n1",
+    "market.nodal",
+    "market.multiperiod",
+    "market.zonal",
+)
 
 
 def _two_period_scenario(case14: Network) -> Scenario:
@@ -555,7 +583,10 @@ def _two_period_scenario(case14: Network) -> Scenario:
 
 # --- KINDS contract: the 6th kind -------------------------------------------------------------
 def test_kinds_registers_market_multiperiod_as_the_sixth_kind() -> None:
-    assert len(KINDS) == 6
+    # NOTE (M6/S7b/AC-7): bumped 6 -> 7, the same necessary-count-edit treatment KNOWN_KINDS
+    # documents above -- a 7th kind (market.zonal) is now registered too, and this pre-existing
+    # exact-count assertion would otherwise assert something now false.
+    assert len(KINDS) == 7
     assert "market.multiperiod" in KINDS
     spec = KINDS["market.multiperiod"]
     assert spec.options_model is MarketMultiperiodOptions
@@ -663,9 +694,9 @@ def test_run_market_multiperiod_with_real_periods_via_scenario(case14: Network) 
     assert len(out.result.periods) == 2
 
 
-# --- purity, across all six kinds -------------------------------------------------------------
-@pytest.mark.parametrize("kind", ALL_SIX_KINDS)
-def test_run_is_pure_across_all_six_kinds(kind: str, case14: Network) -> None:
+# --- purity, across all seven kinds -----------------------------------------------------------
+@pytest.mark.parametrize("kind", ALL_SEVEN_KINDS)
+def test_run_is_pure_across_all_seven_kinds(kind: str, case14: Network) -> None:
     req = SolveRequest(kind=kind, network=case14)
     first, second = run(req), run(req)
     assert first.result is not None and second.result is not None
@@ -753,3 +784,239 @@ def test_market_multiperiod_shares_the_status_translation_function(
     net = _infeasible_net(case14)
     assert run(SolveRequest(kind="market.multiperiod", network=net)).error is not None
     assert calls == ["market.multiperiod"]
+
+
+# =================================================================================================
+# wave M6 S7b / AC-7 -- the market.zonal kind, jobs.KINDS widened from 6 to exactly 7. Every test
+# below is *added*; the only pre-existing lines touched are the two AC-7 itself forces (KNOWN_KINDS,
+# and ALL_SIX_KINDS -> ALL_SEVEN_KINDS with its one usage and comment), each explained at its own
+# site above -- the same treatment wave M5 gave this file when it added market.multiperiod.
+# =================================================================================================
+
+
+@pytest.fixture(scope="module")
+def case30_zoned() -> Network:
+    """A rated, zone-promoted case30 -- three real zones (11/10/9 buses, all three carrying
+    generation, measured directly), corridors derivable from tests/_zones.py's own cut-set
+    ratings. Mirrors tests/unit/test_market_zonal.py's _elastic_zoned_network, minus the elastic
+    bids AC-7's jobs-surface contract does not need."""
+    return rated_network(promote_areas_to_zones(_network("case30")))
+
+
+def _case30_zonal_options(net: Network) -> MarketZonalOptions:
+    """``MarketZonalOptions`` carrying every corridor ``tests/_zones.py`` derives from ``net``'s
+    own cut-set ratings -- the fixture half of AC-7's "corridors from tests/_zones.py" clause."""
+    caps = corridors(net)
+    return MarketZonalOptions(
+        corridors=[CorridorLimit(zone1=z1, zone2=z2, cap_mw=cap) for (z1, z2), cap in caps.items()]
+    )
+
+
+# --- KINDS contract: the 7th kind ---------------------------------------------------------------
+def test_kinds_registers_market_zonal_as_the_seventh_kind() -> None:
+    assert len(KINDS) == 7
+    assert "market.zonal" in KINDS
+    spec = KINDS["market.zonal"]
+    assert spec.options_model is MarketZonalOptions
+    assert spec.result_model is MarketZonalResult
+    assert callable(spec.runner)
+
+
+def test_kinds_is_sorted_with_market_zonal_in_place() -> None:
+    assert kinds() == sorted(KNOWN_KINDS)
+    assert "market.zonal" in kinds()
+
+
+# --- market.zonal happy path, promoted rated case30 with real corridors -------------------------
+def test_run_market_zonal_on_case30_is_ok_with_typed_result_and_provenance(
+    case30_zoned: Network,
+) -> None:
+    options = _case30_zonal_options(case30_zoned)
+    scenario = Scenario(network=case30_zoned)
+    out = run(SolveRequest(kind="market.zonal", scenario=scenario, options=options.model_dump()))
+    assert out.status == "ok"
+    assert out.error is None
+    assert isinstance(out.result, MarketZonalResult)
+    assert out.result.status == "Optimal"
+    assert len(out.result.zones) == 3  # one row per zone, promoted case30
+    assert out.result.branches  # M5 A23 carry-over: per-branch flow/dual rows present
+    assert out.provenance is not None
+    assert out.provenance.kind == "market.zonal"
+    assert out.provenance == out.result.provenance
+    assert len(out.provenance.options["corridors"]) == 3  # AC-7: options land in provenance too
+
+
+def test_run_market_zonal_with_no_options_is_ok_single_zone_case14(case14: Network) -> None:
+    """market.zonal takes the same network= single-period request every prior kind's jobs smoke
+    test uses (case14, one zone, no corridors needed) -- the T=1/no-corridor degenerate case, and
+    proof this kind needs no options to run at all (``MarketZonalOptions.corridors`` defaults to
+    ``[]``)."""
+    out = run(SolveRequest(kind="market.zonal", network=case14))
+    assert out.status == "ok"
+    assert isinstance(out.result, MarketZonalResult)
+    assert out.result.status == "Optimal"
+    assert len(out.result.zones) == 1
+
+
+# --- purity, JSON round trip, options preserved --------------------------------------------------
+def test_run_is_pure_for_market_zonal_with_real_corridors(case30_zoned: Network) -> None:
+    options = _case30_zonal_options(case30_zoned)
+    scenario = Scenario(network=case30_zoned)
+    req = SolveRequest(kind="market.zonal", scenario=scenario, options=options.model_dump())
+    first, second = run(req), run(req)
+    assert first.result is not None and second.result is not None
+    assert isinstance(first.result, MarketZonalResult)
+    assert first.result.model_dump(exclude=TIMING) == second.result.model_dump(exclude=TIMING)
+
+
+def test_request_with_market_zonal_options_round_trips_through_json(case30_zoned: Network) -> None:
+    """AC-7's explicit "including the options" clause: a ``SolveRequest`` carrying
+    ``MarketZonalOptions.corridors`` populated survives ``model_dump_json`` / ``model_validate_
+    json`` exactly, corridors and all."""
+    options = _case30_zonal_options(case30_zoned)
+    scenario = Scenario(network=case30_zoned)
+    req = SolveRequest(
+        kind="market.zonal", scenario=scenario, options=options.model_dump(), job_id="zt-1"
+    )
+    again = SolveRequest.model_validate_json(req.model_dump_json())
+    assert again == req
+    assert again.options["corridors"] == req.options["corridors"]
+    assert len(again.options["corridors"]) == 3
+
+
+def test_result_round_trips_through_json_for_market_zonal(case30_zoned: Network) -> None:
+    options = _case30_zonal_options(case30_zoned)
+    scenario = Scenario(network=case30_zoned)
+    out = run(SolveRequest(kind="market.zonal", scenario=scenario, options=options.model_dump()))
+    again = SolveResult.model_validate_json(out.model_dump_json())
+    assert again == out
+    assert type(again.result) is MarketZonalResult
+
+
+def test_market_zonal_with_corridors_round_trips_through_run_json(case30_zoned: Network) -> None:
+    """AC-7: ``run_json`` (JSON text in, JSON text out) for ``market.zonal`` with its options'
+    corridors populated -- the options-preservation clause, exercised through the JSON-in/
+    JSON-out entry point rather than ``run`` directly."""
+    options = _case30_zonal_options(case30_zoned)
+    scenario = Scenario(network=case30_zoned)
+    req = SolveRequest(
+        kind="market.zonal", scenario=scenario, options=options.model_dump(), job_id="mz-1"
+    )
+    out_text = run_json(req.model_dump_json())
+    payload = json.loads(out_text)
+    assert payload["status"] == "ok"
+    assert payload["kind"] == "market.zonal"
+    assert payload["job_id"] == "mz-1"
+    assert len(payload["provenance"]["options"]["corridors"]) == 3
+    out = SolveResult.model_validate_json(out_text)
+    assert isinstance(out.result, MarketZonalResult)
+    assert len(out.result.zones) == 3
+
+
+# --- never raises: adversarial inputs for market.zonal -------------------------------------------
+def test_market_zonal_with_empty_corridors_islands_the_zones_and_is_not_an_error(
+    case30_zoned: Network,
+) -> None:
+    """S3's A22(i) finding, exercised through ``jobs``: an empty corridor list is not the copper
+    plate -- it islands the zones, each self-supplying -- and every zone on promoted case30
+    carries generation (measured directly, ``_case30_zonal_options``'s own docstring), so this is
+    a legitimate Optimal clearing, not a failure. ``solve_zonal``'s own docstring: "With no
+    corridors at all, every zone must supply itself -- a legitimate (and often infeasible) market
+    design, not an error." """
+    scenario = Scenario(network=case30_zoned)
+    out = run(SolveRequest(kind="market.zonal", scenario=scenario))  # options={} -> corridors=[]
+    assert out.status == "ok"
+    assert isinstance(out.result, MarketZonalResult)
+    assert out.result.status == "Optimal"
+    prices = {z.id: z.price for z in out.result.zones}
+    assert len(prices) == 3
+    assert len(set(prices.values())) == 3  # islanded: every zone prices independently
+
+
+def test_market_zonal_corridor_naming_an_unknown_zone_is_a_failed_result_not_a_crash(
+    case30_zoned: Network,
+) -> None:
+    """A corridor naming a zone no bus is assigned to is ``solve_zonal``'s own documented
+    ``ValueError`` (``opf.zonal._normalise_corridors``); ``jobs.run``'s boundary catches it the
+    same as any other runner bug -- ``INTERNAL``, not a raised exception."""
+    scenario = Scenario(network=case30_zoned)
+    bad_options = {"corridors": [{"zone1": "1", "zone2": "no-such-zone", "cap_mw": 10.0}]}
+    out = run(SolveRequest(kind="market.zonal", scenario=scenario, options=bad_options))
+    error = _assert_failed(out, "INTERNAL")
+    assert "no-such-zone" in error.message
+
+
+def test_market_zonal_through_resolved_scenario_invalid_network_is_a_failed_validation_result(
+    case30_zoned: Network,
+) -> None:
+    """The same mutated-invalid-network path ``test_mutated_invalid_network_through_run_is_a_
+    failed_result`` proves for ``pf.ac``, routed through ``market.zonal``:
+    ``SolveRequest.resolved_scenario``'s wrap re-runs ``Network``'s own validator (M5 A22), so
+    ``run`` still catches it as ``VALIDATION`` rather than letting the exception cross its
+    boundary."""
+    req = SolveRequest(kind="market.zonal", network=case30_zoned)
+    before = req.resolved_scenario  # valid before mutation: does not raise
+    assert before.network is case30_zoned
+    req.network.branches[0].to_bus = "bus-999999"
+    out = run(req)
+    error = _assert_failed(out, "VALIDATION")
+    assert error.issues
+
+
+def test_infeasible_market_zonal_is_infeasible_lp_not_internal(case14: Network) -> None:
+    """AC-7: the same hand-built infeasible network as ``opf.dc``'s / ``market.nodal``'s /
+    ``market.multiperiod``'s equivalent tests, routed through ``market.zonal`` -- an infeasible
+    zonal clearing must land as ``INFEASIBLE_LP``, not ``INTERNAL``, and not a "successful"
+    ``status="ok"`` result."""
+    out = run(SolveRequest(kind="market.zonal", network=_infeasible_net(case14)))
+    error = _assert_failed(out, "INFEASIBLE_LP")
+    assert "Infeasible" in error.message
+    assert "zonal clearing stage" in error.message
+
+
+def test_market_zonal_shares_the_status_translation_function(
+    case14: Network, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Design item 6 (reused, not re-implemented a fourth time): spies on the same
+    ``_translate_non_optimal_status`` object ``opf.dc``, ``market.nodal`` and ``market.
+    multiperiod`` already share, and confirms ``market.zonal``'s runner exercises that identical
+    function object too."""
+    original = jobs_registry._translate_non_optimal_status
+    calls: list[str] = []
+
+    def spy(kind: str, status: str, message: str | None) -> NoReturn:
+        calls.append(kind)
+        original(kind, status, message)
+
+    monkeypatch.setattr(jobs_registry, "_translate_non_optimal_status", spy)
+    net = _infeasible_net(case14)
+    assert run(SolveRequest(kind="market.zonal", network=net)).error is not None
+    assert calls == ["market.zonal"]
+
+
+# --- backward compatibility: all six prior kinds unchanged ---------------------------------------
+PRIOR_SIX_KINDS = ("pf.ac", "pf.dc", "opf.dc", "n1", "market.nodal", "market.multiperiod")
+
+
+@pytest.mark.parametrize("kind", PRIOR_SIX_KINDS)
+def test_prior_six_kinds_still_accept_their_existing_network_form_unchanged(
+    kind: str, case14: Network
+) -> None:
+    """AC-7's explicit clause: registering ``market.zonal`` as the 7th kind changes nothing about
+    the six that came before it -- every pre-existing ``SolveRequest(kind=..., network=...)``
+    construction still resolves and runs exactly as it did before this slice."""
+    out = run(SolveRequest(kind=kind, network=case14))
+    assert out.status == "ok"
+    assert out.error is None
+    assert out.result is not None
+
+
+@pytest.mark.parametrize("kind", ("pf.ac", "market.multiperiod"))
+def test_prior_kinds_still_accept_their_existing_scenario_form_unchanged(
+    kind: str, case14: Network
+) -> None:
+    """The ``scenario=`` form (wave M5 D3), also unchanged by this slice's widening."""
+    out = run(SolveRequest(kind=kind, scenario=Scenario(network=case14)))
+    assert out.status == "ok"
+    assert out.error is None
+    assert out.result is not None

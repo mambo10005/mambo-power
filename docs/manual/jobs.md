@@ -33,7 +33,7 @@ survive that boundary. `jobs` turns every outcome into data.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `kind` | `str` | One of the keys of `KINDS`: `"pf.ac"`, `"pf.dc"` in M2; `"opf.dc"`, `"n1"` in M3; `"market.nodal"` in M4; `"market.multiperiod"` in M5; `"market.zonal"`, `"market.agents"` in later waves. |
+| `kind` | `str` | One of the keys of `KINDS`: `"pf.ac"`, `"pf.dc"` in M2; `"opf.dc"`, `"n1"` in M3; `"market.nodal"` in M4; `"market.multiperiod"` in M5; `"market.zonal"` in M6; `"market.agents"` in a later wave. |
 | `network` | `Network \| None` | The network to solve (inline; the request is self-contained). Mutually exclusive with `scenario`. |
 | `scenario` | `Scenario \| None` | The scenario to solve — a network plus its `periods`. Mutually exclusive with `network`. |
 | `options` | `dict[str, Any]` | Kind-specific options, validated against the kind's options model (`AcOptions` for `pf.ac`; none for `pf.dc`). Unknown keys are a failure, not silently ignored. Default `{}`. |
@@ -56,7 +56,7 @@ mutated in place after construction is still reflected.
 | `kind` | `str` | Echo of the request kind (`""` when the request text could not be read at all). |
 | `job_id` | `str \| None` | Echo of the request `job_id`. |
 | `status` | `"ok" \| "failed"` | Outcome. |
-| `result` | kind's result model or `None` | The registered kind's own model — `AcPowerFlowResult` / `DcPowerFlowResult` for the power-flow kinds, `OpfDcResult`, `N1Result`, `MarketNodalResult`, `MarketMultiperiodResult` for the rest. Present exactly when `status == "ok"`. |
+| `result` | kind's result model or `None` | The registered kind's own model — `AcPowerFlowResult` / `DcPowerFlowResult` for the power-flow kinds, `OpfDcResult`, `N1Result`, `MarketNodalResult`, `MarketMultiperiodResult`, `MarketZonalResult` for the rest. Present exactly when `status == "ok"`. |
 | `error` | `StructuredError \| None` | Present exactly when `status == "failed"`. |
 | `provenance` | `ResultProvenance \| None` | The solver's stamp on success; a minimal stamp on failure; `None` only when not even the kind was readable. |
 | `warnings` | `list[str]` | Every warning emitted during the solve, as `"Category: message"` strings. |
@@ -85,8 +85,8 @@ discriminator lives on the parent, not inside the result.
 | `VALIDATION` | The network failed validation — on mutation after construction, or in the request JSON (`run_json`); `issues` holds every code and path. |
 | `NO_SLACK_GENERATOR` | The slack bus has no in-service generator (`NoSlackGeneratorError` from `effective_roles`). |
 | `UNSOLVABLE_NETWORK` | A valid network the numerics it was handed to cannot solve, e.g. DC on a branch with `x == 0` (`UnsolvableNetworkError`) — user data, not a solver bug. |
-| `INFEASIBLE_LP` | An `opf.dc`, `market.nodal` or `market.multiperiod` LP/QP came back with a non-`"Optimal"`, non-`"Unbounded"` status: there is no feasible dispatch at all, so there is nothing to return. |
-| `UNBOUNDED_LP` | The same three kinds, status `"Unbounded"`. |
+| `INFEASIBLE_LP` | An `opf.dc`, `market.nodal`, `market.multiperiod` or `market.zonal` LP/QP came back with a non-`"Optimal"`, non-`"Unbounded"` status: there is no feasible dispatch at all, so there is nothing to return. |
+| `UNBOUNDED_LP` | The same four kinds, status `"Unbounded"`. |
 | `BAD_REQUEST` | `run_json` only: the text is not valid JSON, not a `SolveRequest`, or carries neither/both of `network` and `scenario`. |
 | `INTERNAL` | Anything else the runner raised (singular matrix, a bug): `"ExceptionType: message"`. |
 
@@ -107,7 +107,7 @@ kinds() -> list[str]                  # sorted names
 ```
 
 The registry is the contract: the contract test asserts `KINDS` lists exactly the kinds the
-wave ships — six as of M5 — and that every entry's models are importable and its runner
+wave ships — seven as of M6 — and that every entry's models are importable and its runner
 callable. Later waves `register` their kinds; nothing else in the package changes.
 
 Every runner has the one `(Scenario, options) -> result` shape (wave M5). A kind that only
@@ -185,13 +185,14 @@ for name, spec in jobs.KINDS.items():
 ```
 
 ```text
-['market.multiperiod', 'market.nodal', 'n1', 'opf.dc', 'pf.ac', 'pf.dc']
+['market.multiperiod', 'market.nodal', 'market.zonal', 'n1', 'opf.dc', 'pf.ac', 'pf.dc']
 pf.ac AcOptions AcPowerFlowResult
 pf.dc None DcPowerFlowResult
 opf.dc OpfDcOptions OpfDcResult
 n1 N1Options N1Result
 market.nodal MarketNodalOptions MarketNodalResult
 market.multiperiod MarketMultiperiodOptions MarketMultiperiodResult
+market.zonal MarketZonalOptions MarketZonalResult
 ```
 
 JSON in, JSON out — what a handler or a queue worker does:
@@ -222,7 +223,7 @@ def solve(body: jobs.SolveRequest) -> jobs.SolveResult:
 ### Failures are data
 
 ```python
-bad_kind = jobs.run(jobs.SolveRequest(kind="market.zonal", network=net))  # not registered yet
+bad_kind = jobs.run(jobs.SolveRequest(kind="market.agents", network=net))  # not registered yet
 print(bad_kind.status, bad_kind.error.code, "|", bad_kind.error.message)
 
 bad_opts = jobs.run(jobs.SolveRequest(kind="pf.ac", network=net, options={"tol": "x"}))
@@ -239,7 +240,7 @@ print(noslack.status, noslack.error.code, "|", noslack.error.message)
 ```
 
 ```text
-failed UNKNOWN_KIND | unknown kind "market.zonal"; registered kinds: market.multiperiod, market.nodal, n1, opf.dc, pf.ac, pf.dc
+failed UNKNOWN_KIND | unknown kind "market.agents"; registered kinds: market.multiperiod, market.nodal, market.zonal, n1, opf.dc, pf.ac, pf.dc
 failed BAD_OPTIONS | [{'type': 'float_parsing', 'loc': ['tol'], 'msg': 'Input should be a valid number, unable to parse string as a number'}]
 failed VALIDATION | ['DANGLING_REF at branches[0].to_bus: branch "branch-1": to_bus references missing bus "bus-999"']
 failed NO_SLACK_GENERATOR | slack bus "bus-1" (position 0) has no in-service generator; a power flow cannot close the balance
@@ -277,10 +278,22 @@ hook: a 24-period case14 horizon solves in well under a second, so there is noth
 report progress on yet. A kind whose runtime makes that untrue would take such a hook in
 the request rather than holding state; its wave defines it.
 
+`market.zonal`'s `MarketZonalOptions.corridors` is market design data the network does not
+carry (a transfer capacity is administratively negotiated, not a network invariant), so unlike
+every other kind's options it is not solver tuning — see
+`mambo_power.market.zonal.CorridorLimit`. `corridors` defaults to `[]`, which is not shorthand
+for "no limit": with no corridors at all, every zone must supply itself, a legitimate (and
+often infeasible) market design in its own right. `jobs.run` validates it the same way as
+every other kind's options — a corridor naming a zone the network has no bus assigned to is
+caught before any solve is attempted — and its three-stage chain (zonal clearing, redispatch,
+nodal reference) reports whichever stage first failed to reach `Optimal` through the same
+`INFEASIBLE_LP` / `UNBOUNDED_LP` translation the other market kinds use.
+
 ## Relationship to the module-level functions
 
-`pf.solve_dc`, `pf.solve_ac`, `opf.solve_dc_opf`, `contingency.n1`, `market.solve_nodal` and
-`market.solve_multiperiod` remain the notebook-friendly entry points. They take and return the same pydantic models, raise
+`pf.solve_dc`, `pf.solve_ac`, `opf.solve_dc_opf`, `contingency.n1`, `market.solve_nodal`,
+`market.solve_multiperiod` and `market.solve_zonal` remain the notebook-friendly entry points.
+They take and return the same pydantic models, raise
 Python exceptions on failure, let warnings propagate, and are what `jobs.run` calls. Use them
 directly when you are writing Python; use `jobs` when the caller is a service, a queue, or
 anything that needs a failure to be data rather than an exception.
