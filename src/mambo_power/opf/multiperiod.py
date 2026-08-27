@@ -112,13 +112,10 @@ from mambo_power.numerics.ptdf import ptdf as compute_ptdf
 from mambo_power.opf.dc_opf import (
     ColArray,
     FloatArray,
-    NonConcaveBidError,
-    NonConvexCostError,
     _add_rows,
     _balance_row,
-    _concave_pwl_segments,
-    _convex_pwl_segments,
     _epigraph_rows,
+    _extract_and_validate,
     _flow_limit_rows,
     _hypograph_rows,
     _RowBlock,
@@ -319,13 +316,22 @@ def multiperiod_dc_opf(
 
     if n_periods < 1:
         raise ValueError(f"n_periods must be >= 1, got {n_periods}")
-    coeffs = np.asarray(cost_coeffs, dtype=np.float64)
-    if coeffs.shape != (n_gen, 3):
-        raise ValueError(
-            f"cost_coeffs must have shape ({n_gen}, 3) ([c2, c1, c0] per generator), "
-            f"got {coeffs.shape}"
-        )
-    c2, c1, c0 = coeffs[:, 0], coeffs[:, 1], coeffs[:, 2]
+
+    # --- cost/bid extraction and validation: dc_opf's own helper, not a copy of it (ADR-008).
+    # It runs before period_load_mw/ramp validation because every guard it carries is promised
+    # "up front" by this function's own docstring and by the two error classes' docstrings.
+    problem = _extract_and_validate(
+        cost_coeffs, pwl_costs, demand_bid_coeffs, demand_pwl_bids, n_gen, n_load
+    )
+    c2, c1, c0 = problem.c2, problem.c1, problem.c0
+    v1, v2 = problem.v1, problem.v2
+    pwl_gen_idxs, segments_by_gen = problem.pwl_gen_idxs, problem.segments_by_gen
+    demand_pwl_idxs, demand_segments_by_load = (
+        problem.demand_pwl_idxs,
+        problem.demand_segments_by_load,
+    )
+    elastic_load_idxs = problem.elastic_load_idxs
+    n_pwl, n_demand, n_demand_pwl = problem.n_pwl, problem.n_demand, problem.n_demand_pwl
 
     if period_load_mw is not None:
         period_load_mw = np.asarray(period_load_mw, dtype=np.float64)
@@ -336,60 +342,6 @@ def multiperiod_dc_opf(
             )
     ramp_up = _checked_ramp("ramp_up_mw", ramp_up_mw, n_gen)
     ramp_down = _checked_ramp("ramp_down_mw", ramp_down_mw, n_gen)
-
-    # --- cost/bid extraction, identical to dc_opf's (fail fast on a non-convex curve) ----------
-    pwl_costs_ = pwl_costs or {}
-    pwl_gen_idxs = sorted(pwl_costs_)
-    segments_by_gen = {i: _convex_pwl_segments(pwl_costs_[i]) for i in pwl_gen_idxs}
-    n_pwl = len(pwl_gen_idxs)
-
-    demand_bid_coeffs_ = demand_bid_coeffs or {}
-    demand_pwl_bids_ = demand_pwl_bids or {}
-    overlap = set(demand_bid_coeffs_) & set(demand_pwl_bids_)
-    if overlap:
-        raise ValueError(
-            f"load index(es) {sorted(overlap)} appear in both demand_bid_coeffs and "
-            "demand_pwl_bids — a load's bid must be either polynomial or piecewise-linear, "
-            "not both"
-        )
-    elastic_load_idxs = sorted(set(demand_bid_coeffs_) | set(demand_pwl_bids_))
-    for idx in elastic_load_idxs:
-        if not (0 <= idx < n_load):
-            raise ValueError(
-                f"demand bid load index {idx} out of range for {n_load} loads "
-                "(NetworkArrays.load_ids)"
-            )
-    n_demand = len(elastic_load_idxs)
-    demand_pwl_idxs = sorted(demand_pwl_bids_)
-    demand_segments_by_load = {
-        i: _concave_pwl_segments(demand_pwl_bids_[i]) for i in demand_pwl_idxs
-    }
-    n_demand_pwl = len(demand_pwl_idxs)
-
-    v2 = np.zeros(n_demand)
-    v1 = np.zeros(n_demand)
-    v0 = np.zeros(n_demand)
-    for j, idx in enumerate(elastic_load_idxs):
-        if idx in demand_bid_coeffs_:
-            v2[j], v1[j], v0[j] = demand_bid_coeffs_[idx]
-    del v0  # constant bid terms never enter the LP (dc_opf drops them the same way)
-
-    neg_c2 = np.flatnonzero(c2 < 0)
-    if neg_c2.size:
-        bad = int(neg_c2[0])
-        raise NonConvexCostError(
-            f"non-convex quadratic generator cost: generator index {bad} has c2={c2[bad]!r} < 0 "
-            "— a quadratic cost must have c2 >= 0 for the QP's Hessian to be convex "
-            "(mambo_power.opf.dc_opf module docstring, generator-side convexity guard)"
-        )
-    pos_v2 = np.flatnonzero(v2 > 0)
-    if pos_v2.size:
-        bad = int(pos_v2[0])
-        raise NonConcaveBidError(
-            f"non-concave quadratic demand bid: load index {elastic_load_idxs[bad]} has "
-            f"v2={v2[bad]!r} > 0 — a quadratic value curve must have v2 <= 0 for the welfare "
-            "QP's Hessian to stay convex"
-        )
 
     # --- column layout (module docstring, "Column layout") -------------------------------------
     per_period_dispatch = n_gen + n_demand + 3 * n_storage
