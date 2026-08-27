@@ -6,6 +6,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mambo_power.model.network import Network
 
+MAX_PERIODS = 200
+"""Upper bound on ``Scenario.periods``' length: a wire-format decompression-bomb guard, not a
+solver limit. M5 measured a 33,997-byte ``SolveRequest`` expanding to 20,088,000 constraint-matrix
+nonzeros before HiGHS even starts (~7,000x, `continuation-m5.md` carry-over 3); nonzeros scale as
+``T * n_branch * n_gen``, so the ratio grows with the horizon length alone. `m6-research.md` §8
+sizes 200 as the largest horizon that keeps ``case300`` -- this repo's biggest fixture -- near
+~68 MB by that same linear estimate, while still covering 8x the epic's stated 24-period real use
+case (R7) and more than a full week of hourly periods (168)."""
+
 
 class Period(BaseModel):
     """One period's load overrides within a multi-period :class:`Scenario`.
@@ -58,8 +67,11 @@ class Scenario(BaseModel):
     periods: list[Period] | None = Field(
         default=None,
         min_length=1,
+        max_length=MAX_PERIODS,
         description="Per-period load overrides; None = single-period, market.nodal semantics "
-        "unchanged. If given, must be non-empty.",
+        "unchanged. If given, must be non-empty and at most MAX_PERIODS (200) entries -- a "
+        "wire-format decompression-bomb guard: constraint-matrix nonzeros scale with horizon "
+        "length, and M5 measured a 33,997-byte request expanding to 20,088,000 of them.",
     )
 
     @model_validator(mode="after")
