@@ -1,4 +1,4 @@
-"""Typed, id-keyed solver results with provenance (epic Design §1-2; wave M2 W5).
+"""Typed, id-keyed solver results with provenance.
 
 Results are values produced by ``pf`` (and later ``opf``, ``contingency``, ``market``) and
 consumed by ``jobs`` and user code. They are pydantic v2 models — exact JSON round-trip,

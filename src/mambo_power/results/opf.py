@@ -1,5 +1,6 @@
-"""DC-OPF result: dispatch, LMP breakdown, branch flows, shadow prices (spec design item 1-2;
-wave M3 W1/W2). Mirrors the ``pf`` result pattern (:mod:`mambo_power.results.power_flow`):
+"""DC-OPF result: dispatch, LMP breakdown, branch flows, shadow prices.
+
+Mirrors the ``pf`` result pattern (:mod:`mambo_power.results.power_flow`):
 id-keyed rows plus :class:`~mambo_power.results.provenance.ResultProvenance`, never attached to
 a :class:`~mambo_power.model.Network`.
 """

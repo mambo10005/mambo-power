@@ -1,5 +1,5 @@
 """``market.multiperiod`` clearing result: per-period dispatch, LMPs and settlement, per-storage
-charge/discharge/SoC, and horizon totals (wave M5 W5).
+charge/discharge/SoC, and horizon totals.
 
 The multiperiod sibling of :mod:`mambo_power.results.market`, and shaped the same way: id-keyed
 rows plus :class:`~mambo_power.results.provenance.ResultProvenance`, never attached to a

@@ -1,10 +1,9 @@
-"""N-1 branch-contingency screen-then-confirm result (wave M3 W5, AC-4/AC-6).
+"""N-1 branch-contingency screen-then-confirm result.
 
-``N1Result`` is shared here rather than siloed in ``contingency`` — the wave spec's own
-ownership table names ``results.N1Result`` as the type ``contingency.n1`` produces and ``jobs``'
-``n1`` kind consumes, mirroring why ``FeasibilityReport`` (W6) is shared too: a later wave
-composing N-1 state elsewhere would want the identical shape without importing ``contingency``
-for it.
+``N1Result`` is shared here rather than siloed in ``contingency`` because it is the type
+``contingency.n1`` produces *and* the type ``jobs``' ``n1`` kind consumes, mirroring why
+:class:`~mambo_power.results.FeasibilityReport` is shared too: code composing N-1 state elsewhere
+wants the identical shape without importing ``contingency`` for it.
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ class N1OutageResult(BaseModel):
 
     Only outages the screen flagged (at least one monitored branch estimated over its rating)
     are re-solved and appear here at all — an unflagged outage is asserted, not re-solved, to
-    be non-violating; AC-6's brute-force agreement test proves that assertion holds.
+    be non-violating, which a brute-force agreement test in ``tests/`` proves is safe.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)

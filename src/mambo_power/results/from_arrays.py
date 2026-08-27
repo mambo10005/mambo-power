@@ -53,7 +53,7 @@ def dc_result_from_arrays(
     ``theta_rad``/``p_inj_pu`` are per bus, ``p_from_pu`` per branch, ``gen_p_pu`` per generator
     (already carrying the slack balance). Reactive columns are 0, ``vm_pu`` is 1.0 (MATPOWER
     ``rundcpf`` sets ``VM = 1`` everywhere). ``role_effective`` comes from ``bus_type`` — the
-    effective roles (W3) when the caller passes them, the declared ``arr.bus_type`` otherwise.
+    effective roles when the caller passes them, the declared ``arr.bus_type`` otherwise.
     """
     if theta_rad.shape != (arr.n_bus,) or p_inj_pu.shape != (arr.n_bus,):
         raise ValueError("bus arrays must have shape (n_bus,)")

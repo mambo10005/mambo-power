@@ -15,7 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 BusRole = Literal["slack", "pv", "pq"]
-"""The role a bus was solved with (W3: the *effective* role, which may differ from the declared)."""
+"""The role a bus was solved with — the *effective* role, which may differ from the declared."""
 
 QLimitSide = Literal["none", "min", "max"]
 """Which reactive limit a generator was pinned at by AC Q-limit enforcement; ``none`` for DC."""

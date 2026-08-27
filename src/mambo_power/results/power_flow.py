@@ -88,7 +88,7 @@ class DcPowerFlowResult(PowerFlowResultBase):
 
 
 class AcPowerFlowResult(PowerFlowResultBase):
-    """Result of the AC Newton-Raphson solve (W1), with the iteration diagnostics."""
+    """Result of the AC Newton-Raphson solve, with the iteration diagnostics."""
 
     iterations: int = Field(ge=0, description="Newton iterations summed over all Q-limit rounds.")
     max_mismatch_mva: float = Field(ge=0.0, description="Final power-mismatch infinity norm, MVA.")

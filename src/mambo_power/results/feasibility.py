@@ -1,7 +1,7 @@
-"""``FeasibilityReport``: AC-feasibility check of a dispatch (spec design item 6, W6).
+"""``FeasibilityReport``: AC-feasibility check of a dispatch.
 
-Shared under ``results`` rather than siloed in ``opf`` since a later wave's AC-checked N-1 state
-wants the identical shape (design item 6). :func:`feasibility_report` builds one from a solved
+Shared under ``results`` rather than siloed in ``opf`` because an AC-checked N-1 state wants the
+identical shape. :func:`feasibility_report` builds one from a solved
 :class:`~mambo_power.results.AcPowerFlowResult` (the dispatched state) plus the
 :class:`~mambo_power.model.Network` it was solved on (the declared bounds) — neither alone
 carries both; :func:`mambo_power.opf.solve_dc_opf` calls it when ``options.ac_check`` is true.
