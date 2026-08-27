@@ -221,30 +221,27 @@ in place, unbounded — collapses the rows into one and produces a single price.
 example below, capping the corridor at 20 MW and deleting it outright both give prices
 `10 / 50`; only `cap_mw=None` gives `10 / 10`.
 
-**Lifting the cap is spelled `None`.** `CorridorLimit.cap_mw` is `float | None`, and `None` *is*
-the unbounded corridor — not a stand-in for one:
+**Lifting the cap is spelled `None`.** The whole rule for `CorridorLimit.cap_mw`: the copper plate
+is `None` (`null` on the wire), and any other cap must be a finite, non-negative number.
+`inf`, `-inf` and `NaN` are all rejected.
 
 ```python
 market.CorridorLimit(zone1="A", zone2="B", cap_mw=None)   # copper plate
 market.CorridorLimit(zone1="A", zone2="B", cap_mw=0.0)    # a tie that carries nothing
+market.CorridorLimit(zone1="A", zone2="B", cap_mw=20.0)   # an ordinary transfer capacity
 ```
-
-`float("inf")` is **not** accepted: the model rejects every non-finite float, as every other
-model in this package does. Nor is a large finite number a substitute — a cap of `1e6` is a
-number that happens to exceed *this* network, and the same request against a bigger system is a
-silently binding limit wearing the word "unbounded".
-
-On the wire `None` is JSON's own `null`, so a copper-plate request is ordinary RFC 8259 JSON:
 
 ```json
 {"zone1": "A", "zone2": "B", "cap_mw": null}
 ```
 
-and it **survives the round trip as `null`** — `run_json` echoes the options back in
-`provenance.options` with `"cap_mw": null`, not `Infinity` and not a large float. That matters to
-anyone writing a client: a bare `Infinity` token is a JSON extension that `json.loads` accepts and
-a browser's `JSON.parse` rejects, so a response carrying one is not parseable everywhere the
-request was.
+`None` *is* the unbounded corridor rather than a stand-in for one, and a large finite cap is not a
+substitute: `1e6` is a number that happens to exceed *this* network, so the same request against a
+bigger system is a silently binding limit wearing the word "unbounded".
+
+**`cap_mw` is required — there is no default.** Leaving it out is an error, not a shorthand for
+`null`. That is deliberate: if omission meant "unbounded", the most permissive market on the
+network would be the one you get by forgetting a field.
 
 The trap has a second edge. A control case built by *removing* the corridor would also pass an
 engine with the corridor column's sign flipped, because there would be no column left to have a
@@ -602,7 +599,8 @@ does not converge.
 | A corridor naming the same zone twice | pydantic `ValidationError` at **`MarketZonalOptions`** construction — a corridor joins two *distinct* zones. Through `jobs.run`: **`BAD_OPTIONS`** |
 | The same zone pair given twice, **in either order** | pydantic `ValidationError` at `MarketZonalOptions` construction — a corridor is keyed by an *unordered* pair, so give it exactly once. Through `jobs.run`: **`BAD_OPTIONS`** |
 | A negative `cap_mw` | pydantic `ValidationError` at `CorridorLimit` construction (the field is `ge=0`). A cap of exactly `0` is allowed: a tie that exists and can carry nothing. Through `jobs.run`: **`BAD_OPTIONS`** |
-| A non-finite `cap_mw` (`inf`, `NaN`) | pydantic `ValidationError` — the model rejects non-finite floats. The unbounded corridor is `cap_mw=None` / `"cap_mw": null`, never `inf`. Through `jobs.run`: **`BAD_OPTIONS`** |
+| A non-finite `cap_mw` (`inf`, `-inf`, `NaN`) | pydantic `ValidationError` — a cap that is not `null` must be a finite, non-negative number. The unbounded corridor is `cap_mw=None` / `"cap_mw": null`. Through `jobs.run`: **`BAD_OPTIONS`** |
+| `cap_mw` omitted | pydantic `ValidationError` (`Field required`) — the field has **no default**, and omitting it is not shorthand for `null`; a forgotten field must not silently produce the most permissive market on the network. Through `jobs.run`: **`BAD_OPTIONS`**, `loc = ['corridors', i, 'cap_mw']` |
 | More than `MAX_CORRIDORS` (500) corridors | pydantic `ValidationError` at `MarketZonalOptions` construction (`max_length`). Through `jobs.run`: **`BAD_OPTIONS`** — see [Jobs API › Request-size bounds](jobs.md#request-size-bounds) |
 | A non-convex generator cost or non-concave load bid | `NonConvexCostError` / `NonConcaveBidError`, both `ValueError` subclasses, raised by the shared extractor before any solver object exists |
 | Any of the three stages not reaching `Optimal` | **No exception.** `MarketZonalResult.status` carries the solver's own status and `message` names the stage: `"zonal clearing stage: ..."`, `"redispatch stage: ..."` or `"nodal reference stage: ..."`. Every row list is empty and every figure is `0.0` |
@@ -612,6 +610,13 @@ subclasses `Exception` on purpose, so that pydantic cannot convert it and hide i
 list. Everything else in the table is a `ValueError` (pydantic's own `ValidationError` included).
 `except ValueError:` will not catch a dangling zone reference; catch `NetworkValidationError` by
 name. See [Network model › Validation](model.md#validation).
+
+The two zone faults in that table **report identically**: a `Bus.zone` naming a zone the network
+does not have, and a bus carrying no zone at all, both come back as `DANGLING_REF` at
+`buses[i].zone`. That is the point of reusing the code rather than inventing a second one — to a
+caller both are the same kind of problem, a bus whose zone does not resolve, and the only
+difference is when it is caught (the first at `Network` construction, the second when the zonal
+chain reads the partition).
 
 **If you reach this through `jobs.run`, every corridor mistake above is a caller error and is
 reported as one.** That is what the `BAD_OPTIONS` / `VALIDATION` column is saying: none of them
@@ -744,5 +749,5 @@ ok [10.0, 10.0]
 ```
 
 Both zones price at 10 — that is the copper plate — and the echoed option comes back as
-`"cap_mw": None` in Python and `"cap_mw": null` in the JSON text. The request survives the round
-trip unchanged, which is the property every `jobs` request form has to have.
+`"cap_mw": None` in Python, `"cap_mw": null` in the JSON text. The request survives the round trip
+unchanged, which is the property every `jobs` request form has to have.
