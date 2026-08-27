@@ -474,6 +474,22 @@ def zonal_dc_opf(
     _add_rows(h, _epigraph_rows(problem.segments_by_gen, gen_cols, cost_col_of))
     _add_rows(h, _hypograph_rows(problem.demand_segments_by_load, demand_col_of, demand_val_col_of))
 
+    # The row-order contract is declared in the module docstring's "Row layout", implemented just
+    # above, and re-derived here as a hand-maintained sum. Nothing else ties those three together:
+    # ``zone_price`` below is ``row_dual[:n_zone]``, so a row family appended *before* the epigraph
+    # block -- or a balance row not built for some zone -- silently reassigns every zone's price.
+    # The PWL blocks are conditionally present, which is exactly when a slice-by-contract goes
+    # wrong for one caller and not another. M5's own equivalent assert (opf/multiperiod.py) was
+    # measured to be the only guard on its layout; this is the same guard for this one.
+    n_epigraph = sum(len(segs) for segs in problem.segments_by_gen.values())
+    n_hypograph = sum(len(segs) for segs in problem.demand_segments_by_load.values())
+    expected_rows = n_zone + n_epigraph + n_hypograph
+    assert h.getNumRow() == expected_rows, (
+        f"zonal_dc_opf built {h.getNumRow()} rows, but the row-order contract in this module's "
+        f"docstring accounts for {expected_rows} — the zone prices are read off that contract as "
+        "row_dual[:n_zone], so they must agree"
+    )
+
     h.run()
     status = h.modelStatusToString(h.getModelStatus())
     if status != _OPTIMAL:

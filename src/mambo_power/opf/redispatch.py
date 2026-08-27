@@ -475,6 +475,23 @@ def redispatch_dc_opf(
     _add_rows(h, _epigraph_rows(problem.segments_by_gen, q_col_by_gen, gen_cost_col_of))
     _add_rows(h, _hypograph_rows(problem.demand_segments_by_load, dem_q_col_of, dem_val_col_of))
 
+    # The row-order contract is declared in the module docstring, implemented just above, and
+    # re-derived here as a hand-maintained sum. Nothing else ties those three together: the duals
+    # below are ``row_dual[0]`` and ``row_dual[1:n_rows]``, and three row families of
+    # conditionally-present height (the PWL linking equalities, the epigraph and hypograph blocks)
+    # are appended *after* the flow rows. A family inserted before them instead shifts every
+    # flow-limit dual by exactly its own height, silently. M5's own equivalent assert
+    # (opf/multiperiod.py) was measured to be the only guard on its layout; this is the same guard.
+    n_linking = len(gen_q_col_of) + len(dem_q_col_of)
+    n_epigraph = sum(len(segs) for segs in problem.segments_by_gen.values())
+    n_hypograph = sum(len(segs) for segs in problem.demand_segments_by_load.values())
+    expected_rows = n_rows + n_linking + n_epigraph + n_hypograph
+    assert h.getNumRow() == expected_rows, (
+        f"redispatch_dc_opf built {h.getNumRow()} rows, but the row-order contract in this "
+        f"module's docstring accounts for {expected_rows} — the balance and flow-limit duals are "
+        "read off that contract as row_dual[0] and row_dual[1:n_rows], so they must agree"
+    )
+
     h.run()
     status = h.modelStatusToString(h.getModelStatus())
     if status != _OPTIMAL:
