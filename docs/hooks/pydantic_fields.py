@@ -88,12 +88,42 @@ def _document(cls: griffe.Class) -> int:
     return attached
 
 
+def _undocumented(cls: griffe.Class) -> list[str]:
+    """Names of ``cls``'s own pydantic fields that this extension *should* have documented and
+    did not: a ``description=`` to publish, an :class:`griffe.Attribute` member to publish it on,
+    and no explicit attribute docstring of their own to defer to.
+
+    Deliberately recomputed from the real class rather than reported back by :func:`_document`,
+    and called from :meth:`PydanticFieldDescriptions.on_package` rather than from inside
+    ``_document``: a guard that a broken ``_document`` gets to compute cannot catch a
+    ``_document`` that returns early. Sabotaging ``_document`` to skip one subpackage silently
+    dropped 129 fields past the package-wide count this replaced.
+    """
+    fields = _model_fields(cls)
+    if not fields:
+        return []
+    return [
+        name
+        for name, field in fields.items()
+        if getattr(field, "description", None)
+        and isinstance(cls.members.get(name), griffe.Attribute)
+        and cls.members[name].docstring is None
+    ]
+
+
 class PydanticFieldDescriptions(griffe.Extension):
     """Turn every pydantic field's ``description=`` into the attribute's griffe docstring."""
 
     def on_package(self, *, pkg: griffe.Module, **kwargs: Any) -> None:
-        """Walk the loaded package once and document every pydantic model in it."""
+        """Walk the loaded package once and document every pydantic model in it.
+
+        Two guards, and the per-model one is the load-bearing half. A package-wide ``attached ==
+        0`` count only catches *total* failure: every field of every model under
+        ``mambo_power.results`` can vanish while some other model still renders, keeping the total
+        positive and a ``--strict`` build green. So each model is also checked on its own.
+        """
         attached = 0
+        silent: list[str] = []
         stack: list[griffe.Module | griffe.Class] = [pkg]
         while stack:
             current = stack.pop()
@@ -102,7 +132,10 @@ class PydanticFieldDescriptions(griffe.Extension):
                     stack.append(member)
                 elif isinstance(member, griffe.Class):
                     stack.append(member)
-                    attached += _document(member)
+                    count = _document(member)
+                    attached += count
+                    if count == 0 and _undocumented(member):
+                        silent.append(member.path)
         if attached:
             _logger.info(f"pydantic_fields: documented {attached} field(s) in {pkg.path}")
         else:
@@ -111,4 +144,11 @@ class PydanticFieldDescriptions(griffe.Extension):
             _logger.warning(
                 f"pydantic_fields: documented NO fields in {pkg.path} -- pydantic field "
                 "descriptions will not be published on the API pages"
+            )
+        if silent:
+            # Under ``mkdocs build --strict`` a warning fails the build.
+            _logger.warning(
+                f"pydantic_fields: {len(silent)} pydantic model(s) have fields carrying a "
+                "description= and had none of them attached, so their field lists will render "
+                f"empty: {', '.join(sorted(silent))}"
             )
