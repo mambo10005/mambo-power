@@ -226,9 +226,9 @@ is `None` (`null` on the wire), and any other cap must be a finite, non-negative
 `inf`, `-inf` and `NaN` are all rejected.
 
 ```python
-market.CorridorLimit(zone1="A", zone2="B", cap_mw=None)   # copper plate
-market.CorridorLimit(zone1="A", zone2="B", cap_mw=0.0)    # a tie that carries nothing
-market.CorridorLimit(zone1="A", zone2="B", cap_mw=20.0)   # an ordinary transfer capacity
+market.CorridorLimit(zone1="A", zone2="B", cap_mw=None)  # copper plate
+market.CorridorLimit(zone1="A", zone2="B", cap_mw=0.0)  # a tie that carries nothing
+market.CorridorLimit(zone1="A", zone2="B", cap_mw=20.0)  # an ordinary transfer capacity
 ```
 
 ```json
