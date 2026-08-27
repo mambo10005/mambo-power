@@ -1,6 +1,6 @@
 # Examples
 
-Ten runnable scripts live under `examples/` in the repository. Each one is self-contained,
+Eleven runnable scripts live under `examples/` in the repository. Each one is self-contained,
 reads only files under `fixtures/`, prints a short deterministic summary and exits 0 in about a
 second. They are executed on every push — by `tests/unit/test_examples_run.py` inside the test
 matrix and by the dedicated `examples` CI job — and this page embeds them with
@@ -24,6 +24,7 @@ uv run python examples/02_ac_power_flow.py
 | [`08_opf_and_n1.py`](#8-opf-and-n-1) | `solve_dc_opf` dispatch/duals/LMP, `ac_check`, congestion, `contingency.n1` screen-then-confirm | [DC-OPF](../manual/opf.md), [N-1 screening](../manual/n1.md) |
 | [`09_nodal_market.py`](#9-nodal-market) | `market.solve_nodal` on a `Scenario`: elastic-demand dispatch, LMPs split by congestion, settlement | [Nodal market](../manual/market.md) |
 | [`10_multiperiod_market.py`](#10-multiperiod-market) | `market.solve_multiperiod` over a 24-period `Scenario`: ramp coupling, storage SoC with efficiency, the cyclic horizon, per-period LMPs and settlement | [Multiperiod market](../manual/multiperiod.md) |
+| [`11_zonal_redispatch.py`](#11-zonal-redispatch) | `market.solve_zonal`: zonal clearing, min-cost redispatch, the nodal reference, corridor duals, the three gap figures and the settlement identity | [Zonal market](../manual/zonal.md) |
 
 ## 1. Load and validate
 
@@ -123,6 +124,20 @@ with storage as a third participant, and the `periods=None` degeneracy reproduci
 
 ``` { .python }
 --8<-- "examples/10_multiperiod_market.py"
+```
+
+## 11. Zonal redispatch
+
+`market.solve_zonal` on a hand-solvable 2-zone/3-bus market and then on case30 with its three
+MATPOWER areas promoted to zones: the corridor at its cap and the price split it creates, the
+copper plate the lifted cap produces and the islanding that *deleting* the corridor produces
+instead, a corridor binding in the negative direction with a positive capacity price, the zonal
+schedule overloading 17 real branches where the redispatched one overloads none, the three
+separated gap figures with the unsigned one negative, and both sides of the settlement identity
+computed from the result object alone.
+
+``` { .python }
+--8<-- "examples/11_zonal_redispatch.py"
 ```
 
 ## Conventions for examples

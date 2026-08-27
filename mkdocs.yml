@@ -105,6 +105,7 @@ nav:
       - N-1 screening: manual/n1.md
       - Nodal market: manual/market.md
       - Multiperiod market: manual/multiperiod.md
+      - Zonal market: manual/zonal.md
       - Results: manual/results.md
       - Jobs API: manual/jobs.md
   - Examples: examples/index.md

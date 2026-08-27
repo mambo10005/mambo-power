@@ -11,6 +11,56 @@ One section per wave, newest first. Nothing on this page has been released. Whic
 merged to `epic/01-foundation` and which are still on their own branch is tracked in [the home
 page's roadmap table](index.md), not restated here, so this page cannot go stale about it.
 
+### Added — wave M6 (zonal market and redispatch)
+
+- `market.solve_zonal(scenario, options=None) -> MarketZonalResult`: a market cleared at **zonal**
+  granularity, then redispatched onto the real network, then measured against the nodal optimum —
+  three chained solves whose content is their relationship. Because the redispatch objective is
+  the true cost and bid curves over the nodal problem's own feasible set, the redispatched point
+  *is* the nodal optimum, so what the comparison measures is the cost of the market design alone
+  and not the quality of a redispatch heuristic. `MarketZonalResult` carries both dispatch layers
+  (what the market sold, what the network delivers), the deltas between them per participant and
+  per direction, zone prices, per-bus LMPs and per-branch flows and duals.
+- `model.Zone` and `Bus.zone` are read by a solver for the first time, having been in the schema
+  and populated by every MATPOWER import since M1. The partition is read, never derived: an
+  in-service bus with no zone is a `ValueError` rather than a default, because that bus's load has
+  to enter *some* zone's balance row.
+- `market.CorridorLimit` and `market.MarketZonalOptions`: transfer capacity per tied zone pair,
+  supplied per solve rather than stored on the network. A negotiated transfer capacity is not
+  determined by any branch rating and no bundled fixture carries one, so a model entity would be
+  inventing committed data. The row-model shape (rather than a `{(z1, z2): cap}` mapping) is what
+  makes the options object survive a JSON round trip, which every `jobs` request form must.
+- `opf.zonal.zonal_dc_opf(arr, cost_coeffs, zone_of_bus, corridors, ...) -> ZonalSolution`: one
+  balance row per zone, one bounded exchange column per tied zone pair, and **no** branch flow
+  rows at all — each zone a copper plate internally, no PTDF matrix ever built. A zone's price is
+  its own balance row's dual; a corridor's capacity price is its column's reduced cost as a
+  magnitude, non-negative in both flow directions.
+- `opf.redispatch.redispatch_dc_opf(arr, cost_coeffs, p0, d0, ...) -> RedispatchSolution`: the
+  minimum-cost move from a zonal operating point to a network-feasible one, with Δ⁺/Δ⁻ columns on
+  **both** sides of the market (demand can be restored, not only curtailed) and bounds shifted by
+  the starting point so the final point ranges over exactly the box the nodal problem has.
+  Reported deltas are netted to the canonical representative, so `final == p0 + delta_up -
+  delta_down` and `delta_up * delta_down == 0` hold exactly whatever vertex the solver returns.
+- `results.zonal`: `MarketZonalResult` with `ZonePriceResult`, `GenRedispatchResult` and
+  `LoadRedispatchResult`. Three deliberately separate figures — `redispatch_payment` (a
+  settlement figure), `welfare_gap` (an exactness row, `0` by the theorem above) and
+  `generation_cost_gap` (a diagnostic that is **not** sign-constrained: a zonal clearing can burn
+  less fuel than the nodal optimum while being welfare-worse). It is also the first market result
+  type carrying per-branch flows and their shadow prices, which makes both sides of the settlement
+  identity computable from the result object alone, with no second solve.
+- `jobs`: `market.zonal` registered as a seventh kind.
+- Oracle: **PyPSA** with one bus per zone joined by `Link`s carrying the corridor capacities —
+  column-for-column the engine's own corridor variable, where a `Line` would not be (three
+  corridors close a loop and Kirchhoff's voltage law would pin the split by reactance). The
+  partition and capacities are handed to the oracle independently of the engine. The `Link` form
+  is an exact LP equivalence, so the pinned residuals are four orders tighter than this package's
+  usual parity bands: objective 1.67e-15 relative, 1.59e-12 MW, 7.11e-15 \$/MWh.
+- Fixtures, derived at test time and committing no new files: `tests/_zones.py` promotes case30's
+  three MATPOWER `AREA` groups to real `Zone` entities and derives each corridor's capacity as the
+  sum of `rating_mva` over its cut-set; case300's four real `ZONE` groups are used directly.
+- [Manual › Zonal market](manual/zonal.md) and a new [runnable
+  example](examples/index.md#11-zonal-redispatch).
+
 ### Added — wave M5 (multiperiod market)
 
 - `market.solve_multiperiod(scenario, options=None) -> MarketMultiperiodResult`: a whole horizon
@@ -285,6 +335,13 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
 
 ### Changed
 
+- `opf.dc_opf`'s cost/bid extraction and both convexity guards are one shared helper, so the
+  nodal, multiperiod, zonal and redispatch builders cannot get them subtly different — they do
+  not each implement them. Extracted and proved behaviour-preserving before any zonal row was
+  written; no public behaviour changed. M6.
+- `Scenario.periods` accepts at most 200 entries. An unbounded list was an unbounded solve; 200
+  periods is more than eight days at hourly resolution and well past anything this package's
+  builders are sized for. M6.
 - `jobs.SolveRequest` now takes **exactly one** of `network` and `scenario`; neither or both is a
   `ValueError`, and `BAD_REQUEST` through `run_json`. A request carrying only a `network` — every
   M2–M4 caller, and every stored request JSON — keeps working unchanged, wrapped as a

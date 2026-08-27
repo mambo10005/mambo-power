@@ -30,3 +30,11 @@ Its module docstring states the settlement identity in its general form, includi
 phase-shift and shunt correction terms.
 
 ::: mambo_power.results.multiperiod
+
+## Zonal market results
+
+Zone prices, both dispatch layers, the redispatch deltas on both sides, per-branch flows with
+their shadow prices, and the three separated gap figures. Its module docstring explains why the
+result carries two dispatch layers rather than one and what each of the three figures is for.
+
+::: mambo_power.results.zonal

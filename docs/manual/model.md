@@ -60,7 +60,7 @@ bus carries both.
 | `v_min_pu` | `float \| None` | pu | `None` | Lower voltage limit; must be ≤ `v_max_pu` when both given (`BAD_RANGE`). |
 | `v_max_pu` | `float \| None` | pu | `None` | Upper voltage limit. |
 | `area` | `str \| None` | — | `None` | Free-form area label (MATPOWER AREA). |
-| `zone` | `str \| None` | — | `None` | Must resolve to a `Zone.id` (`DANGLING_REF`). |
+| `zone` | `str \| None` | — | `None` | Must resolve to a `Zone.id` (`DANGLING_REF`). Read by [`market.solve_zonal`](zonal.md). |
 | `geo` | `Geo \| None` | — | `None` | Position. |
 
 `BusType` is the type alias `Literal["slack", "pv", "pq"]`. The *declared* type is not always
@@ -206,6 +206,13 @@ checked by `Scenario` rather than by `Period`, which has no network to check aga
 | --- | --- | --- | --- |
 | `id` | `str` | required | Unique within `zones`; referenced by `Bus.zone`. |
 | `name` | `str \| None` | `None` | Display name. |
+
+Schema-present since M1 and solver-ignored until M6; `market.solve_zonal` reads the
+`Bus.zone` partition to build one market-balance row per zone. Every MATPOWER import populates
+`zones` and `Bus.zone` from the `ZONE` column, so an imported network is already partitioned —
+usually into a single zone, which clears exactly as a nodal market would. See [Zonal
+market](zonal.md#zones-and-corridors); the transfer capacity between two zones is **not** a model
+field, and that page says why.
 
 ## Validation
 
