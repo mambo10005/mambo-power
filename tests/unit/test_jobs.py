@@ -330,7 +330,10 @@ def test_unknown_kind_is_a_failed_result(case14: Network) -> None:
     # it registered here, in this slice, which makes it a bad example of an *unknown* kind. Moved
     # to "market.agents" (docs/manual/jobs.md's own "later waves" placeholder, still unregistered)
     # for the same reason wave M4/S6 moved this test off "market.nodal" when *that* kind
-    # registered: the assertion needs a kind that stays unknown, not a fixed string.
+    # registered: the assertion needs a kind that stays unknown, not a fixed string. The wave that
+    # registers "market.agents" must move this line, docs/manual/jobs.md's matching example, and
+    # examples/04_jobs_api.py's together -- the same three files this wave moved off
+    # "market.zonal".
     out = run(SolveRequest(kind="market.agents", network=case14, job_id="u"))
     error = _assert_failed(out, "UNKNOWN_KIND")
     assert out.kind == "market.agents"

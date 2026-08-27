@@ -222,6 +222,12 @@ def solve(body: jobs.SolveRequest) -> jobs.SolveResult:
 
 ### Failures are data
 
+`"market.zonal"` stood in the example below as the not-yet-registered kind until wave M6
+registered it; `"market.agents"` is the next still-unregistered kind. The wave that registers
+*it* must move this line, `examples/04_jobs_api.py`'s matching example, and
+`tests/unit/test_jobs.py`'s `test_unknown_kind_is_a_failed_result` together, the same three
+files this wave moved off `"market.zonal"`.
+
 ```python
 bad_kind = jobs.run(jobs.SolveRequest(kind="market.agents", network=net))  # not registered yet
 print(bad_kind.status, bad_kind.error.code, "|", bad_kind.error.message)
