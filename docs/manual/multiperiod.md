@@ -96,15 +96,16 @@ already physical. `None` means **unconstrained**, and a generator with neither l
 ramp row at all, not a row with a large finite bound. A generator with only one of the two set
 gets a genuinely unbounded side.
 
-A ramp limit of exactly `0` is **rejected** with a `ValueError` before any solve. Zero would mean
-"frozen for the whole horizon", which is never what a caller means; it is MATPOWER's unpopulated
-ramp-column value, and no bundled fixture populates a ramp column at all. `None` is the honest
-default for that data, not `0`.
+A ramp limit of exactly `0` is **rejected**, and earlier than the solve: `Network` itself refuses
+it, with a [`NetworkValidationError`](model.md#validation) carrying a `BAD_RANGE` issue, so a zero
+limit never reaches `solve_multiperiod` at all. Zero would mean "frozen for the whole horizon",
+which is never what a caller means; it is MATPOWER's unpopulated ramp-column value, and no bundled
+fixture populates a ramp column at all. `None` is the honest default for that data, not `0`.
 
 One two-sided row is built per ramp-limited generator per adjacent period pair `t = 1..T-1`:
 
 \[
--\text{ramp\_down\_mw}_g \;\le\; p_g[t] - p_g[t-1] \;\le\; \text{ramp\_up\_mw}_g .
+-\text{ramp_down_mw}_g \;\le\; p_g[t] - p_g[t-1] \;\le\; \text{ramp_up_mw}_g .
 \]
 
 `GenPeriodDispatchResult.ramp_dual` reports that row's shadow price under HiGHS's own row-dual
@@ -136,7 +137,7 @@ row.
 The two columns share one row per unit per period:
 
 \[
-\text{charge}[t] + \text{discharge}[t] \;\le\; \text{p\_max\_mw} ,
+\text{charge}[t] + \text{discharge}[t] \;\le\; \text{p_max_mw} ,
 \]
 
 so the unit's combined converter throughput is capped whichever way it is running.
@@ -156,7 +157,7 @@ stored in that unit at the end of that period.
 ### Cyclic end of horizon
 
 \[
-\text{soc}[T-1] = \text{soc\_initial} \times \text{energy\_mwh} ,
+\text{soc}[T-1] = \text{soc_initial} \times \text{energy_mwh} ,
 \]
 
 one equality row per unit, met exactly rather than to a tolerance. **This is not
@@ -222,16 +223,18 @@ A storage unit both withdraws and injects at a bus, so it settles on both sides.
 does **not** close if a dispatched unit is left unsettled — it is then wrong by exactly the
 unit's net revenue, which is the whole of its arbitrage profit. The 24-hour example makes this
 visible directly: on an hour with no binding rating every LMP is equal, so the surplus must be
-exactly zero — and it is. At hour 4 of that horizon the load pays 6308.385 \$/h, the generators
-receive 7011.653 \$/h, and it is storage's 703.268 \$/h charge payment that closes the gap. Drop
-the two storage columns and the same subtraction reads −703.268 instead of 0.
+zero, and across that horizon's 17 uncongested hours the largest one the example finds is
+2.6e-10 \$/h — zero to the LP solver's own precision, not merely small. At hour 4 the load pays
+6305.178 \$/h, the generators receive 6999.710 \$/h, and it is storage's 694.532 \$/h charge
+payment that closes the gap. Drop the two storage columns and the same subtraction reads
+−694.532 instead of zero.
 
 ### The identity, in its general form
 
 \[
 \underbrace{\sum_d \text{LMP}_d\, p_d + \sum_s \text{LMP}_s\, c_s}_{\text{paid in}} \;-\;
 \underbrace{\left(\sum_g \text{LMP}_g\, p_g + \sum_s \text{LMP}_s\, d_s\right)}_{\text{paid out}}
-= -\sum_k \mu_k f_k + \sum_k \mu_k \,\text{pf\_shift}_k - \sum_n \text{LMP}_n\, g_{\text{shunt},n}
+= -\sum_k \mu_k f_k + \sum_k \mu_k \,\text{pf_shift}_k - \sum_n \text{LMP}_n\, g_{\text{shunt},n}
 \]
 
 holds **per period**, at the optimum. The two trailing terms are corrections for phase-shifting
@@ -259,8 +262,8 @@ the result object itself; a caller who wants to check the right-hand side has to
 
 A `Scenario` with `periods=None` clears `T = 1` from the network's own loads and reproduces
 `market.solve_nodal` **exactly** — the same dispatch, the same duals, the same LMPs, asserted
-with `==` and not with a tolerance. So does an explicit single-period scenario, and so does one
-with elastic bids in play.
+with `==` and not with a tolerance. That holds on every fixture this package ships, case300
+included, with elastic bids in play or without them.
 
 This is not a special case in the code. `solve_multiperiod` passes `period_load_mw=None` rather
 than materialising a copy of the network's own loads, which makes the builder evaluate `dc_opf`'s
@@ -269,14 +272,28 @@ the two builders issue identical calls in identical order, so the floating-point
 the same arithmetic. This is the wave's own agreement test for the shared row-family core: it is
 what fails if the extraction and the `T`-loop ever disagree.
 
+An **explicit** single `Period` is the weaker claim, and deliberately stated as such. Naming the
+loads sends the builder down its `period_load_mw` path instead — the same rows, assembled by array
+arithmetic rather than by `dc_opf`'s literal expressions — which reorders a handful of
+floating-point operations. It agrees bit-for-bit on the fixtures the tests assert it over; it
+agrees to *floating-point tolerance*, not to the last bit, in general. Measured on
+`rated_network`: case57 diverges by 1.7e-13 \$/MWh on LMP, case118 by 2.1e-12 \$/MWh on LMP,
+7.3e-12 MW on dispatch and 2.6e-10 \$/h on total load payment. Deterministic, and far below any
+tolerance a caller should be reading these numbers at — but not `==`.
+
 `market.solve_nodal` ignores `Scenario.periods` entirely — it is a single-period entry point and
 stays one.
 
 ## Errors
 
 `market.NonConvexCostError` / `market.NonConcaveBidError` are raised before any solve, exactly as
-for the nodal clearing. `solve_multiperiod` additionally raises `ValueError` up front for a ramp
-limit of exactly zero. It never raises for an infeasible or unbounded LP/QP — that is reported
+for the nodal clearing. A ramp limit of exactly zero never gets as far as `solve_multiperiod`:
+`Network` rejects it at construction with a `NetworkValidationError` (`BAD_RANGE`), which
+**subclasses `Exception`, not `ValueError`** — see [Validation](model.md#validation) — so a caller
+writing `except ValueError:` around either the constructor or the clearing catches nothing. (The
+array-level [`opf.multiperiod_dc_opf`](opf.md), which takes ramp limits as bare arrays with no
+`Network` behind them to have validated first, *does* raise `ValueError` for a zero entry.)
+`solve_multiperiod` never raises for an infeasible or unbounded LP/QP — that is reported
 through `MarketMultiperiodResult.status` / `message`, mirroring `solve_nodal`'s and
 `opf.solve_dc_opf`'s never-raise convention. The scenario is not modified.
 

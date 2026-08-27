@@ -53,8 +53,14 @@ net.storage = [
         p_max_mw=0.15 * total_load_mw,  # 4-hour unit at 15% of system load
         energy_mwh=0.15 * total_load_mw * 4.0,
         soc_initial=0.5,  # half-charged: free to move either way from hour 0
-        efficiency_charge=0.95,
-        efficiency_discharge=0.95,
+        # Deliberately *unequal*: the two efficiencies enter the SoC row with different
+        # coefficients (+eta_c against -1/eta_d), so with an equal pair transposing them is a
+        # silent no-op and the asymmetry this example exists to show is invisible.  The pair
+        # also has to leave arbitrage worth doing: this day's LMPs swing 33.31 -> 40.88 $/MWh,
+        # so a round trip below 33.31/40.88 = 0.815 leaves the unit idle for all 24 hours --
+        # which is why this is 0.9021 and not `tests/_storage.py`'s more pessimistic 0.8096.
+        efficiency_charge=0.97,
+        efficiency_discharge=0.93,
     )
 ]
 for g in net.generators:

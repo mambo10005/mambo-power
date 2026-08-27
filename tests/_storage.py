@@ -27,9 +27,15 @@ transposition sabotage on this fixture actually fail.
 
 **Siting.** :func:`storage_for_network` places the unit, by default, at the bus carrying the
 largest aggregate load in ``net`` (summed over every load at that bus) -- a deterministic,
-fixture-derived choice needing no per-fixture hand-picking, and one that puts the unit somewhere
-its charge/discharge schedule has real locational content: the bus most likely to sit behind a
-congested branch during its own peak hour (``tests/_periods.py``'s own two-archetype profile).
+fixture-derived choice needing no per-fixture hand-picking, and the choice that carries this
+fixture's *entire* locational content. ``tests/_periods.py`` applies one **system-wide** curve to
+every load (its own module docstring records why the two-phase-shifted-archetype design it started
+from was abandoned: measured on case14, any per-load divergence from the network's own base-case
+load ratios makes the 24-period LP genuinely infeasible against ``tests/_rated.py``'s derived
+ratings), so every load peaks in the same hour and the profile itself has no locational diversity
+to contribute. Siting the unit at the largest-load bus is what supplies it: that bus is the one
+most likely to sit behind a branch that congests at the system peak, so the unit sees a genuine
+LMP spread to arbitrage even though every load moves in lockstep.
 
 **``soc_initial`` = 0.5** (half-charged) is chosen so the cyclic end-of-horizon condition
 (``soc[T-1] == soc_initial``) neither starts empty (which would forbid net discharge in period 0)

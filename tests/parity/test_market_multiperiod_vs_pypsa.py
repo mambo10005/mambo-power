@@ -84,6 +84,10 @@ SOC_ABS_TOL_MWH = 1e-2
 """Margin over the measured worst-case state-of-charge residual, 1.25e-4 MWh."""
 LMP_ABS_TOL = 1e-3
 """Margin over the measured worst-case per-bus, per-period LMP residual, 4.24e-5 $/MWh."""
+SIMULTANEITY_ABS_TOL_MW = 1e-6
+"""Margin over the measured worst-case ``min(charge_mw, discharge_mw)`` on this fixture, 0.0 MW
+exactly (AC-3). Not a physical tolerance: the overlap is *representable* in the formulation, so
+this pins a measurement rather than an invariant the builder enforces."""
 
 
 def _profile(net: Network) -> list[Period]:
@@ -294,6 +298,28 @@ def test_congestion_binds_in_some_periods_and_not_others(case: Case) -> None:
             if abs(flows[t, k]) > 0.999 * rating_mw[k]
         }
         assert binding_ids.isdisjoint(transformer_ids), (t, binding_ids & transformer_ids)
+
+
+def test_no_simultaneous_charge_and_discharge(case: Case) -> None:
+    """AC-3's ``min(charge, discharge) ~= 0`` reading, committed on the one fixture in this
+    repository that is 24 periods long, rated and lossy at the same time --
+    ``tests/unit/test_market_multiperiod.py`` pins it only on hand-built 2-period archetypes,
+    and this is the horizon where a solver with room to arbitrage might actually take the
+    overlap. Nothing in the formulation forbids it: charge and discharge are two independent
+    nonnegative columns, capped only by their shared ``p_max_mw`` row (module docstring of
+    ``mambo_power.opf.multiperiod`` on why banning it would need a binary). So this is a
+    measurement, and it is asserted as one."""
+    overlaps = np.array(
+        [min(s.charge_mw, s.discharge_mw) for p in case.ours.periods for s in p.storage]
+    )
+    assert overlaps.size == HOURS_PER_DAY * len(case.net.storage)
+    worst = int(np.argmax(overlaps))
+    assert overlaps[worst] <= SIMULTANEITY_ABS_TOL_MW, (
+        worst,
+        overlaps[worst],
+        case.ours.periods[worst].storage[0].charge_mw,
+        case.ours.periods[worst].storage[0].discharge_mw,
+    )
 
 
 def test_ramp_and_storage_are_both_genuinely_engaged(case: Case) -> None:
