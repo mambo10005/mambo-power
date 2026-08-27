@@ -45,6 +45,16 @@ moves the upper bound of its elastic column as well as the fixed-load term — o
 meanings, both moved. The bid **curve** is horizon-invariant (per-period bids are out of scope
 this wave), so a period override rescales how much of that curve is reachable, not its shape.
 
+One edge follows from that, and it is the one place the two ranges above meet. A **negative**
+override on a **bid-carrying** load gives its elastic column the empty bound `[0, negative]`, and
+the clearing comes back `Infeasible`. That is neither new nor a multiperiod quirk: `dc_opf` has
+done exactly this for a negative `Load.p_mw` with a bid since M4, and `market.solve_nodal` reaches
+it by the same route. A negative load with **no** bid clears normally at both entry points — on a
+2-bus case with a 100 MW fixed load beside it, a `-20` MW load solves `Optimal` at 80 MW of
+generation whether it is reached as `Load.p_mw` or as a period override, and turns `Infeasible`
+only once a bid is attached to it. Consistent, therefore, rather than a regression — and carried
+to a later wave rather than changed here.
+
 `periods=None` means single-period. That is not a special case in the solver; it is the
 degenerate end of the same code path, and it reproduces `market.solve_nodal` bit-for-bit (see
 [Degeneracy](#degeneracy-one-period-is-the-nodal-clearing), below).
