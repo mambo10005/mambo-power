@@ -43,6 +43,11 @@ plugins:
         python:
           paths: [src]
           options:
+            # Publishes pydantic ``Field(description=...)`` as attribute documentation, the way
+            # the ``opf`` dataclasses' PEP-257 attribute docstrings already are. Without it every
+            # pydantic result model renders as a bare class heading with no field list.
+            extensions:
+              - docs/hooks/pydantic_fields.py:PydanticFieldDescriptions
             docstring_style: sphinx
             show_source: true
             show_root_heading: true
