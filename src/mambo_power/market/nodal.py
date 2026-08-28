@@ -52,8 +52,9 @@ class MarketNodalOptions(BaseModel):
 
     No fields yet: mirrors :class:`~mambo_power.opf.dc_opf.OpfDcOptions`'s own precedent (a
     solver-tuning field is added the first time a caller actually needs one, not invented
-    speculatively) -- present now, not omitted, so a future ``jobs`` ``KindSpec`` (S6) has a
-    stable options model to validate requests against.
+    speculatively). It exists rather than being omitted because the ``market.nodal``
+    :class:`~mambo_power.jobs.KindSpec` names it as the model every request's ``options`` is
+    validated against, and a kind with no options model rejects any key at all.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

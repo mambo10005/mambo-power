@@ -35,6 +35,8 @@ from mambo_power.opf.multiperiod import (
     MultiperiodSolution,
     multiperiod_dc_opf,
 )
+from mambo_power.opf.redispatch import RedispatchSolution, redispatch_dc_opf
+from mambo_power.opf.zonal import ZonalDuals, ZonalSolution, zonal_dc_opf
 from mambo_power.pf import solve_ac
 from mambo_power.results import (
     BusLmpResult,
@@ -50,9 +52,14 @@ __all__ = [
     "MultiperiodSolution",
     "NonConvexCostError",
     "OpfDcOptions",
+    "RedispatchSolution",
+    "ZonalDuals",
+    "ZonalSolution",
     "gen_cost_coeffs",
     "multiperiod_dc_opf",
+    "redispatch_dc_opf",
     "solve_dc_opf",
+    "zonal_dc_opf",
 ]
 
 FloatArray = npt.NDArray[np.float64]

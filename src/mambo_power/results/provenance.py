@@ -1,9 +1,8 @@
 """``ResultProvenance``: who produced a result, with what, when, and how long it took.
 
-Every result model carries one of these (epic Design §1: "typed per kind with provenance —
-engine version, solver, timings, diagnostics"). ``version`` is stamped from
-``mambo_power.__version__`` by the solver entry points, never typed by hand, so that a stored
-result can always be traced to the code that produced it (AC-6 agreement test).
+Every result model carries one of these: engine version, solver, timings and diagnostics, typed
+per kind. ``version`` is stamped from ``mambo_power.__version__`` by the solver entry points,
+never typed by hand, so that a stored result can always be traced to the code that produced it.
 """
 
 from __future__ import annotations

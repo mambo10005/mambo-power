@@ -1,4 +1,4 @@
-"""Typed, id-keyed solver results with provenance (epic Design §1-2; wave M2 W5).
+"""Typed, id-keyed solver results with provenance.
 
 Results are values produced by ``pf`` (and later ``opf``, ``contingency``, ``market``) and
 consumed by ``jobs`` and user code. They are pydantic v2 models — exact JSON round-trip,
@@ -41,6 +41,12 @@ from mambo_power.results.tables import (
     GenResult,
     QLimitSide,
 )
+from mambo_power.results.zonal import (
+    GenRedispatchResult,
+    LoadRedispatchResult,
+    MarketZonalResult,
+    ZonePriceResult,
+)
 
 __all__ = [
     "AcPowerFlowResult",
@@ -52,11 +58,14 @@ __all__ = [
     "FeasibilityReport",
     "GenDispatchResult",
     "GenPeriodDispatchResult",
+    "GenRedispatchResult",
     "GenResult",
     "LoadDispatchResult",
+    "LoadRedispatchResult",
     "MarketMultiperiodResult",
     "MarketNodalResult",
     "MarketPeriodResult",
+    "MarketZonalResult",
     "N1BranchFlag",
     "N1OutageResult",
     "N1Result",
@@ -69,6 +78,7 @@ __all__ = [
     "StorageDispatchResult",
     "ThermalViolation",
     "VoltageViolation",
+    "ZonePriceResult",
     "ac_result_from_arrays",
     "dc_result_from_arrays",
     "feasibility_report",

@@ -123,6 +123,194 @@ schema remain an additive option. Rejected: pu-in-model (lossy interop, unreadab
 `Field(gt=0)` constraints (first-error-only reporting); a `ValueError` subclass (issue list
 lost).
 
+## ADR-006 — `opf.dc_opf` splits array-level from `Network`-level, so the market waves reuse the LP builder
+
+**Status:** accepted with wave M3, 2026-08-23.
+
+**Context.** The epic commits `market` to composing `opf`, and a nodal market clearing is
+mechanically a DC-OPF with offers and bids substituted for fuel costs — the same LMP
+decomposition, the same flow rows. Before any OPF code existed there was a real fork: ship
+`opf.dc_opf` as one `Network`-in / result-out function, simplest for the OPF wave alone, or split
+it the way `pf` already splits twice (`pf.ac_newton.newton` vs `solve_ac`, `pf.dc.solve` vs its
+wrapper) so a market wave could call the builder directly. Whichever shape shipped, every later
+market wave would be written against it.
+
+**Decision.** `opf.dc_opf.dc_opf(arr, cost_coeffs, options) -> OpfSolution` is the array-level
+entry point: pure numerics over `NetworkArrays` plus caller-supplied cost coefficients, with no
+`Network` or `Scenario` dependency. `opf.solve_dc_opf(net, options)` is a thin wrapper that derives
+the coefficients from `Generator.cost` and calls it. `lmp_decomposition(duals, ptdf)` is a
+standalone function — balance dual for energy, flow-limit duals times PTDF columns for congestion —
+callable with hand-built inputs. A market module calls `dc_opf` and `lmp_decomposition` directly
+with offer-derived coefficients; it does not build a `Network` to smuggle a `Scenario` through the
+wrong door.
+
+**Consequences.** One extra thin wrapper, in exchange for zero new LP-building code in every
+market wave since. The array-level / `Network`-level split is now the established pattern for
+solver-shaped modules here — but it is *earned by a real second caller*, not applied by default:
+`contingency.n1` takes only a `Network` and is right to, because nothing yet needs its pieces
+independently. *Rejected:* a single `Network`-shaped `dc_opf`, which would have forced the market
+wave to duplicate the builder or fake a `Network`.
+
+## ADR-007 — Elastic demand extends the one `dc_opf` builder rather than composing a second solver
+
+**Status:** accepted with wave M4, 2026-08-24.
+
+**Context.** A price-elastic load is algebraically a generator with a negative-signed concave
+cost, so the nodal market could have been built without touching the OPF builder at all: translate
+each bid load into a synthetic generator, solve, translate back. The alternative was to grow the
+builder demand-side columns, hypograph rows for concave piecewise-linear bids, and the balance and
+flow terms that go with them. The choice was not local — multiperiod, zonal and the agent waves all
+build on the same seam, and they inherit whichever answer this one gave.
+
+**Decision.** Elastic demand is a first-class part of the single array-level builder. `dc_opf`
+gained `demand_bid_coeffs` / `demand_pwl_bids`, demand columns bounded `[0, load_p_max]` with no
+sign flip, hypograph rows mirroring the generator-side epigraph construction, and the matching
+solution fields. Two things are part of the decision rather than incidental to it:
+
+1. **The builder owns the double-counting contract.** An elastic load's own `p_mw` is subtracted
+   from the fixed-load right-hand side *inside* `dc_opf`. A caller cannot get this wrong because a
+   caller cannot do it at all.
+2. **Convexity guards are symmetric.** `NonConcaveBidError` for a bid whose marginal value is not
+   non-increasing, and `NonConvexCostError` for a generator cost with negative `c2` — closing an
+   asymmetry the OPF wave had left. Both raise before any solver object exists.
+
+**Consequences.** One balance row, one PTDF flow-row builder, one dual-extraction path, one
+`lmp_decomposition` reused verbatim; the market module is thin — extract, call, settle. The
+price-taker reduction is exact rather than approximate, so the market wave inherited the OPF wave's
+oracle-proved parity instead of needing its own. The cost was that an oracle-verified builder was
+modified rather than left alone, paid down by holding 68 existing tests green through the
+extension. One lesson generalises to every wave that extends this builder: **a fixture where the
+answer is pinned by a bound cannot test the term that moves the answer** — the first parity fixture
+here could not detect a double-counting fault until one load's bid was anchored around the
+fixture's own clearing price. *Rejected:* the pseudo-generator trick — correct and cheaper to land,
+but it hides the market's economics in a translation layer invisible from the LP and leaves each
+later wave to reinvent it.
+
+## ADR-008 — One shared row-family core, two callers — and the contract that did not come with it
+
+**Status:** accepted with wave M5, 2026-08-26.
+
+**Context.** Multiperiod clearing was the first wave to add rows that couple *across* periods — a
+ramp row tying one period to the last, a state-of-charge row tying the whole horizon into one
+energy budget. Either the horizon loop went inside `dc_opf`, or the row families came out into
+helpers that a single-period and a multi-period caller both invoke.
+
+**Decision.** Extraction. `_balance_row`, `_flow_limit_rows`, `_epigraph_rows`, `_hypograph_rows`
+and their support were pulled out of `dc_opf` as a pure refactor touching one file and no test, and
+`multiperiod_dc_opf` calls them unmodified. The evidence that this is one implementation rather
+than two that agree is a sabotage, not a reading: sign-flipping the shared flow-limit helper takes
+18 tests red across five files, spanning both surfaces.
+
+**But the two *consequences* the previous ADR claimed did not survive the extraction.** The
+double-counting contract and the convexity guards were duplicated, not shared: 54 identical lines
+out of 68 between the single-period and multiperiod preambles. That is not a stylistic
+observation — the safety property that was claimed impossible is exactly the one that failed. A
+per-period load override on a bid-carrying load shipped as a complete no-op, because the elastic
+column's upper bound stayed at the network's base value while the fixed-load total was corrected.
+The bug lived in the duplicated copy, and it was caught by review rather than by the wave's
+acceptance criteria, its sabotage sweeps, or its audit. **So the zonal wave unified the preamble
+into one shared helper before adding its own row families** — not after, because a third copy pays
+the unification cost three times over.
+
+**Consequences.**
+
+1. **The row-order contract is guarded by one assertion, and that assertion is the whole guard.**
+   `multiperiod_dc_opf` checks the solver's row count against an expected total before reading any
+   dual. Its necessity is measured: appending a spurious row family fails 56 tests with the
+   assertion present and passes 63 with it disabled. Any wave adding a row family must update that
+   sum, and will be told loudly if it does not.
+2. **A sabotage applied to shared fixture data is not a sabotage.** Transposing two storage
+   efficiencies in the test fixture relabels both sides of a parity comparison at once, which is
+   why it looked undetectable. Transposing the *engine's* state-of-charge row with the oracle held
+   fixed takes the committed test red immediately. For every parity test: apply the fault to the
+   side under test, and make sure the residual that moves is one the assertion actually reads.
+3. **An override must be at least as general as the field it overrides.** A per-period load
+   validator rejected negative values while the `Load.p_mw` it overrides has no lower bound, so an
+   identity profile failed on a fixture that ships eight negative loads and that the nodal market
+   clears without complaint.
+4. **A wire-format bound belongs in the model, not in a future HTTP layer.** A 34 kB request
+   expands to 20 million matrix nonzeros — a decompression-bomb shape. Added after the model is
+   treated as stable, such a bound becomes a breaking change.
+
+*Rejected:* the horizon loop inside `dc_opf` (every single-period caller pays for machinery it
+does not use, and the behaviour-preservation proof becomes unstateable); a separate multiperiod
+solver (refused by ADR-007, and this wave supplied the evidence — the one place the two surfaces
+diverged is the one place code was copied instead of called); unifying the preamble inside this
+same wave (refused on sequencing: a substantive refactor landed after the matrix was discharged is
+an unproven change under a green gate).
+
+## ADR-009 — Redispatch reproduces nodal by construction; the comparison measures the repair
+
+**Status:** accepted with wave M6, 2026-08-27.
+
+**Context.** The zonal wave was asked for a zonal clearing, a minimum-cost redispatch, and a
+nodal-versus-zonal comparison. Redispatch is priced at each unit's own curve in both directions
+and elastic demand participates in both LPs — and under those answers the redispatch objective is
+a free choice with two readings, which decides what the wave measures.
+
+*True curves.* If the redispatch objective is true generation cost minus true bid value of the
+**final** quantities, the redispatch LP has the nodal welfare LP's exact feasible set and an
+objective equal to nodal's up to a constant. It returns the nodal optimum from *any* feasible
+start, so the welfare difference is identically zero.
+
+*An anchored linear rate.* If each unit is priced at its marginal cost or value *at the zonal
+point*, the final point genuinely differs and a welfare gap exists — but that reading carries a
+systematic bias. An anchored rate understates a concave bid curve's marginal value below the
+anchor, so the LP over-curtails demand all the way down. A worked case gives cost 0 against nodal's
+1800 while welfare is 0 against 100: the reported "gap" is partly the bias, and the cost figure
+inverts.
+
+**Decision.** The redispatch objective uses the true cost and value curves, and the chain landing
+on the nodal optimum is asserted as an exact-agreement row. **The comparison therefore does not
+measure how far zonal lands from nodal — that distance is zero by construction. It measures what
+the zonal design costs to repair:** redispatch volume, redispatch payment, and the zonal price
+vector against the nodal LMPs. That is the European day-ahead-plus-redispatch metric as actually
+used, not a synthetic welfare loss. The falsifiable statement about the zonal approximation moves
+to the relaxation inequality — `welfare(zonal) >= welfare(nodal)` whenever the corridor caps are at
+least as loose as the network's own limits, strictly when a corridor binds.
+
+**Consequences.**
+
+1. **Two independent comparison quantities, not three.** With `A = cost(final) − cost(zonal)` and
+   `B = value(zonal) − value(final)`, the result publishes `redispatch_payment = A + B`,
+   `generation_cost_gap = −A` and `welfare_gap = 0`. So the first two sum to the
+   curtailment-compensation term `B` and nothing else — `−2.6e-11 \$/h` on fixed-load case30,
+   `+0.94 \$/h` with bids. Worked at [Zonal market › The three figures are two independent
+   quantities plus a check](../manual/zonal.md#the-three-figures-are-two-independent-quantities-plus-a-check).
+2. **`redispatch_payment` is a settlement figure and can be negative.** It is non-negative exactly
+   when the zonal LP is a relaxation. With caps tighter than the network — the normal transfer-capacity
+   regime — or with corridors omitted, it runs inward: `−11.05 \$/h` and `−800 \$/h` on the two
+   fixtures where it was measured. See [When `redispatch_payment` goes
+   negative](../manual/zonal.md#when-redispatch_payment-goes-negative).
+3. **The exact-agreement row is blind to the zonal stage.** Because the redispatch LP reaches nodal
+   from any start, breaking the zonal LP leaves every final-point assertion green. Only the zone
+   prices, the corridor flows and the oracle parity see that stage — which is why the hand-derived
+   zonal optimum and the zonal-stage parity are kept as separate acceptance rows, and must not be
+   collapsed.
+4. **Degenerate LPs need discriminating checks, not descriptive ones.** Rated case300 is
+   primal-degenerate at the nodal optimum — seven branches at rating, five priced — so two optimal
+   solves legitimately pick different active sets and their LMPs differ by about `0.32 \$/MWh`
+   while the primal agrees to `1e-8`. A "structural property" (priced branches are a subset of
+   at-rating branches) was substituted for the price comparison and turned out to be complementary
+   slackness: satisfied by *any* optimal solution, carrying no information, and green under the
+   sabotage it was meant to catch. **A check that a sabotage cannot move is not a check.**
+5. **The shared core now has four callers and one new copy.** ADR-008's unification executed
+   cleanly — one extraction-and-validation preamble with four callers, guard strings living only
+   there. But diagonal-Hessian assembly is now a third verbatim copy. That is the next seam, on the
+   same reasoning as ADR-008, one level down.
+6. **A result type a reader must construct from is a design surface.** This wave's documentation
+   surface had no inbound design decision, and produced exactly the defect one would have owned:
+   `MarketZonalResult`'s field names rendered nowhere on this site, because the API-reference
+   configuration never rendered pydantic fields for *any* result model and no earlier wave had a
+   result type readers had to assemble inputs for. "Where do this type's fields reach the reader?"
+   is a design question.
+
+*Rejected:* the anchored linear rate (a genuine gap, but one carrying a proven over-curtailment
+bias, so the cost figure cannot be read as approximation quality); true curves for generators with
+demand frozen at the zonal quantity (a redispatch that ignores the bids its own zonal stage
+honoured); a blanket price tolerance on the degenerate fixture (it would admit real regressions to
+hide a known degeneracy); unifying the Hessian copy inside this wave (sequencing, as above).
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

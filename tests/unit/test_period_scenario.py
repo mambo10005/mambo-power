@@ -11,6 +11,8 @@ the field it overrides. ``Scenario.periods: list[Period] | None = None`` -- ``No
 single-period, and leaves ``market.nodal``'s existing behaviour untouched (AC-4).
 """
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -24,6 +26,7 @@ from mambo_power.model import (
     Period,
     Scenario,
 )
+from mambo_power.model.scenario import MAX_PERIODS
 from tests._fixtures import FIXTURES_DIR
 
 
@@ -140,6 +143,62 @@ def test_scenario_periods_empty_list_is_rejected() -> None:
     net = _network_with_load(Load(id="d1", bus="b1", p_mw=10.0, q_mvar=0.0))
     with pytest.raises(ValidationError):
         Scenario(network=net, periods=[])
+
+
+# --- Scenario.periods: max_length = 200 (M5 carry-over, wave spec W6/AC-7, design D6) ------
+#
+# A wire-format decompression-bomb bound, not a solver limit: M5 measured a 33,997-byte
+# SolveRequest expanding to 20,088,000 constraint-matrix nonzeros (~7,000x), and research §8
+# sized 200 to keep case300's worst case near ~68 MB while covering 8x the epic's 24-period
+# target. Every list here uses `MAX_PERIODS` from the module rather than a literal 200/201, so
+# a mismatch between the field's bound and this constant -- not just a bump of both together --
+# is what these tests are proving.
+
+
+def _periods(count: int) -> list[Period]:
+    # An empty override dict is a legitimate Period (test_period_allows_empty_overrides), and
+    # avoids needing `count` distinct load ids just to build a list of this length.
+    return [Period(load_p_mw={}) for _ in range(count)]
+
+
+def test_scenario_periods_at_max_length_is_accepted() -> None:
+    net = _network_with_load(Load(id="d1", bus="b1", p_mw=10.0, q_mvar=0.0))
+    scenario = Scenario(network=net, periods=_periods(MAX_PERIODS))
+    assert scenario.periods is not None
+    assert len(scenario.periods) == MAX_PERIODS
+
+
+def test_scenario_periods_over_max_length_is_rejected() -> None:
+    net = _network_with_load(Load(id="d1", bus="b1", p_mw=10.0, q_mvar=0.0))
+    with pytest.raises(ValidationError) as excinfo:
+        Scenario(network=net, periods=_periods(MAX_PERIODS + 1))
+    (error,) = excinfo.value.errors()
+    assert error["type"] == "too_long"
+    assert error["loc"] == ("periods",)
+
+
+def test_scenario_periods_at_max_length_is_accepted_via_json() -> None:
+    net = _network_with_load(Load(id="d1", bus="b1", p_mw=10.0, q_mvar=0.0))
+    payload = {
+        "network": net.model_dump(mode="json"),
+        "periods": [{"load_p_mw": {}} for _ in range(MAX_PERIODS)],
+    }
+    scenario = Scenario.model_validate_json(json.dumps(payload))
+    assert scenario.periods is not None
+    assert len(scenario.periods) == MAX_PERIODS
+
+
+def test_scenario_periods_over_max_length_is_rejected_via_json() -> None:
+    net = _network_with_load(Load(id="d1", bus="b1", p_mw=10.0, q_mvar=0.0))
+    payload = {
+        "network": net.model_dump(mode="json"),
+        "periods": [{"load_p_mw": {}} for _ in range(MAX_PERIODS + 1)],
+    }
+    with pytest.raises(ValidationError) as excinfo:
+        Scenario.model_validate_json(json.dumps(payload))
+    (error,) = excinfo.value.errors()
+    assert error["type"] == "too_long"
+    assert error["loc"] == ("periods",)
 
 
 # --- Scenario.periods: dangling load-reference cross-check, proved to fire -----------------

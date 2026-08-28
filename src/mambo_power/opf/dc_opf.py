@@ -331,6 +331,153 @@ def _concave_pwl_segments(points: Sequence[tuple[float, float]]) -> list[tuple[f
 
 
 @dataclass(frozen=True)
+class _ExtractedProblem:
+    """Every cost/bid quantity a builder derives from its raw arguments, already validated.
+
+    ADR-007 claimed the extraction-and-validation contract lived in one place so "a caller cannot
+    get this wrong, because a caller cannot do it at all". ADR-008 recorded that it had in fact
+    been *copied* into :func:`~mambo_power.opf.multiperiod.multiperiod_dc_opf`, and that M5's one
+    real defect lived in the copy. This dataclass and :func:`_extract_and_validate` make the
+    original claim literally true: the ``(n_gen, 3)`` cost-coefficient shape, the
+    polynomial/piecewise-linear exclusivity of a bid, the bid load-index range, the dense
+    ``v2``/``v1``/``v0`` fill over :attr:`elastic_load_idxs`, and both convexity guards exist
+    exactly once, and every builder calls that one.
+
+    Column *layout* deliberately stays outside. :func:`dc_opf` places its elastic-demand columns
+    at ``n_gen + j``; ``multiperiod_dc_opf`` places one such block per period; each builds its
+    Hessian over its own column count. What is shared is the coefficients and the index sets;
+    what each caller keeps is where they attach — the same division of labour
+    :class:`_RowBlock` already draws for the row families.
+    """
+
+    c2: FloatArray
+    c1: FloatArray
+    c0: FloatArray
+    v2: FloatArray
+    v1: FloatArray
+    v0: FloatArray
+    pwl_gen_idxs: list[int]
+    segments_by_gen: dict[int, list[tuple[float, float]]]
+    elastic_load_idxs: list[int]
+    demand_pwl_idxs: list[int]
+    demand_segments_by_load: dict[int, list[tuple[float, float]]]
+
+    @property
+    def n_pwl(self) -> int:
+        """Generators with a piecewise-linear cost — one free ``cost_g`` column each."""
+        return len(self.pwl_gen_idxs)
+
+    @property
+    def n_demand(self) -> int:
+        """Elastic loads — one dispatch column each, polynomial and PWL bids alike."""
+        return len(self.elastic_load_idxs)
+
+    @property
+    def n_demand_pwl(self) -> int:
+        """Elastic loads with a piecewise-linear bid — one free ``val_d`` column each."""
+        return len(self.demand_pwl_idxs)
+
+
+def _extract_and_validate(
+    cost_coeffs: FloatArray,
+    pwl_costs: Mapping[int, Sequence[tuple[float, float]]] | None,
+    demand_bid_coeffs: Mapping[int, tuple[float, float, float]] | None,
+    demand_pwl_bids: Mapping[int, Sequence[tuple[float, float]]] | None,
+    n_gen: int,
+    n_load: int,
+) -> _ExtractedProblem:
+    """Extract and validate a builder's cost/bid arguments — one implementation, every caller.
+
+    Raises :class:`ValueError` for a mis-shaped ``cost_coeffs``, a load index appearing in both
+    bid maps, or a bid load index outside ``[0, n_load)``; :class:`NonConvexCostError` for a
+    non-convex generator cost (``c2 < 0``, or a PWL curve with decreasing marginal cost) and
+    :class:`NonConcaveBidError` for a non-concave demand bid (``v2 > 0``, or a PWL curve with
+    increasing marginal value). All of them fire before the caller has created a
+    :class:`highspy.Highs` object, which is what makes "fail fast" the *same* promise on every
+    surface rather than a promise each builder re-implements.
+    """
+    coeffs = np.asarray(cost_coeffs, dtype=np.float64)
+    if coeffs.shape != (n_gen, 3):
+        raise ValueError(
+            f"cost_coeffs must have shape ({n_gen}, 3) ([c2, c1, c0] per generator), "
+            f"got {coeffs.shape}"
+        )
+    c2, c1, c0 = coeffs[:, 0], coeffs[:, 1], coeffs[:, 2]
+
+    # PWL segments are validated (convexity/concavity) before anything else is built — fail
+    # fast, per NonConvexCostError's/NonConcaveBidError's own docstrings.
+    pwl_costs_ = pwl_costs or {}
+    pwl_gen_idxs = sorted(pwl_costs_)
+    segments_by_gen = {i: _convex_pwl_segments(pwl_costs_[i]) for i in pwl_gen_idxs}
+
+    demand_bid_coeffs_ = demand_bid_coeffs or {}
+    demand_pwl_bids_ = demand_pwl_bids or {}
+    overlap = set(demand_bid_coeffs_) & set(demand_pwl_bids_)
+    if overlap:
+        raise ValueError(
+            f"load index(es) {sorted(overlap)} appear in both demand_bid_coeffs and "
+            "demand_pwl_bids — a load's bid must be either polynomial or piecewise-linear, "
+            "not both"
+        )
+    elastic_load_idxs = sorted(set(demand_bid_coeffs_) | set(demand_pwl_bids_))
+    for idx in elastic_load_idxs:
+        if not (0 <= idx < n_load):
+            raise ValueError(
+                f"demand bid load index {idx} out of range for {n_load} loads "
+                "(NetworkArrays.load_ids)"
+            )
+    demand_pwl_idxs = sorted(demand_pwl_bids_)
+    demand_segments_by_load = {
+        i: _concave_pwl_segments(demand_pwl_bids_[i]) for i in demand_pwl_idxs
+    }
+
+    # polynomial demand-bid coefficients, dense over elastic_load_idxs order (PWL bid-loads get an
+    # all-zero row here — their value is captured entirely by the hypograph rows, mirroring how a
+    # PWL generator's cost_coeffs row is all-zero).
+    n_demand = len(elastic_load_idxs)
+    v2 = np.zeros(n_demand)
+    v1 = np.zeros(n_demand)
+    v0 = np.zeros(n_demand)
+    for j, idx in enumerate(elastic_load_idxs):
+        if idx in demand_bid_coeffs_:
+            v2[j], v1[j], v0[j] = demand_bid_coeffs_[idx]
+
+    # convexity/concavity guards on the polynomial coefficients (module docstring): generator
+    # c2 >= 0, demand v2 <= 0 — the sign mirror.
+    neg_c2 = np.flatnonzero(c2 < 0)
+    if neg_c2.size:
+        bad = int(neg_c2[0])
+        raise NonConvexCostError(
+            f"non-convex quadratic generator cost: generator index {bad} has c2={c2[bad]!r} < 0 "
+            "— a quadratic cost must have c2 >= 0 for the QP's Hessian to be convex "
+            "(module docstring, generator-side convexity guard)"
+        )
+    pos_v2 = np.flatnonzero(v2 > 0)
+    if pos_v2.size:
+        bad = int(pos_v2[0])
+        bad_idx = elastic_load_idxs[bad]
+        raise NonConcaveBidError(
+            f"non-concave quadratic demand bid: load index {bad_idx} has v2={v2[bad]!r} > 0 — "
+            "a quadratic value curve must have v2 <= 0 for the welfare QP's Hessian to stay "
+            "convex (module docstring, mirror of the generator-side c2 >= 0 guard)"
+        )
+
+    return _ExtractedProblem(
+        c2=c2,
+        c1=c1,
+        c0=c0,
+        v2=v2,
+        v1=v1,
+        v0=v0,
+        pwl_gen_idxs=pwl_gen_idxs,
+        segments_by_gen=segments_by_gen,
+        elastic_load_idxs=elastic_load_idxs,
+        demand_pwl_idxs=demand_pwl_idxs,
+        demand_segments_by_load=demand_segments_by_load,
+    )
+
+
+@dataclass(frozen=True)
 class _RowBlock:
     """One family of LP rows, in exactly the CSR form :meth:`highspy.Highs.addRows` takes.
 
@@ -557,74 +704,19 @@ def dc_opf(
     del options  # no tunable fields yet (OpfDcOptions docstring)
     n_gen = len(arr.gen_ids)
     n_load = len(arr.load_ids)
-    coeffs = np.asarray(cost_coeffs, dtype=np.float64)
-    if coeffs.shape != (n_gen, 3):
-        raise ValueError(
-            f"cost_coeffs must have shape ({n_gen}, 3) ([c2, c1, c0] per generator), "
-            f"got {coeffs.shape}"
-        )
-    c2, c1, c0 = coeffs[:, 0], coeffs[:, 1], coeffs[:, 2]
-
-    # PWL segments are validated (convexity/concavity) before anything else is built — fail
-    # fast, per NonConvexCostError's/NonConcaveBidError's own docstrings.
-    pwl_costs_ = pwl_costs or {}
-    pwl_gen_idxs = sorted(pwl_costs_)
-    segments_by_gen = {i: _convex_pwl_segments(pwl_costs_[i]) for i in pwl_gen_idxs}
-    n_pwl = len(pwl_gen_idxs)
-
-    demand_bid_coeffs_ = demand_bid_coeffs or {}
-    demand_pwl_bids_ = demand_pwl_bids or {}
-    overlap = set(demand_bid_coeffs_) & set(demand_pwl_bids_)
-    if overlap:
-        raise ValueError(
-            f"load index(es) {sorted(overlap)} appear in both demand_bid_coeffs and "
-            "demand_pwl_bids — a load's bid must be either polynomial or piecewise-linear, "
-            "not both"
-        )
-    elastic_load_idxs = sorted(set(demand_bid_coeffs_) | set(demand_pwl_bids_))
-    for idx in elastic_load_idxs:
-        if not (0 <= idx < n_load):
-            raise ValueError(
-                f"demand bid load index {idx} out of range for {n_load} loads "
-                "(NetworkArrays.load_ids)"
-            )
-    n_demand = len(elastic_load_idxs)
+    problem = _extract_and_validate(
+        cost_coeffs, pwl_costs, demand_bid_coeffs, demand_pwl_bids, n_gen, n_load
+    )
+    c2, c1, c0 = problem.c2, problem.c1, problem.c0
+    v1, v2 = problem.v1, problem.v2
+    pwl_gen_idxs, segments_by_gen = problem.pwl_gen_idxs, problem.segments_by_gen
+    demand_pwl_idxs, demand_segments_by_load = (
+        problem.demand_pwl_idxs,
+        problem.demand_segments_by_load,
+    )
+    elastic_load_idxs = problem.elastic_load_idxs
+    n_pwl, n_demand, n_demand_pwl = problem.n_pwl, problem.n_demand, problem.n_demand_pwl
     demand_col_of = {idx: n_gen + j for j, idx in enumerate(elastic_load_idxs)}
-    demand_pwl_idxs = sorted(demand_pwl_bids_)
-    demand_segments_by_load = {
-        i: _concave_pwl_segments(demand_pwl_bids_[i]) for i in demand_pwl_idxs
-    }
-    n_demand_pwl = len(demand_pwl_idxs)
-
-    # polynomial demand-bid coefficients, dense over elastic_load_idxs order (PWL bid-loads get an
-    # all-zero row here — their value is captured entirely by the hypograph rows below, mirroring
-    # how a PWL generator's cost_coeffs row is all-zero).
-    v2 = np.zeros(n_demand)
-    v1 = np.zeros(n_demand)
-    v0 = np.zeros(n_demand)
-    for j, idx in enumerate(elastic_load_idxs):
-        if idx in demand_bid_coeffs_:
-            v2[j], v1[j], v0[j] = demand_bid_coeffs_[idx]
-
-    # convexity/concavity guards on the polynomial coefficients (module docstring): generator
-    # c2 >= 0, demand v2 <= 0 — the sign mirror.
-    neg_c2 = np.flatnonzero(c2 < 0)
-    if neg_c2.size:
-        bad = int(neg_c2[0])
-        raise NonConvexCostError(
-            f"non-convex quadratic generator cost: generator index {bad} has c2={c2[bad]!r} < 0 "
-            "— a quadratic cost must have c2 >= 0 for the QP's Hessian to be convex "
-            "(module docstring, generator-side convexity guard)"
-        )
-    pos_v2 = np.flatnonzero(v2 > 0)
-    if pos_v2.size:
-        bad = int(pos_v2[0])
-        bad_idx = elastic_load_idxs[bad]
-        raise NonConcaveBidError(
-            f"non-concave quadratic demand bid: load index {bad_idx} has v2={v2[bad]!r} > 0 — "
-            "a quadratic value curve must have v2 <= 0 for the welfare QP's Hessian to stay "
-            "convex (module docstring, mirror of the generator-side c2 >= 0 guard)"
-        )
 
     h = highspy.Highs()  # type: ignore[no-untyped-call]  # highspy ships no type stubs
     h.setOptionValue("output_flag", False)

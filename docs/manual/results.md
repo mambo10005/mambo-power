@@ -96,6 +96,92 @@ per-load dispatch (`LoadDispatchResult`, alongside the reused `GenDispatchResult
 as every other result on this page. See the nodal-market manual page for the full field
 reference and the settlement identity these fields satisfy.
 
+## `MarketMultiperiodResult`
+
+`market.solve_multiperiod` (see [Manual › Multiperiod market](multiperiod.md)) clears a whole
+horizon in one LP, so its result is horizon-shaped: a list of per-period results plus the totals
+over them. It carries the same `ResultProvenance` every result does, is frozen, and follows the
+same non-converged convention as `MarketNodalResult` — when `status != "Optimal"`, `periods` is
+empty, every total is `0.0` and `message` carries the diagnostic.
+
+| Field | Type | Unit | Meaning |
+| --- | --- | --- | --- |
+| `status` | `str` | — | HiGHS model status, passed through verbatim. |
+| `message` | `str \| None` | — | Diagnostic when `status != "Optimal"`. |
+| `n_periods` | `int` | — | Periods cleared: `len(Scenario.periods)`, or 1 for a period-less scenario. |
+| `periods` | `list[MarketPeriodResult]` | — | One entry per period, in scenario order. |
+| `objective_cost` | `float` | \$ | Total generation cost over the horizon. Storage is costless in the objective — `model.Storage` has no cost field, so a unit's only economic footprint is the round-trip loss it imposes on generation. |
+| `total_load_payment` | `float` | \$ | Horizon sum of the per-period load payments. |
+| `total_generator_receipts` | `float` | \$ | Horizon sum of the per-period generator receipts. |
+| `total_storage_charge_payment` | `float` | \$ | Horizon sum of the per-period storage charge payments. |
+| `total_storage_discharge_revenue` | `float` | \$ | Horizon sum of the per-period storage discharge revenues. |
+| `congestion_rent` | `float` | \$ | Horizon sum of the per-period congestion rents. |
+
+Each `MarketPeriodResult` carries `period` (its zero-based index), the four row lists and its own
+copy of the five settlement totals:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `generators` | `list[GenPeriodDispatchResult]` | `GenDispatchResult` plus `ramp_dual`, this period's ramp-constraint shadow price. |
+| `loads` | `list[LoadDispatchResult]` | Reused verbatim from the nodal result. |
+| `buses` | `list[BusLmpResult]` | This period's LMPs, energy and congestion components. |
+| `storage` | `list[StorageDispatchResult]` | `charge_mw`, `discharge_mw`, `soc_mwh` (end of period), and three duals: `soc_dual`, `energy_bound_dual`, `power_limit_dual`. |
+
+Charge and discharge are **two non-negative columns, not one signed one**, which is why both can
+be nonzero in the same period — see [Multiperiod market › Two columns, not one signed
+column](multiperiod.md#two-columns-not-one-signed-column). The settlement identity these fields
+satisfy, in the general form that includes the phase-shift and shunt correction terms, is on
+[Multiperiod market › Settlement](multiperiod.md#the-identity-in-its-general-form).
+
+## `MarketZonalResult`
+
+`market.solve_zonal` (see [Manual › Zonal market](zonal.md)) chains three solves — a zonal
+clearing, a min-cost redispatch onto the real network, and `market.solve_nodal` as the reference —
+and its content is their *relationship*, so it carries **two dispatch layers** rather than one.
+Same provenance, frozen, and the same non-converged convention: on `status != "Optimal"` every row
+list is empty, every figure is `0.0`, and `message` names which of the three stages failed.
+
+!!! warning "`generators` here is what the market *sold*, not what the network delivers"
+    `MarketZonalResult.generators` / `.loads` are the **zonal** clearing's schedule;
+    `.generators_final` / `.loads_final` are the **redispatched** one the network actually
+    carries. On `MarketNodalResult` and on every power-flow result, `generators` *is* the
+    delivered dispatch — the same attribute name means two different things across these result
+    types, so code that switches on result type has to know which layer it wants. Settlement,
+    reporting and plotting want the `_final` pair.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `zones` | `list[ZonePriceResult]` | One clearing price per zone (`id`, `price`), from the zonal stage. Not a rollup of the bus LMPs. |
+| `generators`, `loads` | `list[GenDispatchResult]`, `list[LoadDispatchResult]` | The **sold** schedule — the zonal clearing, before the network was consulted. |
+| `generators_final`, `loads_final` | same types | The **delivered** dispatch after redispatch, which is also the nodal optimum's own dispatch. |
+| `redispatch_generators` | `list[GenRedispatchResult]` | Per-generator move: `delta_up_mw`, `delta_down_mw`. |
+| `redispatch_loads` | `list[LoadRedispatchResult]` | Per-load move: `delta_restore_mw`, `delta_curtail_mw` — **not** `delta_up_mw`/`delta_down_mw`. |
+| `branches` | `list[OpfBranchFlowResult]` | Per-branch flow and flow-limit shadow price at the final point. |
+| `buses` | `list[BusLmpResult]` | Per-bus LMP at the **final** point. These are nodal prices; the zonal prices the market cleared at are in `zones`, and the two disagreeing is the subject of the result. |
+| `redispatch_payment` | `float` (\$/h) | Settlement figure: what the operator pays to move from the sold schedule to the delivered one. |
+| `welfare_gap` | `float` (\$/h) | Exactness row: `0` by the theorem. A nonzero value means the chain is wrong. |
+| `generation_cost_gap` | `float` (\$/h) | Diagnostic: `cost(zonal) − cost(nodal)`. **Not** sign-constrained. |
+
+Both delta pairs are netted to the canonical representative, so exactly one of each pair is
+nonzero and `final == start + up − down` holds exactly whatever vertex the solver picked.
+
+Three things about this object that catch readers, each covered on the zonal manual page:
+
+- `redispatch_payment` is **not** always non-negative — see [When `redispatch_payment` goes
+  negative](zonal.md#when-redispatch_payment-goes-negative).
+- The three figures are **two** independent quantities plus a check:
+  `redispatch_payment + generation_cost_gap` is exactly the curtailment-compensation term, and
+  `0` on a fixed-load network. See [The three figures are two independent quantities plus a
+  check](zonal.md#the-three-figures-are-two-independent-quantities-plus-a-check).
+- There are **no corridor rows**. A corridor's own flow and capacity price are array-level
+  quantities (`opf.zonal.zonal_dc_opf`); at the market level the same information shows up as the
+  price separation between the zones a corridor joins.
+
+This is the first market result type carrying per-branch rows, which makes **both** sides of the
+settlement identity computable from the object alone, with no second solve — worked in full at
+[Zonal market › Settlement, from the result object
+alone](zonal.md#settlement-from-the-result-object-alone).
+
 ## JSON round-trip
 
 Results serialise with the standard pydantic surface and come back equal:

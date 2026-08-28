@@ -19,7 +19,10 @@ Runnable script: [`09_nodal_market.py`](../examples/index.md#9-nodal-market).
 self-contained — mirroring [`jobs.SolveRequest`](jobs.md)'s own pattern rather than an id/path
 cross-reference, since no such resolution mechanism exists anywhere else in this codebase.
 Since wave M5 it also carries `periods`, which is what the [multiperiod clearing](multiperiod.md)
-reads; `solve_nodal` ignores that field entirely and stays a single-period entry point.
+reads; `solve_nodal` ignores that field entirely and stays a single-period entry point. The same
+`Scenario` also feeds the [zonal clearing](zonal.md), which partitions the network by `Bus.zone`
+and takes its corridor capacities as options — and which uses this page's nodal clearing as its
+own reference point.
 Bid data lives on the entities themselves, not on the scenario: a generator's offer is
 `Generator.cost` (unchanged since M3) and a load's bid is the new `Load.bid`, a
 `PolynomialBid | PiecewiseBid` discriminated union that mirrors `GeneratorCost` field-for-field
@@ -113,7 +116,9 @@ duals `lmp_decomposition` consumes already account for the demand-side LP column
 ## Settlement
 
 `MarketNodalResult` reports three settlement fields, each computed directly rather than
-asserted equal to the others by construction:
+asserted equal to the others by construction (it carries no per-branch rows, so the identity's
+flow-dual side needs a second solve here — [`MarketZonalResult`](zonal.md#settlement-from-the-result-object-alone)
+is the result type that closed that gap):
 
 * `total_load_payment` — `Σ_d LMP(bus_d) · p_d` over every load.
 * `total_generator_receipts` — `Σ_g LMP(bus_g) · p_g` over every generator.

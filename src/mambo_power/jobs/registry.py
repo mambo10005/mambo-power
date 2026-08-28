@@ -1,11 +1,12 @@
 """The analysis-kinds registry: what the installed version can run (ADR-004, design item 6).
 
 ``KINDS`` maps a kind name (``"pf.ac"``, ``"pf.dc"``, ``"opf.dc"``, ``"n1"``, ``"market.nodal"``,
-``"market.multiperiod"``) to a :class:`KindSpec` — the options model the request's ``options``
-dict is validated against, the result model the runner returns, and the runner itself. The
-registry is the capability list a service publishes, and the contract test (AC-6/AC-8, wave M4
-AC-7, wave M5 AC-7) asserts every entry's models are importable and its runner callable. Later
-waves add kinds with :func:`register`; nothing else in the package changes.
+``"market.multiperiod"``, ``"market.zonal"``) to a :class:`KindSpec` — the options model the
+request's ``options`` dict is validated against, the result model the runner returns, and the
+runner itself. The registry is the capability list a service publishes, and the contract test
+(AC-6/AC-8, wave M4 AC-7, wave M5 AC-7, wave M6 AC-7) asserts every entry's models are importable
+and its runner callable. Later waves add kinds with :func:`register`; nothing else in the package
+changes.
 
 ``market.nodal`` was the first kind whose subject is not a bare ``Network``:
 :func:`mambo_power.market.nodal.solve_nodal` takes a ``Scenario``. Wave M4 kept ``SolveRequest``
@@ -30,7 +31,8 @@ from pydantic import BaseModel
 from mambo_power.contingency import N1Options, n1
 from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multiperiod
 from mambo_power.market.nodal import MarketNodalOptions, solve_nodal
-from mambo_power.model import Scenario
+from mambo_power.market.zonal import MarketZonalOptions, UnzonedBusError, solve_zonal
+from mambo_power.model import NetworkValidationError, Scenario, ValidationIssue
 from mambo_power.opf import OpfDcOptions, solve_dc_opf
 from mambo_power.pf import AcOptions, solve_ac, solve_dc
 from mambo_power.results import (
@@ -38,6 +40,7 @@ from mambo_power.results import (
     DcPowerFlowResult,
     MarketMultiperiodResult,
     MarketNodalResult,
+    MarketZonalResult,
     N1Result,
     OpfDcResult,
 )
@@ -47,37 +50,39 @@ Runner = Callable[[Scenario, BaseModel | None], BaseModel]
 
 
 class InfeasibleLpError(Exception):
-    """``opf.dc``'s, ``market.nodal``'s or ``market.multiperiod``'s runner found a non-Optimal,
-    non-Unbounded status (e.g. ``OpfDcResult.status == "Infeasible"``) — see
-    :func:`_translate_non_optimal_status`.
+    """``opf.dc``'s, ``market.nodal``'s, ``market.multiperiod``'s or ``market.zonal``'s runner
+    found a non-Optimal, non-Unbounded status (e.g. ``OpfDcResult.status == "Infeasible"``) —
+    see :func:`_translate_non_optimal_status`.
 
-    None of :func:`mambo_power.opf.solve_dc_opf`, :func:`mambo_power.market.nodal.solve_nodal`
-    or :func:`mambo_power.market.multiperiod.solve_multiperiod` ever raises on a non-Optimal
-    LP/QP status (their own docstrings, mirroring :func:`mambo_power.pf.solve_ac`'s
+    None of :func:`mambo_power.opf.solve_dc_opf`, :func:`mambo_power.market.nodal.solve_nodal`,
+    :func:`mambo_power.market.multiperiod.solve_multiperiod` or
+    :func:`mambo_power.market.zonal.solve_zonal` ever raises on a non-Optimal LP/QP status
+    (their own docstrings, mirroring :func:`mambo_power.pf.solve_ac`'s
     never-raise-on-non-convergence convention) — each reports the status as data. But an
     infeasible LP has *no* dispatch at all, unlike a non-converged AC iterate which still
     carries a meaningful partial state; wave M3's design (item 7) draws that line deliberately,
     so every such job kind reports it as a structured job failure (``INFEASIBLE_LP``) rather
     than a "successful" result carrying a non-Optimal status. Raised only here, by the job
-    runners — not by ``solve_dc_opf``/``solve_nodal``/``solve_multiperiod`` themselves.
+    runners — not by ``solve_dc_opf``/``solve_nodal``/``solve_multiperiod``/``solve_zonal``
+    themselves.
     """
 
 
 class UnboundedLpError(Exception):
-    """``opf.dc``'s, ``market.nodal``'s or ``market.multiperiod``'s runner found status
-    ``"Unbounded"``; see :class:`InfeasibleLpError` for why this is a job failure rather than an
-    ``"ok"`` result."""
+    """``opf.dc``'s, ``market.nodal``'s, ``market.multiperiod``'s or ``market.zonal``'s runner
+    found status ``"Unbounded"``; see :class:`InfeasibleLpError` for why this is a job failure
+    rather than an ``"ok"`` result."""
 
 
 def _translate_non_optimal_status(kind: str, status: str, message: str | None) -> NoReturn:
     """Translate a non-``"Optimal"`` LP/QP status into :class:`InfeasibleLpError`/
     :class:`UnboundedLpError`, for :mod:`mambo_power.jobs.run` to map to a structured failure —
-    see :class:`InfeasibleLpError`. Shared by ``opf.dc``'s, ``market.nodal``'s and
-    ``market.multiperiod``'s runners (wave M3 spec Design item 6, reused rather than
-    reimplemented by wave M5's S7): all three wrap a welfare/cost LP with the identical two
-    failure shapes (infeasible: no feasible dispatch; unbounded: every bound is finite by
-    construction, but a malformed input could still trigger it), so the translation is one
-    function, not three copies.
+    see :class:`InfeasibleLpError`. Shared by ``opf.dc``'s, ``market.nodal``'s,
+    ``market.multiperiod``'s and ``market.zonal``'s runners (wave M3 spec Design item 6, reused
+    rather than reimplemented by wave M5's S7 and wave M6's S7b): all four wrap a welfare/cost
+    LP with the identical two failure shapes (infeasible: no feasible dispatch; unbounded: every
+    bound is finite by construction, but a malformed input could still trigger it), so the
+    translation is one function, not four copies.
 
     ``"Unbounded"`` maps to :class:`UnboundedLpError`; every other non-``"Optimal"`` status
     (``"Infeasible"`` and, in principle, any other HiGHS status this wave's options cannot
@@ -160,6 +165,45 @@ def _run_market_multiperiod(scenario: Scenario, options: BaseModel | None) -> Ba
     return result
 
 
+def _run_market_zonal(scenario: Scenario, options: BaseModel | None) -> BaseModel:
+    """Runner for ``market.zonal``: :func:`mambo_power.market.zonal.solve_zonal` on ``scenario``
+    directly, then translates a non-Optimal status (from whichever of the chain's three stages —
+    zonal clearing, redispatch, nodal reference — did not reach Optimal) via the same shared
+    :func:`_translate_non_optimal_status` the other market runners use — see
+    :class:`InfeasibleLpError`. ``options.corridors`` is market design data
+    (:class:`~mambo_power.market.zonal.MarketZonalOptions`'s own docstring), not solved for.
+
+    The one other thing this runner does is translate
+    :class:`~mambo_power.market.zonal.UnzonedBusError` into a
+    :class:`~mambo_power.model.NetworkValidationError`, which :func:`mambo_power.jobs.run` already
+    maps to ``VALIDATION``. A bus carrying no zone is the caller's network data: ``Bus.zone`` is
+    optional in the model and every other kind solves such a network happily, so
+    :func:`~mambo_power.model.validate_network` cannot and should not reject it -- but this kind
+    cannot run on it, and reporting that as ``INTERNAL`` would tell a service its engine has a bug
+    when a customer mistyped a network. One issue per offending bus, at the same ``buses[i].zone``
+    path and under the same ``DANGLING_REF`` code ``validate_network`` uses for a bus whose zone
+    references a zone that does not exist -- the neighbouring failure, reported the same way.
+    """
+    assert isinstance(options, MarketZonalOptions)  # run(): options_model-validated
+    try:
+        result = solve_zonal(scenario, options=options)
+    except UnzonedBusError as exc:
+        index_of = {bus.id: index for index, bus in enumerate(scenario.network.buses)}
+        raise NetworkValidationError(
+            ValidationIssue(
+                code="DANGLING_REF",
+                path=f"buses[{index_of[bus_id]}].zone",
+                message=f'bus "{bus_id}": carries no zone, and a zonal clearing needs every bus '
+                "assigned to exactly one zone (set Bus.zone; every MATPOWER import populates it "
+                "from the ZONE column)",
+            )
+            for bus_id in exc.bus_ids
+        ) from exc
+    if result.status != "Optimal":
+        _translate_non_optimal_status("market.zonal", result.status, result.message)
+    return result
+
+
 KINDS: dict[str, KindSpec] = {}
 """Every analysis kind the installed version can run, keyed by name (insertion order)."""
 
@@ -200,5 +244,13 @@ register(
         options_model=MarketMultiperiodOptions,
         result_model=MarketMultiperiodResult,
         runner=_run_market_multiperiod,
+    )
+)
+register(
+    KindSpec(
+        kind="market.zonal",
+        options_model=MarketZonalOptions,
+        result_model=MarketZonalResult,
+        runner=_run_market_zonal,
     )
 )

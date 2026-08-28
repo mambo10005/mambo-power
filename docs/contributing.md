@@ -28,12 +28,17 @@ Windows. Use `UV_PYTHON=3.11 uv sync` to test another interpreter locally.
 Every push runs, and every change must keep green:
 
 ```bash
+uv sync --all-groups            # mkdocs lives in the docs group; uv run alone provisions dev only
 uv run ruff check .             # lint (E, F, I, UP, B)
 uv run ruff format --check .    # formatting
 uv run mypy                     # strict, on src/
 uv run pytest                   # all tiers
 uv run mkdocs build --strict    # the docs, zero warnings
 ```
+
+The first line is not optional on a fresh clone. `pyproject.toml` declares no `default-groups`,
+so `uv run` provisions `dev` and nothing else, and the last line then fails with
+`Failed to spawn: mkdocs` rather than with a docs warning.
 
 The `install-smoke` CI job additionally builds the wheel and sdist and installs each into a
 clean virtual environment.
