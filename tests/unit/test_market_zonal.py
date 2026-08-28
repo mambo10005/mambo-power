@@ -137,10 +137,30 @@ subspace of R^300, so landing inside it to 4e-16 is a statement about where the 
 lives, not an artefact of dimension; the paired assertion measures what is left of the difference
 when the two *unpriced* at-rating branches are taken away (0.298 $/MWh, i.e. nearly all of it)."""
 
-CASE300_FACE_IS_LOAD_BEARING_ATOL = 0.1
-"""Floor, $/MWh, on that paired residual. Measured: 0.2977 on a 0.3188 sup-norm difference — 93%
-of the disagreement is carried by the two at-rating-but-unpriced branches, which is what makes the
-face load-bearing rather than a set the fit did not need. 3x headroom."""
+CASE300_CONGESTION_IS_PRESENT_ATOL = 0.1
+"""Floor, $/MWh, on each solve's **own** congestion component on case300 — sup-norm, one solve at
+a time, not a comparison. Measured: 1.3449 on the chain and 1.3448 on ``solve_nodal``. It guards
+the one thing the clauses below cannot see: they all read the *difference* of the two congestion
+components, so a defect that erased congestion from **both** solves would leave that difference at
+zero and every statement about where it lives vacuously true. Pinned 13x below the measurement,
+and no choice of vertex on the degenerate face can move either number by more than the face's own
+0.319 diameter, so the durable headroom is 10x."""
+
+CASE300_FACE_CARRIES_FRACTION = 0.5
+"""Fraction of the chain-minus-nodal congestion difference that must survive a refit over the
+branches the chain actually **prices** — the load-bearing test for the degenerate face, stated as
+a ratio of the disagreement rather than an absolute floor on it. Measured: 0.9337, i.e. 0.2977
+surviving out of a 0.3188 sup-norm difference, so 93% of the disagreement is carried by the two
+at-rating-but-unpriced branches.
+
+A ratio because the difference's *size* is HiGHS's choice among the face's vertices, not anything
+the code does. The optimal dual set is convex, so every point of the segment between the two
+solves is an equally optimal — equally correct — reference solve, and along it numerator and
+denominator scale by the same factor: measured, this ratio is 0.9337 at every point from one end
+to the other while the sup-norm runs from 0.3188 down to 0. The earlier form asserted an absolute
+floor of 0.1 on those same two quantities and so **went red on a correct build** past 70% of the
+way along the face (measured: 0.0956 at s=0.70 and 0.0159 at s=0.95, both green here). That is
+spec A3 / M5's macOS finding (`4cfd1d7`) pointed downward. 1.87x headroom on the invariant."""
 
 CASE300_CONGESTION_ATOL = 0.5
 """Sup-norm bound, $/MWh, on the two solves' **congestion** difference on case300. Measured:
@@ -148,9 +168,9 @@ CASE300_CONGESTION_ATOL = 0.5
 a blanket LMP tolerance. Clauses 2 and 3 *locate* the difference and are least-squares fits, so
 they are invariant under any rescaling that keeps it in the same span; without this clause nothing
 bounds its **size** and the test is green with the chain's congestion component sign-flipped
-(2.69 $/MWh out on a 40 $/MWh system), doubled, x10 or zeroed. Together with
-:data:`CASE300_FACE_IS_LOAD_BEARING_ATOL` it brackets the difference in [0.1, 0.5], which is what
-"the disagreement is exactly the known degeneracy" means."""
+(2.69 $/MWh out on a 40 $/MWh system), doubled, x10 or zeroed. This clause bounds the disagreement's
+size; :data:`CASE300_FACE_CARRIES_FRACTION` says the whole of it lies across the degenerate face,
+and together that is what "the disagreement is exactly the known degeneracy" means."""
 
 CORRIDOR_PREMISE_ATOL = 1e-9
 """Slack, MVA, on AC-5(a)'s premise ``cap >= sum of that corridor's cut-set ratings``. Measured:
@@ -617,11 +637,21 @@ def test_ac4_case300_prices_agree_except_across_the_degenerate_face(
        space. Prices differ *only* in how a fixed amount of congestion is attributed among branches
        that are all genuinely binding.
     4. **The unpriced part of that face carries the disagreement.** Refit over the branches the
-       chain actually prices and at least :data:`CASE300_FACE_IS_LOAD_BEARING_ATOL` of the
-       difference survives — so clause 3 is a real constraint on where the difference lives, not a
-       subspace large enough to absorb anything. Measured, the fit puts −0.319 $/MWh on
-       ``branch-48`` and −0.319 on ``branch-360``: one solve prices the pair one way round and the
+       chain actually prices and at least :data:`CASE300_FACE_CARRIES_FRACTION` *of the
+       disagreement* survives — so clause 3 is a real constraint on where the difference lives, not
+       a subspace large enough to absorb anything. Measured, the fit puts —0.319 $/MWh on
+       ``branch-48`` and —0.319 on ``branch-360``: one solve prices the pair one way round and the
        other the other way, which is the degeneracy, named.
+
+    **Why clause 4 is a fraction and not a floor.** Which vertex of the degenerate face each solve
+    lands on is HiGHS's choice, so the *size* of their disagreement is not a property of this
+    package. The optimal dual set is convex, so a future build may legitimately return any point
+    of the segment between the two vertices measured here, shrinking the disagreement smoothly to
+    zero. The absolute floor this clause used to assert crossed at 70% of the way along that
+    segment and would have failed a correct build; the fraction it asserts instead is invariant
+    along it. When the two solves agree outright the test asserts the *flat* LMP tolerance A20
+    said case300 could not have — a strictly stronger statement than clauses 2—4 make, and the
+    only regime in which they have nothing to say.
     """
     net, result, nodal = case300
     arr = NetworkArrays.from_network(net)
@@ -650,16 +680,37 @@ def test_ac4_case300_prices_agree_except_across_the_degenerate_face(
         f"{len(at_rating)} at rating and {len(priced)} priced"
     )
 
+    # neither solve's congestion component is missing. Every clause below reads the two
+    # components' *difference*, so a defect that erased both would satisfy all of them.
+    for label, rows in (("the chain", chain), ("solve_nodal", reference)):
+        assert max(abs(rows[i].congestion) for i in bus_ids) > CASE300_CONGESTION_IS_PRESENT_ATOL, (
+            f"{label} reports no congestion component on case300, which prices five branches "
+            "-- the clauses below compare the two congestion components and are all vacuously "
+            "true when both are zero"
+        )
+
     difference = np.array(
         [chain[i].congestion - reference[i].congestion for i in bus_ids], dtype=float
     )
-    assert np.max(np.abs(difference)) > CASE300_FACE_IS_LOAD_BEARING_ATOL, (
-        "the two solves' congestion components agree on this build -- clauses 3 and 4 are then "
-        "vacuous and AC-4's price clause should simply be asserted flat on case300"
-    )
+    spread = float(np.max(np.abs(difference)))
+
+    if spread <= CASE30_LMP_ATOL:
+        # The two solves picked the same vertex of the degenerate face on this build -- which is
+        # allowed, and is why clause 4 must never assert a floor on the size of a disagreement
+        # that is HiGHS's choice. There is nothing left for clauses 3 and 4 to locate; but A20's
+        # reason for withholding a flat LMP tolerance from case300 has gone with it, and the flat
+        # assertion is the stronger one. Make it and stop. The two budgets add: the energy
+        # components are pinned above, the congestion components to the branch condition here.
+        assert_allclose(
+            np.array([chain[i].lmp for i in bus_ids]),
+            np.array([reference[i].lmp for i in bus_ids]),
+            rtol=0.0,
+            atol=CASE30_LMP_ATOL + CASE300_ENERGY_ATOL,
+        )
+        return
 
     # 2. and it is no wider than the face is.
-    assert np.max(np.abs(difference)) <= CASE300_CONGESTION_ATOL, (
+    assert spread <= CASE300_CONGESTION_ATOL, (
         "the congestion components differ by more than the measured degenerate face is wide -- "
         "that is a price defect, not the known degeneracy"
     )
@@ -671,12 +722,11 @@ def test_ac4_case300_prices_agree_except_across_the_degenerate_face(
         <= CASE300_DEGENERATE_FACE_ATOL
     ), "the congestion difference is not explained by duals on the at-rating branches"
     priced_rows = [k for k, bid in enumerate(arr.branch_ids) if bid in priced]
-    assert (
-        _congestion_residual_off(difference, ptdf_matrix, priced_rows)
-        > CASE300_FACE_IS_LOAD_BEARING_ATOL
-    ), (
-        "the priced branches alone reproduce the difference -- then clause 3 says nothing about "
-        "the degenerate face and this test is fitting noise"
+    surviving = _congestion_residual_off(difference, ptdf_matrix, priced_rows)
+    assert surviving > CASE300_FACE_CARRIES_FRACTION * spread, (
+        f"the branches the chain prices reproduce {1 - surviving / spread:.1%} of the two "
+        "solves' congestion difference -- then clause 3 says nothing about the degenerate face "
+        "and this test is fitting noise"
     )
 
 
@@ -719,21 +769,49 @@ def _welfare(net: Network, result: MarketZonalResult, *, final: bool) -> float:
     )
 
 
-def _served_bid_value(net: Network, result: MarketZonalResult, *, final: bool) -> float:
-    """The bid *value* of served demand, $/h, at either of the result's two dispatch layers —
-    :func:`_welfare`'s first term on its own.
+def _bid_value_from_the_network(net: Network, load_rows: Sequence[LoadDispatchResult]) -> float:
+    """Bid value of the demand served in ``load_rows``, $/h, evaluated with **nothing from**
+    :mod:`mambo_power.market` — straight off ``net.loads[].bid.coefficients`` and the result's own
+    load rows, using neither the extractor (``load_bid_coeffs``) nor the evaluator
+    (``_demand_value``) the production settlement path uses.
 
-    Split out because AC-5(b)'s compensation term is a difference of two *values* with the cost
-    side cancelled, and evaluating it as ``_welfare(zonal) − _welfare(final)`` would fold the cost
-    difference back in and reproduce ``redispatch_payment``'s definition instead of testing it.
+    :func:`_welfare` takes the opposite approach on purpose, and is right to: everywhere the
+    claim under test is a *relationship between two welfare figures* it reuses the chain's own
+    extractors and evaluators, so those tests measure the relationship and not the gap between two
+    definitions of welfare. AC-5(b) is the one place that reasoning does not hold: there the same
+    value term stands on both sides of the identity being tested, so ``_demand_value`` cancels it
+    bit-for-bit: measured, scaling ``_demand_value``'s quadratic term by 1.10 moves
+    ``redispatch_payment`` from 14.5134 to 14.2754 and the right-hand side from 0.94105 to
+    0.70306, leaving the residual at 6.054056e-05 — unchanged to the last bit, and green. This
+    evaluator does not move under that defect (0.9410544288693927 either way, bit-identical), so
+    the residual goes to 2.3793e-01, 238x :data:`COMPENSATION_ATOL`; scaled by 0.5 instead,
+    1.1900e+00, 1190x.
+
+    Refuses a non-polynomial bid rather than growing a branch no fixture reaches. Every bid in
+    every fixture that reaches this helper is a quadratic ``PolynomialBid`` — ``tests/_bids.py``
+    can only emit that kind — and the correct piecewise evaluation is *not* interpolation:
+    production's ``_pwl_curve_value`` takes the minimum over each segment's affine extension,
+    which is the hypograph encoding and differs from the polyline outside the breakpoint range.
+    An independently re-derived copy of that would be untested dead code of exactly the kind this
+    helper exists to rule out. Same rule and same reason as ``tests/_bids.py``'s
+    ``fleet_max_marginal_cost``.
     """
-    arr = NetworkArrays.from_network(net)
-    bid_coeffs, pwl_bids = load_bid_coeffs(net, arr)
-    elastic = sorted(set(bid_coeffs) | set(pwl_bids))
-    load_rows = result.loads_final if final else result.loads
-    d_by_id = {row.id: row.p_mw for row in load_rows}
-    d_mw = np.array([d_by_id[arr.load_ids[i]] for i in elastic])
-    return _demand_value(bid_coeffs, pwl_bids, d_mw, elastic)
+    served = {row.id: row.p_mw for row in load_rows}
+    total = 0.0
+    for load in net.loads:
+        if load.bid is None:
+            continue
+        if load.bid.kind != "polynomial":
+            raise NotImplementedError(
+                f"load {load.id!r} carries a {load.bid.kind} bid; this evaluator is deliberately "
+                "polynomial-only (see its docstring) rather than carrying a second, independently "
+                "derived copy of the hypograph encoding of a piecewise curve"
+            )
+        coefficients = list(load.bid.coefficients)  # highest power first
+        quantity = served[load.id]
+        degree = len(coefficients) - 1
+        total += sum(a * quantity ** (degree - k) for k, a in enumerate(coefficients))
+    return total
 
 
 def _nodal_welfare(net: Network, nodal: MarketNodalResult) -> float:
@@ -909,22 +987,21 @@ def test_ac5b_the_third_figure_is_the_curtailment_compensation(
       curve anywhere there is no curtailable value and the two genuinely independent quantities
       collapse to one.
 
-    **What that residual is, and what this test therefore cannot see.** The right-hand side is not
-    independent of the left. ``_served_bid_value`` calls ``_demand_value`` imported from
-    :mod:`mambo_power.market.zonal` — the same function production uses, fed the same numbers via
-    the result's own load rows — so the two value terms cancel bit-for-bit and the identity reduces
-    exactly to ``cost_final − cost_nodal``. Measured, ``(LHS − RHS) − (cost_final − cost_nodal)``
-    is **0.0 exactly** on both fixtures: the 6.05e-5 is D1's generation-cost residual, a physical
-    quantity, not float cancellation between two ~3.0e5 $/h bid values. Two consequences:
+    **What that residual is.** The right-hand side is built by
+    :func:`_bid_value_from_the_network`, which reads ``net.loads[].bid.coefficients`` directly and
+    imports nothing from :mod:`mambo_power.market` — so the value terms do *not* cancel and a
+    wrong bid-curve evaluation moves this test. Measured, ``_demand_value``'s quadratic term
+    scaled by 1.10 takes the residual from 6.05e-5 to 2.38e-1, 238x :data:`COMPENSATION_ATOL`;
+    the earlier form of this test built the same figure with ``_demand_value`` itself and passed
+    that defect with the residual unchanged to the last bit (audit F4's follow-up).
 
-    * ``_demand_value``, ``_generation_cost`` and ``load_bid_coeffs`` appear on both sides and
-      cancel, so **a wrong bid-curve evaluation is invisible to this test**. What it does catch is
-      ``redispatch_payment`` or ``generation_cost_gap`` combining the wrong terms — which is what
-      AC-5(b) claims, but it is not a check on the value arithmetic itself.
-    * A failure here may therefore be a defect in the **redispatch LP** rather than in the
-      settlement block this test is named after: if D1's cost clause ever degrades past
-      :data:`COMPENSATION_ATOL`, this test goes red with no settlement code involved. Read
-      ``test_ac4_the_redispatched_point_is_the_nodal_optimum`` before the settlement code.
+    What is still true is that the identity reduces exactly to ``cost_final − cost_nodal``, and
+    measured, ``(LHS − RHS) − (cost_final − cost_nodal)`` is **0.0 exactly** on both fixtures: the
+    6.05e-5 is D1's generation-cost residual, a physical quantity, not float cancellation between
+    two ~3.0e5 $/h bid values. So a failure here may still be a defect in the **redispatch LP**
+    rather than in the settlement block this test is named after: if D1's cost clause ever
+    degrades past :data:`COMPENSATION_ATOL`, this test goes red with no settlement code involved.
+    Read ``test_ac4_the_redispatched_point_is_the_nodal_optimum`` before the settlement code.
     """
     net, result, _nodal = case30
     fixed_net, fixed_result, _fixed_nodal = case30_fixed_load
@@ -934,8 +1011,8 @@ def test_ac5b_the_third_figure_is_the_curtailment_compensation(
     assert result.generation_cost_gap < -1.0
     assert abs(result.welfare_gap) <= WELFARE_REL_TOL * abs(_welfare(net, result, final=True))
 
-    compensation = _served_bid_value(net, result, final=False) - _served_bid_value(
-        net, result, final=True
+    compensation = _bid_value_from_the_network(net, result.loads) - _bid_value_from_the_network(
+        net, result.loads_final
     )
     assert result.redispatch_payment + result.generation_cost_gap == pytest.approx(
         compensation, abs=COMPENSATION_ATOL
@@ -945,9 +1022,9 @@ def test_ac5b_the_third_figure_is_the_curtailment_compensation(
         "points, or the third field has no independent content here either"
     )
 
-    fixed_compensation = _served_bid_value(
-        fixed_net, fixed_result, final=False
-    ) - _served_bid_value(fixed_net, fixed_result, final=True)
+    fixed_compensation = _bid_value_from_the_network(
+        fixed_net, fixed_result.loads
+    ) - _bid_value_from_the_network(fixed_net, fixed_result.loads_final)
     assert fixed_compensation == pytest.approx(0.0, abs=COMPENSATION_ATOL)
     assert fixed_result.redispatch_payment + fixed_result.generation_cost_gap == pytest.approx(
         0.0, abs=COMPENSATION_ATOL
