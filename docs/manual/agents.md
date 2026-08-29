@@ -141,8 +141,10 @@ would report that arrival as a cycle. Raise offer_tol to at least 1.5, or lower 
 
 A repetition needs two rounds to be seen in, so `converged` requires at least **two update
 rounds**: `max_iterations=1` always ends `iteration_cap`, even for a market of price-takers whose
-offers never move. `iterations` counts update rounds after round 0, so a converged all-price-taker
-run reports `iterations 2` (three clearings).
+offers never move. `iterations` counts update rounds after round 0, so `iterations` is at least 2
+on any converged run, and a converged all-price-taker market -- in which nothing moved -- still
+reports `iterations 2` (three clearings): a fixed point is confirmed after two identical updates,
+not detected before the first.
 
 !!! warning "`status` is the LP's; `converged` is the loop's"
     `status` is HiGHS's model status for the final round's clearing. `converged` is whether the

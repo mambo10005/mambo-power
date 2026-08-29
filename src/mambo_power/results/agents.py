@@ -120,7 +120,10 @@ class MarketAgentsResult(BaseModel):
         ge=0,
         description="The final round's index: the number of best-response update rounds the loop "
         "ran after round 0. Round 0 is the initial offer and responds to nothing, so it is not "
-        "an iteration; the loop therefore cleared the market iterations + 1 times.",
+        "an iteration; the loop therefore cleared the market iterations + 1 times. A fixed "
+        "point is confirmed only after two identical updates (the loop's state is the pair of "
+        "consecutive offer vectors), so iterations is at least 2 on any converged run -- an "
+        "all-price-taker market, in which nothing moves, still reports 2.",
     )
     converged: bool = Field(
         default=False,

@@ -587,6 +587,10 @@ def test_the_amplitude_band_admits_ulps_and_nothing_economically_real() -> None:
     assert agents_module._settled(0.2 + 2.9e-15, 0.2)
     assert not agents_module._settled(1.001, 1.0)
     assert not agents_module._settled(20.0, 1.0), "a genuine cycle on this wave's own fixtures"
+    # relative only (critic finding 7): an absolute 1e-9 term silently doubled the default
+    # offer_tol of 1e-9, so 1.9e-9 read as converged. It must not; a ULP over 1e-9 still does.
+    assert not agents_module._settled(1.9e-9, 1e-9)
+    assert agents_module._settled(1e-9 * (1 + 2**-40), 1e-9)
 
 
 # --------------------------------------------------------------------------------------------

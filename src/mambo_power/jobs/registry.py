@@ -244,9 +244,12 @@ def _run_market_agents(scenario: Scenario, options: BaseModel | None) -> BaseMod
     ``VALIDATION`` at ``options.strategies`` while ``market.nodal`` reported the same network as
     ``INTERNAL`` (audit finding 2, M7 S10). Those now fall through to :func:`mambo_power.jobs.run`
     and get whatever verdict every other kind gives them. A strategy's ``NotImplementedError``
-    for a cost shape it does not support never reaches this runner either: ``solve_agents`` asks
-    every strategy for its round-0 offer up front and re-raises that as an ``AgentSetError``
-    (M7 S9).
+    for a cost shape it does not support is raised on its round-0 offer, which ``solve_agents``
+    asks for up front and re-raises as an ``AgentSetError`` (M7 S9) -- so for every shipped
+    strategy it arrives here as that type. One raised from a *later* round (a strategy whose
+    support depends on its own history; nothing shipped does this) is not caught anywhere and
+    reaches :func:`mambo_power.jobs.run`'s catch-all as ``INTERNAL`` -- the honest verdict for
+    a strategy that changed its mind mid-run.
     """
     assert isinstance(options, MarketAgentsOptions)  # run(): options_model-validated
     try:

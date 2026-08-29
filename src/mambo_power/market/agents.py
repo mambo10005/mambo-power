@@ -243,7 +243,6 @@ def _cost_at(cost: GeneratorCost, p_mw: float) -> float:
     for k in range(len(points) - 1):
         if p_mw >= points[k][0]:
             lower = k
-    lower = min(lower, len(points) - 2)
     (p0, c0), (p1, c1) = points[lower], points[lower + 1]
     return c0 + (c1 - c0) * (p_mw - p0) / (p1 - p0)
 
@@ -476,9 +475,15 @@ def _settled(amplitude: float, offer_tol: float) -> bool:
     an observed error of 2.8e-15, and a genuine cycle on this wave's own fixtures is ~20 $/MWh
     wide -- eleven orders of magnitude out. This is the same defect class, and the same remedy,
     as the profit-tie tolerance in :class:`~mambo_power.market.strategy.MarkupStrategy`.
+
+    The band is **relative only** (``abs_tol=0.0``): an absolute term in cost-coefficient units
+    would be a second, hidden tolerance -- and at ``1e-9`` it silently doubled the default
+    ``offer_tol`` of ``1e-9``, admitting an amplitude of ``1.9e-9`` as "converged" (critic
+    finding 7, M7 S11). An amplitude of exactly zero is the ``<=`` half's business, not the
+    band's.
     """
     return amplitude <= offer_tol or math.isclose(
-        amplitude, offer_tol, rel_tol=_AMPLITUDE_TIE_REL_TOL, abs_tol=_AMPLITUDE_TIE_REL_TOL
+        amplitude, offer_tol, rel_tol=_AMPLITUDE_TIE_REL_TOL, abs_tol=0.0
     )
 
 
