@@ -27,9 +27,10 @@ Measured with the strategies that are computable, both orders reach the same poi
 duopoly. The rule is part of the contract, not an implementation detail.
 
 **Termination, and why it is classified by amplitude** (W3, A9). A fixed-step climber never comes
-to rest: it oscillates by exactly two steps about its optimum, which is the expected end state and
-not a failure. So the loop watches for a **repeated state** and then measures the **amplitude** of
-the cycle it found: amplitude within ``offer_tol`` is convergence, amplitude above it is a genuine
+to rest: it oscillates by two steps about its optimum -- three when the optimum sits halfway
+between two of its grid points -- which is the expected end state and not a failure. So the loop
+watches for a **repeated state** and then measures the **amplitude** of the cycle it found:
+amplitude within ``offer_tol`` is convergence, amplitude above it is a genuine
 cycle, and neither of those is the iteration cap. Reporting a cycle as a cap hit -- or as
 convergence -- would be a confident wrong diagnosis of exactly the kind this epic has named in
 every wave, which is why :class:`~mambo_power.results.agents.MarketAgentsResult` spends three
@@ -154,35 +155,51 @@ class MarketAgentsOptions(BaseModel):
         description="Largest offer-vector oscillation amplitude, in cost-coefficient units, that "
         "still counts as converged once the loop detects a repeated state. This is a "
         "*derived* quantity, not a tuning knob: a fixed-step climber settles into an oscillation "
-        "of exactly two steps about its optimum, so a markup agent of step s needs "
-        "offer_tol >= 2*s -- which the validator below enforces rather than hopes for. The "
-        "default admits only an offer vector that has genuinely come to rest, which is what an "
-        "all-price-taker run does.",
+        "of two steps about an on-grid optimum and three about a half-grid one, so a markup "
+        "agent of step s needs offer_tol >= 3*s (MarkupStrategy.min_offer_tol) -- which the "
+        "validator below enforces rather than hopes for. The default admits only an offer "
+        "vector that has genuinely come to rest, which is what an all-price-taker run does.",
     )
 
     @model_validator(mode="after")
     def _offer_tol_admits_every_stepped_strategy(self) -> MarketAgentsOptions:
-        """Reject an ``offer_tol`` below ``2 * step`` for any markup agent.
+        """Reject an ``offer_tol`` below any markup agent's own
+        :attr:`~mambo_power.market.strategy.MarkupStrategy.min_offer_tol` (``3 * step``).
 
         Without this the run would be reported as a **cycle** the moment the climb arrived at its
-        optimum and started dithering -- the settled two-step oscillation is what arrival *looks
-        like*, so a tolerance narrower than it turns every successful climb into a false
-        non-convergence report. A9 calls the constraint derived rather than tuned; deriving it
-        and then not checking it would leave the derivation as a comment.
+        optimum and started dithering -- the settled oscillation is what arrival *looks like*, so
+        a tolerance narrower than it turns every successful climb into a false non-convergence
+        report. A9 calls the constraint derived rather than tuned; deriving it and then not
+        checking it would leave the derivation as a comment. The rule and its text live in
+        :func:`_offer_tol_shortfall`, shared with the object path in :func:`_resolve_agents`.
         """
         for gen_id, config in self.strategies.items():
             if config.kind != "markup":
                 continue
-            if self.offer_tol < 2.0 * config.step:
-                raise ValueError(
-                    f"offer_tol={self.offer_tol} is below 2 * step for the markup strategy on "
-                    f'generator "{gen_id}" (step={config.step}, so 2 * step='
-                    f"{2.0 * config.step}). A fixed-step climber settles into an oscillation of "
-                    f"exactly two steps about its optimum, so a narrower tolerance "
-                    f"would report that arrival as a cycle. Raise offer_tol to at least "
-                    f"{2.0 * config.step}, or lower the step."
-                )
+            message = _offer_tol_shortfall(self.offer_tol, gen_id, build_strategy(config))
+            if message is not None:
+                raise ValueError(message)
         return self
+
+
+def _offer_tol_shortfall(offer_tol: float, gen_id: str, strategy: Strategy) -> str | None:
+    """The one text for A9's derived constraint, or ``None`` when *offer_tol* admits *strategy*.
+
+    Only a :class:`~mambo_power.market.strategy.MarkupStrategy` has a settling orbit to hold
+    ``offer_tol`` to; every other strategy passes. Both enforcement points -- the config path's
+    pydantic validator and the object path's :func:`_resolve_agents` -- call this, so there is one
+    rule, one constant (``MarkupStrategy.min_offer_tol``) and one message.
+    """
+    if not isinstance(strategy, MarkupStrategy) or offer_tol >= strategy.min_offer_tol:
+        return None
+    return (
+        f"offer_tol={offer_tol} is below 3 * step for the markup strategy on generator "
+        f'"{gen_id}" (step={strategy.step}, so 3 * step={strategy.min_offer_tol}). A fixed-step '
+        f"climber settles into an oscillation of two steps about its optimum -- three when the "
+        f"optimum sits halfway between two of its grid points -- so a narrower tolerance would "
+        f"report that arrival as a cycle. Raise offer_tol to at least "
+        f"{strategy.min_offer_tol}, or lower the step."
+    )
 
 
 @dataclass(frozen=True)
@@ -288,12 +305,9 @@ def _resolve_agents(
                 f'a strategy names generator "{gen_id}", which has no cost -- an agent bids '
                 f"relative to its own true cost, and there is none to observe"
             )
-        if isinstance(strategy, MarkupStrategy) and options.offer_tol < 2.0 * strategy.step:
-            raise AgentSetError(
-                f"offer_tol={options.offer_tol} is below 2 * step for the MarkupStrategy on "
-                f'generator "{gen_id}" (step={strategy.step}) -- see MarketAgentsOptions.'
-                f"offer_tol; a fixed-step climber settles into a two-step oscillation"
-            )
+        message = _offer_tol_shortfall(options.offer_tol, gen_id, strategy)
+        if message is not None:
+            raise AgentSetError(message)
     agents = []
     for gen_id in arr.gen_ids:
         if gen_id not in resolved:
@@ -439,21 +453,25 @@ exact in arithmetic is decided by float noise in practice."""
 def _settled(amplitude: float, offer_tol: float) -> bool:
     """Is *amplitude* within *offer_tol*, counting a ULP-scale overshoot as within?
 
-    **Why this is not a plain ``<=``.** A9 derives ``offer_tol = 2 * step`` and a fixed-step
-    climber settles into an oscillation of exactly two steps, so the two sides of this comparison
-    are *the same number* whenever the loop has genuinely arrived -- which makes the verdict turn
-    on whether that number is computed identically on both sides. It is not. ``offer_tol`` is one
-    multiplication, while the amplitude is a peak-to-peak of offer levels each reached by hundreds
-    of accumulated additions of ``step``. Measured on the AC-5 duopoly (re-measured 2026-08-29,
-    M7 S10, in ULPs of ``offer_tol``), the amplitude lands **102 ULPs above** ``2 * step`` at a
-    step of 0.1 (2.83e-15 over, 404 rounds) and **26 ULPs above** at 0.7 (5.77e-15 over, 61
-    rounds), while at 0.3 it lands 51 ULPs *below* and at 0.5 it is bit-exact. Under a
-    plain ``<=`` the first two are reported as a **cycle** -- a real climb, settled at its
-    optimum, declared non-convergent -- and the other two converge by luck. The sign of the
-    accumulated error is arbitrary, so convergence was being decided by a coin flip.
+    **Why this is not a plain ``<=``.** A9 derives ``offer_tol = 3 * step`` and a fixed-step
+    climber settles into an oscillation of a whole number of steps -- two about an on-grid
+    optimum, three about a half-grid one -- so the two sides of this comparison are *the same
+    number* whenever the loop has arrived at the widest orbit the tolerance admits, which makes
+    the verdict turn on whether that number is computed identically on both sides. It is not.
+    ``offer_tol`` is one multiplication, while the amplitude is a peak-to-peak of offer levels
+    each reached by hundreds of accumulated additions of ``step``. Measured on the AC-5 duopoly
+    against the then-derived ``offer_tol = 2 * step`` (re-measured 2026-08-29, M7 S10, in ULPs
+    of ``offer_tol``), the amplitude lands **102 ULPs above** ``2 * step`` at a step of 0.1
+    (2.83e-15 over, 404 rounds) and **26 ULPs above** at 0.7 (5.77e-15 over, 61 rounds), while
+    at 0.3 it lands 51 ULPs *below* and at 0.5 it is bit-exact. Under a plain ``<=`` the first
+    two are reported as a **cycle** -- a real climb, settled at its optimum, declared
+    non-convergent -- and the other two converge by luck. The sign of the accumulated error is
+    arbitrary, so convergence was being decided by a coin flip. The floor is ``3 * step`` since
+    M7 S11 (a half-grid optimum's three-step orbit), and the same equal-number comparison
+    recurs there.
 
     **Why the tolerance goes here and not on ``offer_tol``.** The alternative is to forbid
-    ``offer_tol == 2 * step`` and make callers add headroom. That destroys what A9 is for: the
+    ``offer_tol == 3 * step`` and make callers add headroom. That destroys what A9 is for: the
     derived value stops being an admissible one, and the headroom actually needed depends on the
     accumulated float error over a round count the caller cannot know in advance (it tracks the
     number of rounds -- 102 ULPs over 404 of them, 26 over 61). A constant the caller must guess

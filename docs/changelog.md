@@ -30,9 +30,12 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   `converged`, `iteration_cap`, `cycle` — rather than a flag that could be read as settled when
   the loop merely stopped. Convergence is decided on the amplitude of the last cycle of offers
   against `offer_tol`, with a tie rule so that a comparison exact in arithmetic is not decided
-  by float noise (found on both sides of the same boundary during the wave).
+  by float noise (found on both sides of the same boundary during the wave). The derived floor
+  on `offer_tol` is `3 * step`, not `2 * step`: a profit peak halfway between two grid points
+  ties the two straddling offers, and the settled orbit is then three steps wide (critic
+  finding, M7 S11; `MarkupStrategy.min_offer_tol` is the one place the constant lives).
 - `jobs`: `kind="market.agents"`, the eighth kind; `MarketAgentsOptions` and its strategies
-  cross as JSON. Caller mistakes (an unknown generator id, `offer_tol` below `2 * step`, a
+  cross as JSON. Caller mistakes (an unknown generator id, `offer_tol` below `3 * step`, a
   markup strategy on a non-linear cost, a bad iteration cap) map to `VALIDATION`, not
   `INTERNAL`.
 - `opf.dc_opf` now raises when a generator appears in `pwl_costs` **and** has a nonzero

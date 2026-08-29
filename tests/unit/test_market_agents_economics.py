@@ -114,7 +114,7 @@ def _markup_options(*gen_ids: str, **kwargs: object) -> MarketAgentsOptions:
     """A markup config at :data:`STEP` for each of *gen_ids*, with A9's derived ``offer_tol``."""
     return MarketAgentsOptions(
         strategies={gen_id: {"kind": "markup", "step": STEP} for gen_id in gen_ids},
-        offer_tol=2.0 * STEP,
+        offer_tol=3.0 * STEP,
         **kwargs,  # type: ignore[arg-type]
     )
 

@@ -19,7 +19,7 @@ result = solve_agents(
     scenario,
     MarketAgentsOptions(
         strategies={"strategic": {"kind": "markup", "step": 0.5}},
-        offer_tol=1.0,
+        offer_tol=1.5,
     ),
 )
 ```
@@ -106,8 +106,9 @@ $12,250. This mode reports what its own iteration reaches and claims nothing mor
 
 ## Termination: three words, not a flag
 
-A fixed-step climber **never comes to rest**. Once it arrives it dithers by exactly one step
-either side of its optimum, which is what arrival looks like, not a failure. So the loop watches
+A fixed-step climber **never comes to rest**. Once it arrives it dithers by one step either
+side of its optimum — or, when the optimum sits halfway between two of its grid points, by one
+step on one side and two on the other — which is what arrival looks like, not a failure. So the loop watches
 for a repeated offer vector and then classifies the repetition by its **amplitude**:
 
 | Amplitude of the repetition found | `termination_reason` | `converged` |
@@ -119,18 +120,23 @@ for a repeated offer vector and then classifies the repetition by its **amplitud
 Reporting a genuine cycle as an iteration-cap hit would be a confident wrong diagnosis, which is
 why the reason is a required enumerated field rather than something a caller infers from the flag.
 
-This makes `offer_tol >= 2 * step` **derived** rather than tuned: the settled oscillation spans
-exactly two steps, so a tolerance narrower than that would report every successful climb as a
-cycle. The default `offer_tol` is `1e-9` — it admits only an offer vector that has genuinely
+This makes `offer_tol >= 3 * step` **derived** rather than tuned: the settled oscillation spans
+two steps about an on-grid optimum and three about a half-grid one (the two straddling offers tie
+in profit, the tie keeps the climb's direction, and it overshoots one extra step before the real
+decrease turns it), and a strictly concave profit cannot tie three grid points in a row, so three
+steps is the widest a settled orbit gets. A tolerance narrower than that would report a
+successful climb as a cycle — found at true cost 33.33 with a step of 0.01, where the earlier
+`2 * step` floor reported a settled run as `cycle` after 3,339 rounds. The constant lives in one
+place, `MarkupStrategy.min_offer_tol`. The default `offer_tol` is `1e-9` — it admits only an offer vector that has genuinely
 come to rest, which is what an all-price-taker run does — so any markup agent needs it set
 explicitly. `MarketAgentsOptions` rejects a violating configuration up front rather than
 mis-diagnosing the run later:
 
 ```text
-offer_tol=0.5 is below 2 * step for the markup strategy on generator "g1" (step=0.5, so
-2 * step=1.0). A fixed-step climber settles into an oscillation of exactly two steps about its
-optimum, so a narrower tolerance would report that arrival as a cycle. Raise offer_tol to at
-least 1.0, or lower the step.
+offer_tol=0.5 is below 3 * step for the markup strategy on generator "g1" (step=0.5, so
+3 * step=1.5). A fixed-step climber settles into an oscillation of two steps about its optimum
+-- three when the optimum sits halfway between two of its grid points -- so a narrower tolerance
+would report that arrival as a cycle. Raise offer_tol to at least 1.5, or lower the step.
 ```
 
 A repetition needs two rounds to be seen in, so `converged` requires at least **two update
@@ -265,7 +271,7 @@ result = solve_agents(
     Scenario(network=net),
     MarketAgentsOptions(
         strategies={"g1": {"kind": "markup", "step": 0.5}, "g2": {"kind": "price_taker"}},
-        offer_tol=1.0,  # >= 2 * step, and validated as such
+        offer_tol=1.5,  # >= 3 * step, and validated as such
         max_iterations=200,  # a bound, not a target
     ),
 )
@@ -332,7 +338,7 @@ reply = jobs.run(
     jobs.SolveRequest(
         kind="market.agents",
         network=net,
-        options={"strategies": {"g1": {"kind": "markup", "step": 0.5}}, "offer_tol": 1.0},
+        options={"strategies": {"g1": {"kind": "markup", "step": 0.5}}, "offer_tol": 1.5},
     )
 )
 print(reply.status, reply.result.converged, reply.result.termination_reason)

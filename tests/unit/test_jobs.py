@@ -1183,13 +1183,13 @@ def _price_taker_options(*gen_ids: str) -> MarketAgentsOptions:
 def _markup_options(
     *gen_ids: str, step: float = 0.5, max_iterations: int = 400
 ) -> MarketAgentsOptions:
-    """A markup config for each of *gen_ids*, with A9's derived ``offer_tol`` of ``2 * step`` --
+    """A markup config for each of *gen_ids*, with A9's derived ``offer_tol`` of ``3 * step`` --
     mirrors ``tests/unit/test_market_agents.py``'s own ``_markup_options`` helper (a different
     module's private helper, so duplicated rather than imported, the same way this file already
     duplicates ``_case30_zonal_options`` rather than reaching into ``test_market_zonal.py``)."""
     return MarketAgentsOptions(
         strategies={gen_id: {"kind": "markup", "step": step} for gen_id in gen_ids},
-        offer_tol=2.0 * step,
+        offer_tol=3.0 * step,
         max_iterations=max_iterations,
     )
 
@@ -1454,7 +1454,7 @@ def test_market_agents_markup_on_a_quadratic_cost_is_a_validation_failure(
         SolveRequest(
             kind="market.agents",
             network=case14,
-            options={"strategies": {gen_id: {"kind": "markup", "step": 0.5}}, "offer_tol": 1.0},
+            options={"strategies": {gen_id: {"kind": "markup", "step": 0.5}}, "offer_tol": 1.5},
         )
     )
     error = _assert_failed(out, "VALIDATION")

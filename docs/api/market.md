@@ -68,7 +68,8 @@ only reason the true cost and the offered cost remain two comparable things.
 Updates are simultaneous, in `NetworkArrays` generator order, and that is contract rather than
 implementation detail. Termination is classified by the **amplitude** of the oscillation the loop
 settles into, not by the mere fact of one: a fixed-step climber never comes to rest, it dithers by
-exactly two steps about its optimum, so `offer_tol >= 2 * step` is derived rather than tuned —
+two steps about its optimum (three when the optimum sits between two grid points), so
+`offer_tol >= 3 * step` is derived rather than tuned —
 and `MarketAgentsOptions` rejects a configuration that violates it rather than silently reporting
 a successful climb as a cycle. Settlement is computed once, on the final round's clearing, at the
 final round's prices; the intermediate rounds are the agents' search, not markets anybody was paid

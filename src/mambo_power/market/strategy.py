@@ -196,6 +196,11 @@ _IDLE_MW_ABS_TOL = 1e-9
 can return 1e-14 MW for an undispatched unit, and an exact ``<= 0.0`` would read that as a sale."""
 
 
+_SETTLED_ORBIT_STEPS = 3
+"""How many steps wide a settled :class:`MarkupStrategy` orbit can be -- two about an on-grid
+optimum, three about a half-grid one (see :attr:`MarkupStrategy.min_offer_tol`)."""
+
+
 def _marginal_offer(cost: GeneratorCost, *, what: str) -> float:
     """The scalar $/MWh level :class:`MarkupStrategy` climbs on.
 
@@ -274,16 +279,28 @@ class MarkupStrategy:
     side of that discontinuity (A4 measured: $9,497.52 against a derivable $12,250). This module
     does not claim otherwise.
 
-    ``step`` also fixes the loop's convergence tolerance from the other side (A9): a fixed-step
-    climber oscillates by exactly two steps about its optimum once it arrives, so
-    ``market.agents``' ``offer_tol`` must be ``>= 2 * step`` for that oscillation to read as
-    converged rather than as a cycle.
+    ``step`` also fixes the loop's convergence tolerance from the other side (A9): once a
+    fixed-step climber arrives it oscillates by **two** steps about an optimum that sits on its
+    own grid, and by **three** when the optimum sits halfway between two grid points -- the two
+    straddling offers then tie in profit, the tie rule above keeps direction, and the climb
+    overshoots one extra step before the real decrease reverses it (a period-6 orbit; found by
+    the M7 critic at true cost 33.33, step 0.01, where the old ``2 * step`` tolerance reported
+    the settled run as a cycle after 3,339 rounds). A strictly concave profit cannot tie three
+    consecutive grid points, so three steps is the widest settled orbit there is, and
+    :attr:`min_offer_tol` -- ``market.agents``' floor on ``offer_tol`` -- is ``3 * step``.
     """
 
     def __init__(self, step: float) -> None:
         if step <= 0:
             raise ValueError(f"MarkupStrategy.step must be positive, got {step}")
         self.step = step
+
+    @property
+    def min_offer_tol(self) -> float:
+        """The widest oscillation this strategy settles into, ``3 * step`` (class docstring) --
+        the least ``offer_tol`` under which ``market.agents`` reads its arrival as convergence
+        rather than as a cycle. The one place that constant lives."""
+        return _SETTLED_ORBIT_STEPS * self.step
 
     def offer(self, observation: Observation) -> GeneratorCost:
         """The two-point climb described above, applied to *observation*'s own history."""
@@ -330,7 +347,8 @@ class MarkupConfig(BaseModel):
     step: float = Field(
         gt=0,
         description="Fixed offer step, $/MWh per round. Bounds the loop's own convergence "
-        "tolerance from below (A9): offer_tol must be >= 2 * step.",
+        "tolerance from below (A9): offer_tol must be >= 3 * step, the widest orbit a settled "
+        "climb has (MarkupStrategy.min_offer_tol).",
     )
 
 

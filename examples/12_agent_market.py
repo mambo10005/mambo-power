@@ -137,7 +137,7 @@ pivotal = star([("strategic", 900.0, 20.0)])
 before_json = pivotal.model_dump_json()
 
 markup_options = MarketAgentsOptions(
-    strategies={"strategic": {"kind": "markup", "step": 0.5}}, offer_tol=1.0
+    strategies={"strategic": {"kind": "markup", "step": 0.5}}, offer_tol=1.5
 )
 climbed = solve_agents(Scenario(network=pivotal), markup_options)
 baseline = solve_agents(
@@ -182,9 +182,10 @@ print(f"against the pivotal ${peak.markup:,.2f}/h -- {peak.markup / rivalled.mar
 
 # --- 4. Two agents, and what `converged` has to mean -------------------------------------------
 # Two 300 MW units at $20/MWh: the only shape in this example where best response can fail to
-# settle in one round.  A fixed-step climber never comes to rest -- it dithers by exactly two
-# steps about its optimum -- so the loop classifies the repetition it finds by its *amplitude*,
-# which is why `offer_tol` must be at least `2 * step` and why the options model enforces that.
+# settle in one round.  A fixed-step climber never comes to rest -- it dithers by two steps about
+# its optimum, three when the optimum sits halfway between two grid points -- so the loop
+# classifies the repetition it finds by its *amplitude*, which is why `offer_tol` must be at
+# least `3 * step` and why the options model enforces that.
 duopoly = star([("g1", 300.0, 20.0), ("g2", 300.0, 20.0)])
 duopoly_strategies = {
     "g1": {"kind": "markup", "step": 0.5},
@@ -192,7 +193,7 @@ duopoly_strategies = {
 }
 settled = solve_agents(
     Scenario(network=duopoly),
-    MarketAgentsOptions(strategies=duopoly_strategies, offer_tol=1.0),
+    MarketAgentsOptions(strategies=duopoly_strategies, offer_tol=1.5),
 )
 competitive = solve_agents(
     Scenario(network=duopoly),
@@ -219,7 +220,7 @@ print(
 # reports that it ran out of rounds, and never presents a truncated run as a settled one.
 capped = solve_agents(
     Scenario(network=duopoly),
-    MarketAgentsOptions(strategies=duopoly_strategies, offer_tol=1.0, max_iterations=10),
+    MarketAgentsOptions(strategies=duopoly_strategies, offer_tol=1.5, max_iterations=10),
 )
 print(
     f"under max_iterations=10: status {capped.status} | converged {capped.converged} | "
@@ -231,7 +232,7 @@ print(
 try:
     MarketAgentsOptions(strategies={"g1": {"kind": "markup", "step": 0.5}}, offer_tol=0.5)
 except ValueError as exc:
-    print("offer_tol below 2 * step is refused:", str(exc).splitlines()[1].strip()[:78])
+    print("offer_tol below 3 * step is refused:", str(exc).splitlines()[1].strip()[:78])
 
 # --- 5. Through the jobs API -------------------------------------------------------------------
 # The strategy configuration crosses as data.  A `Strategy` object never does: `solve_agents` has
@@ -240,7 +241,7 @@ except ValueError as exc:
 request = jobs.SolveRequest(
     kind="market.agents",
     network=duopoly,
-    options={"strategies": duopoly_strategies, "offer_tol": 1.0},
+    options={"strategies": duopoly_strategies, "offer_tol": 1.5},
 )
 reply = json.loads(jobs.run_json(request.model_dump_json()))
 print()
@@ -262,7 +263,7 @@ bad = jobs.run(
     jobs.SolveRequest(
         kind="market.agents",
         network=duopoly,
-        options={"strategies": {"nope": {"kind": "markup", "step": 0.5}}, "offer_tol": 1.0},
+        options={"strategies": {"nope": {"kind": "markup", "step": 0.5}}, "offer_tol": 1.5},
     )
 )
 print("a strategy naming a generator that does not exist:", bad.status, bad.error.code)

@@ -121,10 +121,10 @@ class RaiseWhileAtCapacity:
 
 
 def _markup_options(*gen_ids: str, step: float = STEP, **kwargs: object) -> MarketAgentsOptions:
-    """A markup config for each of *gen_ids*, with A9's derived ``offer_tol`` of ``2 * step``."""
+    """A markup config for each of *gen_ids*, with A9's derived ``offer_tol`` of ``3 * step``."""
     return MarketAgentsOptions(
         strategies={gen_id: {"kind": "markup", "step": step} for gen_id in gen_ids},
-        offer_tol=2.0 * step,
+        offer_tol=3.0 * step,
         **kwargs,  # type: ignore[arg-type]
     )
 
@@ -278,7 +278,7 @@ def test_the_true_cost_reaches_the_strategies_and_the_result_unchanged() -> None
     recorder = _Recorder(MarkupStrategy(step=STEP))
     result = solve_agents(
         Scenario(network=net),
-        MarketAgentsOptions(offer_tol=2 * STEP, max_iterations=400),
+        MarketAgentsOptions(offer_tol=3 * STEP, max_iterations=400),
         strategies={"strategic": recorder},
     )
     true_cost = net.generators[0].cost
@@ -304,7 +304,7 @@ def test_the_loop_hands_every_strategy_a_contiguous_history() -> None:
     recorders = {gen_id: _Recorder(MarkupStrategy(step=STEP)) for gen_id in ("agent_a", "agent_b")}
     result = solve_agents(
         Scenario(network=net),
-        MarketAgentsOptions(offer_tol=2 * STEP, max_iterations=12),
+        MarketAgentsOptions(offer_tol=3 * STEP, max_iterations=12),
         strategies=dict(recorders),
     )
     for recorder in recorders.values():
@@ -332,7 +332,7 @@ def test_updates_are_simultaneous_not_round_robin() -> None:
     recorders = {gen_id: _Recorder(MarkupStrategy(step=STEP)) for gen_id in ("agent_a", "agent_b")}
     solve_agents(
         Scenario(network=net),
-        MarketAgentsOptions(offer_tol=2 * STEP, max_iterations=10),
+        MarketAgentsOptions(offer_tol=3 * STEP, max_iterations=10),
         strategies=dict(recorders),
     )
     a = [_level(offer) for offer in recorders["agent_a"].offers]
@@ -465,7 +465,8 @@ def test_ac5i_the_duopoly_climbs_to_the_measured_point_and_reports_it_converged(
 def test_ac5i_the_settled_oscillation_is_two_steps_wide() -> None:
     """AC-5(i)'s amplitude clause: what the loop calls convergence is a cycle of amplitude
     **1.0** -- exactly two steps of 0.5 -- which is inside ``offer_tol`` because A9 derives
-    ``offer_tol = 2 * step``, not because a tolerance was widened to fit.
+    ``offer_tol = 3 * step`` (two steps when the optimum is a grid point, three when it sits
+    halfway between two), not because a tolerance was widened to fit.
 
     Measured on the offers the real strategies really made, recorded round by round. The
     periodicity is asserted too: an amplitude read off a tail that is not actually repeating
@@ -475,7 +476,7 @@ def test_ac5i_the_settled_oscillation_is_two_steps_wide() -> None:
     recorders = {gen_id: _Recorder(MarkupStrategy(step=STEP)) for gen_id in ("agent_a", "agent_b")}
     result = solve_agents(
         Scenario(network=net),
-        MarketAgentsOptions(offer_tol=2 * STEP, max_iterations=400),
+        MarketAgentsOptions(offer_tol=3 * STEP, max_iterations=400),
         strategies=dict(recorders),
     )
     assert result.converged is True
@@ -485,7 +486,7 @@ def test_ac5i_the_settled_oscillation_is_two_steps_wide() -> None:
         assert max(tail) - min(tail) == AC5_AMPLITUDE
         assert AC5_AMPLITUDE == 2 * STEP
         assert levels[-1] == levels[-1 - AC5_PERIOD], "the tail must actually be periodic"
-    assert AC5_AMPLITUDE <= 2 * STEP  # i.e. inside the derived offer_tol
+    assert AC5_AMPLITUDE <= 3 * STEP  # i.e. inside the derived offer_tol
 
 
 def test_ac5i_the_true_cost_baseline_the_markup_is_measured_against() -> None:
@@ -522,7 +523,7 @@ def test_an_out_of_merit_markup_agent_settles_at_true_cost_not_at_the_cap() -> N
     recorder = _Recorder(MarkupStrategy(step=STEP))
     result = solve_agents(
         Scenario(network=net),
-        MarketAgentsOptions(offer_tol=2 * STEP, max_iterations=40),
+        MarketAgentsOptions(offer_tol=3 * STEP, max_iterations=40),
         strategies={"strategic": recorder},
     )
     assert result.status == "Optimal"
@@ -543,16 +544,20 @@ def test_an_out_of_merit_markup_agent_settles_at_true_cost_not_at_the_cap() -> N
 def test_a_settled_climb_converges_at_every_step_not_only_representable_ones(
     step: float,
 ) -> None:
-    """The convergence verdict must not turn on whether ``2 * step`` is exactly representable.
+    """The convergence verdict must not turn on whether ``k * step`` is exactly representable.
 
-    A9 derives ``offer_tol = 2 * step``, and a settled climber's amplitude *is* two steps -- so
-    the two sides of the loop's comparison are the same number whenever it has genuinely arrived.
-    They are not computed the same way: ``offer_tol`` is one multiplication, the amplitude is a
-    peak-to-peak of levels each reached by hundreds of accumulated additions. Measured on this
-    fixture (re-measured 2026-08-29, in ULPs of ``offer_tol``), the amplitude lands 102 ULPs
-    *above* ``2 * step`` at 0.1 and 26 above at 0.7, while at 0.3 it lands 51 below and at 0.5 it
-    is bit-exact. Under a plain ``<=`` the first two report a
-    real climb as a ``cycle`` and the other two converge by luck.
+    A settled climber's amplitude is an integer number of steps (two, or three at a half-grid
+    optimum) and so is the derived ``offer_tol`` -- so the two sides of the loop's comparison
+    are the same number whenever the loop has genuinely arrived at the widest orbit the
+    tolerance admits. They are not computed the same way: ``offer_tol`` is one multiplication,
+    the amplitude is a peak-to-peak of levels each reached by hundreds of accumulated additions.
+    Measured on this fixture against ``offer_tol = 2 * step`` (re-measured 2026-08-29, in ULPs
+    of ``offer_tol``), the amplitude lands 102 ULPs *above* ``2 * step`` at 0.1 and 26 above at
+    0.7, while at 0.3 it lands 51 below and at 0.5 it is bit-exact. Under a plain ``<=`` the
+    first two report a real climb as a ``cycle`` and the other two converge by luck. The derived
+    tolerance is now ``3 * step`` (M7 S11), which puts a full step of headroom above this
+    fixture's two-step orbit; the same-number comparison recurs at a three-step orbit, and
+    :func:`_settled` is tested directly below.
 
     Every one of these runs is the same settled two-step oscillation; only the arithmetic differs.
     Steps 0.1, 0.2 and 0.7 are the cases that were wrong and are in the list for that reason;
@@ -616,7 +621,7 @@ def test_ac5ii_a_genuine_cycle_reports_the_cycle_and_never_the_cap() -> None:
     net = duopoly_network()
     result = solve_agents(
         Scenario(network=net),
-        MarketAgentsOptions(offer_tol=2 * STEP, max_iterations=400),
+        MarketAgentsOptions(offer_tol=3 * STEP, max_iterations=400),
         strategies={
             "agent_a": RaiseWhileAtCapacity(step=5.0),
             "agent_b": RaiseWhileAtCapacity(step=5.0),
@@ -682,22 +687,59 @@ def test_status_is_the_lp_s_and_termination_reason_is_none_when_it_failed() -> N
 # --------------------------------------------------------------------------------------------
 
 
-def test_offer_tol_below_two_steps_is_rejected_by_the_options_themselves() -> None:
+def test_offer_tol_below_three_steps_is_rejected_by_the_options_themselves() -> None:
     """A9's derived constraint is validated, not hoped for: a tolerance narrower than the
-    settling oscillation would report every successful climb as a cycle."""
-    with pytest.raises(ValidationError, match=r"below 2 \* step"):
-        MarketAgentsOptions(strategies={"agent_a": {"kind": "markup", "step": 0.5}}, offer_tol=0.9)
-    MarketAgentsOptions(strategies={"agent_a": {"kind": "markup", "step": 0.5}}, offer_tol=1.0)
+    settling oscillation would report every successful climb as a cycle. The floor is three
+    steps, not two: ``2.5 * step`` is refused and ``3 * step`` is admitted."""
+    with pytest.raises(ValidationError, match=r"below 3 \* step"):
+        MarketAgentsOptions(strategies={"agent_a": {"kind": "markup", "step": 0.5}}, offer_tol=1.25)
+    MarketAgentsOptions(strategies={"agent_a": {"kind": "markup", "step": 0.5}}, offer_tol=1.5)
 
 
 def test_an_injected_markup_strategy_is_held_to_the_same_derived_constraint() -> None:
-    """The object path does not escape A9 just because it skipped the config path."""
-    with pytest.raises(ValueError, match=r"below 2 \* step"):
+    """The object path does not escape A9 just because it skipped the config path -- and it is
+    the same rule, in the same words (``MarkupStrategy.min_offer_tol``, one message)."""
+    with pytest.raises(ValueError, match=r"below 3 \* step") as object_path:
         solve_agents(
             Scenario(network=duopoly_network()),
-            MarketAgentsOptions(offer_tol=0.9),
+            MarketAgentsOptions(offer_tol=1.25),
             strategies={"agent_a": MarkupStrategy(step=0.5)},
         )
+    with pytest.raises(ValidationError) as config_path:
+        MarketAgentsOptions(strategies={"agent_a": {"kind": "markup", "step": 0.5}}, offer_tol=1.25)
+    assert str(object_path.value) in str(config_path.value)
+    assert MarkupStrategy(step=0.5).min_offer_tol == 1.5
+
+
+def test_a_climb_whose_peak_sits_between_two_grid_points_settles_three_steps_wide() -> None:
+    """The settled orbit is **three** steps wide, not two, when the profit peak is equidistant
+    from two grid points (critic finding 2, M7 S11): the two straddling offers tie in profit,
+    the tie rule keeps direction, the climb overshoots one extra step before the real decrease
+    reverses it, and the orbit is period 6 with amplitude ``3 * step``. Under the old
+    ``offer_tol = 2 * step`` this settled run was reported as a ``cycle`` at ~3339 rounds.
+
+    True cost 33.33 on the smooth-pivotal fixture puts the closed-form peak at
+    ``(100 + 33.33) / 2 = 66.665``, exactly halfway between the 0.01 grid points 66.66 and
+    66.67. ``offer_tol`` is taken from the strategy's own ``min_offer_tol`` so that this test
+    reads the shipped constant rather than restating it: set that back to ``2 * step`` and this
+    run is a ``cycle`` again.
+    """
+    step = 0.01
+    strategy = MarkupStrategy(step=step)
+    recorder = _Recorder(strategy)
+    result = solve_agents(
+        Scenario(network=smooth_pivotal_network(true_cost=33.33)),
+        MarketAgentsOptions(offer_tol=strategy.min_offer_tol, max_iterations=4000),
+        strategies={"strategic": recorder},
+    )
+    assert result.status == "Optimal"
+    assert result.termination_reason == "converged"
+    assert result.converged is True
+    levels = [_level(offer) for offer in recorder.offers]
+    tail = levels[-6:]
+    assert max(tail) - min(tail) == pytest.approx(3 * step, abs=1e-12), "the three-step orbit"
+    assert levels[-1] == levels[-7], "the tail must actually be periodic (period 6)"
+    assert _level(result.offers[0].offer) == pytest.approx(66.665, abs=2 * step)
 
 
 @pytest.mark.parametrize(

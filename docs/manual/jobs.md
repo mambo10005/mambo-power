@@ -351,7 +351,7 @@ Every way of getting the agent set wrong is a **caller** error, and none of them
 | --- | --- |
 | An unknown `StrategyConfig` kind | `BAD_OPTIONS` |
 | A non-positive `max_iterations`, or a non-positive `offer_tol` | `BAD_OPTIONS` |
-| An `offer_tol` below `2 * step` for a markup agent | `BAD_OPTIONS` |
+| An `offer_tol` below `3 * step` for a markup agent | `BAD_OPTIONS` |
 | A strategy naming a generator the network does not have — or one it has but its arrays do not (out of service, or on a bus that is), or one with no `Generator.cost` to depart from | `VALIDATION`, with a `DANGLING_REF` issue whose `path` is `options.strategies` |
 | A `markup` strategy on a generator whose cost is not linear (every generator in every bundled MATPOWER case is quadratic) | `VALIDATION`, the same `DANGLING_REF` shape, message naming the generator |
 
