@@ -41,7 +41,7 @@ from mambo_power.market.strategy import (
     PolynomialCost,
     PriceTakerStrategy,
 )
-from mambo_power.model import PiecewiseCost, Scenario
+from mambo_power.model import Network, PiecewiseCost, Scenario
 from mambo_power.numerics import NetworkArrays
 from mambo_power.opf import gen_cost_coeffs
 from mambo_power.results.agents import AgentOfferResult, MarketAgentsResult
@@ -926,3 +926,49 @@ def test_solve_agents_is_exported_from_the_market_package_like_the_other_modes()
     assert market.MarketAgentsOptions is agents_module.MarketAgentsOptions
     assert "solve_agents" in market.__all__
     assert "MarketAgentsOptions" in market.__all__
+
+
+# --------------------------------------------------------------------------------------------
+# The PTDF is built once per run, not once per round (critic finding 3, M7 S11)
+# --------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "net",
+    [smooth_pivotal_network(), non_pivotal_control_network(), duopoly_network()],
+    ids=["smooth-pivotal", "non-pivotal-control", "duopoly"],
+)
+def test_the_cached_ptdf_changes_no_number_in_the_run(
+    net: Network, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``solve_agents`` computes the PTDF once and hands it to every round's ``dc_opf`` -- the
+    network never changes between rounds, only the offers do. That is a cache and nothing
+    else: with the keyword stripped (so every round rebuilds the matrix, the pre-S11 path) the
+    final dispatch, LMPs and every per-round dispatch are ``array_equal``. Bitwise, AC-3's
+    discipline: a cache that changed a number would be a different model.
+    """
+    real_dc_opf = agents_module.dc_opf
+    seen_ptdf: list[object] = []
+
+    def uncached(*args: object, **kwargs: object) -> object:
+        seen_ptdf.append(kwargs.pop("ptdf", None))
+        return real_dc_opf(*args, **kwargs)  # type: ignore[arg-type]
+
+    options = _markup_options(*(gen.id for gen in net.generators), max_iterations=400)
+    cached = solve_agents(Scenario(network=net), options)
+    monkeypatch.setattr(agents_module, "dc_opf", uncached)
+    uncached_result = solve_agents(Scenario(network=net), options)
+
+    assert cached.status == uncached_result.status == "Optimal"
+    assert len(seen_ptdf) == uncached_result.iterations + 1
+    assert all(p is not None for p in seen_ptdf), "the loop passes the cache on every round"
+    assert all(p is seen_ptdf[0] for p in seen_ptdf), "one matrix, computed once"
+    assert cached.iterations == uncached_result.iterations
+    assert cached.termination_reason == uncached_result.termination_reason
+    assert np.array_equal(
+        [row.p_mw for row in cached.generators], [row.p_mw for row in uncached_result.generators]
+    )
+    assert np.array_equal(
+        [row.lmp for row in cached.buses], [row.lmp for row in uncached_result.buses]
+    )
+    assert [row.offer for row in cached.offers] == [row.offer for row in uncached_result.offers]

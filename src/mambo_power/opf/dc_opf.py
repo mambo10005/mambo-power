@@ -770,6 +770,8 @@ def dc_opf(
     pwl_costs: Mapping[int, Sequence[tuple[float, float]]] | None = None,
     demand_bid_coeffs: Mapping[int, tuple[float, float, float]] | None = None,
     demand_pwl_bids: Mapping[int, Sequence[tuple[float, float]]] | None = None,
+    *,
+    ptdf: FloatArray | None = None,
 ) -> OpfSolution:
     """Solve the DC-OPF/welfare LP/QP of ``arr`` (module docstring): minimise Σ cost(p_g) −
     Σ value(p_d) subject to one system-wide nodal-balance row and one PTDF-based flow-limit row
@@ -784,10 +786,26 @@ def dc_opf(
     generator cost (piecewise-linear or ``c2 < 0`` quadratic), and :class:`NonConcaveBidError` for
     a non-concave demand bid (piecewise-linear or ``v2 > 0`` quadratic). Never raises for an
     infeasible or unbounded model — reported through ``status``/``message``.
+
+    ``ptdf`` is an optional **precomputed** PTDF matrix of ``arr`` (``(n_branch, n_bus)``, as
+    :func:`~mambo_power.numerics.ptdf.ptdf` returns it) for a caller that solves the same network
+    many times with different coefficients — :func:`mambo_power.market.agents.solve_agents`
+    clears one network once per round, and the matrix was 70% of a 200-round run when rebuilt
+    every time (M7 S11). It is a cache, not a different model: the rows are built from it exactly
+    as from a freshly computed one, so the result is bitwise-identical either way
+    (``tests/unit/test_opf_dc.py``). ``None`` (the default) computes it here, which keeps every
+    other caller unchanged. A matrix of the wrong shape is a :class:`ValueError` up front — the
+    one way a stale cache from another network can be told apart from this one.
     """
     del options  # no tunable fields yet (OpfDcOptions docstring)
     n_gen = len(arr.gen_ids)
     n_load = len(arr.load_ids)
+    if ptdf is not None and ptdf.shape != (arr.n_branch, arr.n_bus):
+        raise ValueError(
+            f"ptdf must have shape ({arr.n_branch}, {arr.n_bus}) (n_branch, n_bus) for this "
+            f"network, got {ptdf.shape} — a precomputed PTDF is only valid for the network it "
+            "was computed from"
+        )
     problem = _extract_and_validate(
         cost_coeffs, pwl_costs, demand_bid_coeffs, demand_pwl_bids, n_gen, n_load
     )
@@ -872,7 +890,7 @@ def dc_opf(
     # const_k, where const_k = pf_shift_mw_k − Σ_bus PTDF[k, bus]·(p_load_fixed_mw[bus] +
     # g_shunt_mw[bus]) folds in every *fixed* contribution to branch k's flow (derivation: module
     # docstring above). Row bounds: −rating_k − const_k <= row_expr_k <= rating_k − const_k.
-    ptdf_matrix = compute_ptdf(arr)
+    ptdf_matrix = compute_ptdf(arr) if ptdf is None else ptdf
     pf_shift_mw = pf_shift(arr) * arr.base_mva
     fixed_bus_mw = p_load_mw + g_shunt_mw
     const = pf_shift_mw - ptdf_matrix @ fixed_bus_mw

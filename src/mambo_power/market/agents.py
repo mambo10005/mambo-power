@@ -66,6 +66,7 @@ from mambo_power.market.strategy import (
 from mambo_power.model import GeneratorCost, Network, PiecewiseCost, PolynomialCost, Scenario
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import pf_shift
+from mambo_power.numerics.ptdf import ptdf as compute_ptdf
 from mambo_power.opf import gen_cost_coeffs
 from mambo_power.opf.dc_opf import (
     LmpBreakdown,
@@ -622,6 +623,11 @@ def solve_agents(
     offers = _initial_offers(agents)
     demand_bid_coeffs, demand_pwl_bids = load_bid_coeffs(net, arr)
     elastic_idxs = sorted(set(demand_bid_coeffs) | set(demand_pwl_bids))
+    # The network never changes between rounds -- only the offers do -- so the PTDF (and the
+    # B-bus / incidence factorisation beneath it) is built once here and handed to every round's
+    # clearing. Rebuilt per round it was 70% of a 200-round case14 run (critic finding 3, M7 S11);
+    # passing it changes no number (tests/unit/test_market_agents.py, the cache test).
+    ptdf_matrix = compute_ptdf(arr)
 
     history: list[_Round] = []
     seen: dict[tuple[tuple[str, ...], tuple[str, ...]], int] = {}
@@ -638,6 +644,7 @@ def solve_agents(
             pwl_costs=pwl_costs or None,
             demand_bid_coeffs=demand_bid_coeffs or None,
             demand_pwl_bids=demand_pwl_bids or None,
+            ptdf=ptdf_matrix,
         )
         if solution.status != "Optimal" or solution.duals is None:
             return MarketAgentsResult(

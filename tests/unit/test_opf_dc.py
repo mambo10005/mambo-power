@@ -210,3 +210,27 @@ def test_lmp_decomposition_is_standalone_and_independent_of_solve_dc_opf() -> No
     np.testing.assert_allclose(breakdown.energy, expected_energy)
     np.testing.assert_allclose(breakdown.congestion, expected_congestion)
     np.testing.assert_allclose(breakdown.lmp, expected_energy + expected_congestion)
+
+
+def test_dc_opf_accepts_a_precomputed_ptdf_and_solves_identically(
+    triangle_arrays: NetworkArrays,
+) -> None:
+    """``dc_opf(..., ptdf=...)`` (M7 S11, critic finding 3) is a cache, not a different model: the
+    dispatch, duals and returned PTDF are ``array_equal`` -- bitwise, not ``allclose`` -- to the
+    default path that computes the matrix itself. The default keeps every existing caller
+    byte-identical; a matrix of the wrong shape is refused up front rather than silently used
+    as some other network's."""
+    arr = triangle_arrays
+    coeffs = _cost_coeffs([1.0, 10.0, 50.0])
+    computed = dc_opf(arr, coeffs, OpfDcOptions())
+    cached = dc_opf(arr, coeffs, OpfDcOptions(), ptdf=ptdf(arr))
+    assert computed.status == cached.status == "Optimal"
+    assert computed.duals is not None and cached.duals is not None
+    assert np.array_equal(computed.dispatch_mw, cached.dispatch_mw)
+    assert np.array_equal(computed.ptdf, cached.ptdf)
+    assert np.array_equal(computed.duals.flow_limit, cached.duals.flow_limit)
+    assert np.array_equal(computed.duals.gen_bound, cached.duals.gen_bound)
+    assert computed.duals.balance == cached.duals.balance
+    assert computed.objective_cost == cached.objective_cost
+    with pytest.raises(ValueError, match=r"ptdf must have shape \(3, 3\)"):
+        dc_opf(arr, coeffs, OpfDcOptions(), ptdf=np.zeros((2, 3)))
