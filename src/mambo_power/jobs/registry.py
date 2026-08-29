@@ -241,10 +241,10 @@ def _run_market_agents(scenario: Scenario, options: BaseModel | None) -> BaseMod
     "Does raise ``ValueError`` up front for a caller mistake in the agent set" is the whole of
     what it raises before any solve starts, and the exceptions it separately documents raising
     past that point (``NonConvexCostError``/``NonConcaveBidError`` for a cost or bid the clearing
-    cannot accept) are not ``ValueError`` instances, so this ``except`` cannot swallow them. A strategy's
-    ``NotImplementedError`` for a cost shape it does not support no longer reaches this runner
-    at all: ``solve_agents`` asks every strategy for its round-0 offer up front and re-raises
-    that as one of its up-front ``ValueError`` cases (M7 S9).
+    cannot accept) are not ``ValueError`` instances, so this ``except`` cannot swallow them. A
+    strategy's ``NotImplementedError`` for a cost shape it does not support no longer reaches
+    this runner at all: ``solve_agents`` asks every strategy for its round-0 offer up front and
+    re-raises that as one of its up-front ``ValueError`` cases (M7 S9).
     """
     assert isinstance(options, MarketAgentsOptions)  # run(): options_model-validated
     try:
