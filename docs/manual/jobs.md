@@ -369,7 +369,7 @@ raised at resolution time, before any solve, as a network-validation issue.
 ## Relationship to the module-level functions
 
 `pf.solve_dc`, `pf.solve_ac`, `opf.solve_dc_opf`, `contingency.n1`, `market.solve_nodal`,
-`market.solve_multiperiod`, `market.solve_zonal` and `market.agents.solve_agents` remain the
+`market.solve_multiperiod`, `market.solve_zonal` and `market.solve_agents` remain the
 notebook-friendly entry points.
 They take and return the same pydantic models, raise
 Python exceptions on failure, let warnings propagate, and are what `jobs.run` calls. Use them

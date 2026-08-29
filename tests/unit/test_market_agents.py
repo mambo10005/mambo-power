@@ -801,3 +801,21 @@ def test_the_result_round_trips_through_json() -> None:
     again = MarketAgentsResult.model_validate(json.loads(result.model_dump_json()))
     assert again.model_dump() == result.model_dump()
     assert isinstance(again.offers[0], AgentOfferResult)
+
+
+# --------------------------------------------------------------------------------------------
+# Package export -- the fourth mode is reachable the way the other three are
+# --------------------------------------------------------------------------------------------
+
+
+def test_solve_agents_is_exported_from_the_market_package_like_the_other_modes() -> None:
+    """``docs/changelog.md``, ``docs/index.md`` and ``docs/examples/index.md`` all name
+    ``market.solve_agents``; the walk found only ``market.agents.solve_agents`` importable while
+    ``solve_nodal``/``solve_multiperiod``/``solve_zonal`` were each re-exported from the package
+    (M7 S9, fix 1)."""
+    from mambo_power import market
+
+    assert market.solve_agents is agents_module.solve_agents
+    assert market.MarketAgentsOptions is agents_module.MarketAgentsOptions
+    assert "solve_agents" in market.__all__
+    assert "MarketAgentsOptions" in market.__all__
