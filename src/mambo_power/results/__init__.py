@@ -6,6 +6,11 @@ unknown fields and non-finite numbers rejected — keyed by the network's stable
 positional ``to_arrays()`` view. They are never attached to a ``Network``.
 """
 
+from mambo_power.results.agents import (
+    AgentOfferResult,
+    MarketAgentsResult,
+    TerminationReason,
+)
 from mambo_power.results.feasibility import (
     FeasibilityReport,
     ThermalViolation,
@@ -50,6 +55,7 @@ from mambo_power.results.zonal import (
 
 __all__ = [
     "AcPowerFlowResult",
+    "AgentOfferResult",
     "BranchResult",
     "BusLmpResult",
     "BusResult",
@@ -62,6 +68,7 @@ __all__ = [
     "GenResult",
     "LoadDispatchResult",
     "LoadRedispatchResult",
+    "MarketAgentsResult",
     "MarketMultiperiodResult",
     "MarketNodalResult",
     "MarketPeriodResult",
@@ -76,6 +83,7 @@ __all__ = [
     "QLimitSide",
     "ResultProvenance",
     "StorageDispatchResult",
+    "TerminationReason",
     "ThermalViolation",
     "VoltageViolation",
     "ZonePriceResult",

@@ -354,6 +354,45 @@ def _amplitude(window: list[_Round], agents: list[_Agent]) -> float:
     return float(np.max(np.ptp(rows, axis=0)))
 
 
+_AMPLITUDE_TIE_REL_TOL = 1e-9
+"""Relative band inside which a settled amplitude that lands a few ULPs *above* ``offer_tol``
+still counts as convergence -- see :func:`_settled`. The same constant, in the same role, as
+:data:`~mambo_power.market.strategy._PROFIT_TIE_REL_TOL`: both exist because a comparison that is
+exact in arithmetic is decided by float noise in practice."""
+
+
+def _settled(amplitude: float, offer_tol: float) -> bool:
+    """Is *amplitude* within *offer_tol*, counting a ULP-scale overshoot as within?
+
+    **Why this is not a plain ``<=``.** A9 derives ``offer_tol = 2 * step`` and a fixed-step
+    climber settles into an oscillation of exactly two steps, so the two sides of this comparison
+    are *the same number* whenever the loop has genuinely arrived -- which makes the verdict turn
+    on whether that number is computed identically on both sides. It is not. ``offer_tol`` is one
+    multiplication, while the amplitude is a peak-to-peak of offer levels each reached by hundreds
+    of accumulated additions of ``step``. Measured on the AC-5 duopoly (2026-08-28), the amplitude
+    lands **64 ULPs above** ``2 * step`` at a step of 0.1 (404 rounds) and **19 ULPs above** at
+    0.7 (61 rounds), while at 0.3 it lands 42 ULPs *below* and at 0.5 it is bit-exact. Under a
+    plain ``<=`` the first two are reported as a **cycle** -- a real climb, settled at its
+    optimum, declared non-convergent -- and the other two converge by luck. The sign of the
+    accumulated error is arbitrary, so convergence was being decided by a coin flip.
+
+    **Why the tolerance goes here and not on ``offer_tol``.** The alternative is to forbid
+    ``offer_tol == 2 * step`` and make callers add headroom. That destroys what A9 is for: the
+    derived value stops being an admissible one, and the headroom actually needed depends on the
+    accumulated float error over a round count the caller cannot know in advance (it tracks the
+    number of rounds -- 64 ULPs over 404 of them, 19 over 61). A constant the caller must guess
+    and cannot derive is precisely the tuning knob A9 exists to remove.
+
+    The band is enormous on both sides of anything real: at a step of 0.1 it admits 2e-10 against
+    an observed error of 2.8e-15, and a genuine cycle on this wave's own fixtures is ~20 $/MWh
+    wide -- eleven orders of magnitude out. This is the same defect class, and the same remedy,
+    as the profit-tie tolerance in :class:`~mambo_power.market.strategy.MarkupStrategy`.
+    """
+    return amplitude <= offer_tol or math.isclose(
+        amplitude, offer_tol, rel_tol=_AMPLITUDE_TIE_REL_TOL, abs_tol=_AMPLITUDE_TIE_REL_TOL
+    )
+
+
 def _clearing_rows(
     net: Network,
     arr: NetworkArrays,
@@ -441,13 +480,22 @@ def solve_agents(
     """Run the best-response loop of ``scenario.network`` (module docstring) and return the final
     round's clearing beside how the loop ended.
 
-    ``strategies`` is the in-process seam the
-    :class:`~mambo_power.market.strategy.Strategy` Protocol exists for: a mapping of generator id
-    to any structurally-conforming object, used *instead of* ``options.strategies`` (giving both
-    raises). Only the config union crosses JSON, so only ``options.strategies`` reaches this
-    through ``jobs``; ``provenance.options`` echoes ``options`` either way, which is why
-    :attr:`~mambo_power.results.agents.AgentOfferResult.strategy` -- not the provenance -- is the
-    record of which rule actually produced each offer.
+    **The in-process seam.** ``strategies`` maps a generator id to any structurally-conforming
+    :class:`~mambo_power.market.strategy.Strategy` object, and is used *instead of*
+    ``options.strategies`` -- giving both raises, so an agent set always has exactly one source
+    and the result can say which rule ran. This is deliberate design, not a hole left open for a
+    test: it is the surface for a caller whose bidding rule :data:`StrategyConfig` **cannot
+    express** -- a rule with parameters the union does not carry, or one belonging to the caller
+    rather than to this library -- and it is the reason
+    :class:`~mambo_power.market.strategy.Strategy` is a structural
+    :class:`typing.Protocol` (design D3(a)) rather than a closed union. Without it the Protocol
+    would be decorative, since nothing would ever accept an object that merely conforms to it.
+    Only the config union crosses JSON, so only ``options.strategies`` can reach this through
+    ``jobs``, and the wave's own jobs coverage (AC-6) is unaffected by anything passed here.
+    ``provenance.options`` echoes ``options`` either way, which is why
+    :attr:`~mambo_power.results.agents.AgentOfferResult.strategy` -- carrying the config ``kind``
+    or, for an injected object, its class name -- and not the provenance, is the record of which
+    rule actually produced each offer.
 
     Never raises for an infeasible or unbounded LP: a round that fails to clear ends the run and
     is reported through ``status``/``message``, mirroring
@@ -525,7 +573,7 @@ def solve_agents(
             if first_seen is not None:
                 period = round_index - first_seen
                 amplitude = _amplitude(history[round_index + 1 - period :], agents)
-                reason = "converged" if amplitude <= opts.offer_tol else "cycle"
+                reason = "converged" if _settled(amplitude, opts.offer_tol) else "cycle"
                 break
             seen[key] = round_index
         if round_index >= opts.max_iterations:

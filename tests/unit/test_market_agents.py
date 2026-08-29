@@ -511,6 +511,50 @@ def test_ac5i_the_true_cost_baseline_the_markup_is_measured_against() -> None:
     )
 
 
+@pytest.mark.parametrize("step", [0.5, 1.0, 2.0, 0.25, 0.3, 0.1, 0.2, 0.7, 0.05])
+def test_a_settled_climb_converges_at_every_step_not_only_representable_ones(
+    step: float,
+) -> None:
+    """The convergence verdict must not turn on whether ``2 * step`` is exactly representable.
+
+    A9 derives ``offer_tol = 2 * step``, and a settled climber's amplitude *is* two steps -- so
+    the two sides of the loop's comparison are the same number whenever it has genuinely arrived.
+    They are not computed the same way: ``offer_tol`` is one multiplication, the amplitude is a
+    peak-to-peak of levels each reached by hundreds of accumulated additions. Measured on this
+    fixture, the amplitude lands 64 ULPs *above* ``2 * step`` at 0.1 and 19 above at 0.7, while at
+    0.3 it lands 42 below and at 0.5 it is bit-exact. Under a plain ``<=`` the first two report a
+    real climb as a ``cycle`` and the other two converge by luck.
+
+    Every one of these runs is the same settled two-step oscillation; only the arithmetic differs.
+    Steps 0.1, 0.2 and 0.7 are the cases that were wrong and are in the list for that reason;
+    0.5, 1.0, 2.0 and 0.25 are binary-exact and cannot see this defect at all, which is why an
+    otherwise thorough sabotage sweep run only at the wave own step of 0.5 could not have caught
+    it. A defect sweep probes the defects you thought of, at the parameters you happened to use.
+    """
+    result = solve_agents(
+        Scenario(network=duopoly_network()),
+        _markup_options("agent_a", "agent_b", step=step, max_iterations=3000),
+    )
+    assert result.status == "Optimal"
+    assert result.termination_reason == "converged"
+    assert result.converged is True
+
+
+def test_the_amplitude_band_admits_ulps_and_nothing_economically_real() -> None:
+    """``_settled`` widens the comparison by a ULP-scale band, not by a margin that could hide a
+    real cycle: it admits an amplitude a few parts in 1e9 over the tolerance and refuses one a
+    part in 1e3 over.
+
+    Without this the previous test would pass for the wrong reason -- a band wide enough to make
+    every oscillation "settled" would also make ``converged`` meaningless.
+    """
+    assert agents_module._settled(1.0, 1.0)
+    assert agents_module._settled(1.0 + 64 * 2.0**-52, 1.0), "the measured step-0.1 overshoot"
+    assert agents_module._settled(0.2 + 2.9e-15, 0.2)
+    assert not agents_module._settled(1.001, 1.0)
+    assert not agents_module._settled(20.0, 1.0), "a genuine cycle on this wave's own fixtures"
+
+
 # --------------------------------------------------------------------------------------------
 # AC-5(ii) -- non-convergence is reported, in both of its shapes
 # --------------------------------------------------------------------------------------------
