@@ -152,7 +152,7 @@ class MarketAgentsOptions(BaseModel):
         default=1e-9,
         gt=0,
         description="Largest offer-vector oscillation amplitude, in cost-coefficient units, that "
-        "still counts as converged once the loop detects a repeated state (spec A9). This is a "
+        "still counts as converged once the loop detects a repeated state. This is a "
         "*derived* quantity, not a tuning knob: a fixed-step climber settles into an oscillation "
         "of exactly two steps about its optimum, so a markup agent of step s needs "
         "offer_tol >= 2*s -- which the validator below enforces rather than hopes for. The "
