@@ -1612,3 +1612,15 @@ def test_run_json_accepts_a_request_whose_only_oddity_is_a_key_spelled_like_a_ma
     out = SolveResult.model_validate_json(run_json(with_marker))
     assert out.error is not None and "duplicate" not in out.error.message.lower()
     assert out.error.code == "BAD_OPTIONS"  # pf.dc takes no options: pydantic's verdict, not ours
+
+
+@pytest.mark.parametrize("depth", [990, 1100, 5000])
+def test_run_json_deep_nesting_is_bad_request_at_every_depth_not_internal(depth: int) -> None:
+    """The duplicate-key check must not turn a deep request into ``INTERNAL``: at 12aa3ce a
+    recursive path walk outside the parse guard raised ``RecursionError`` between roughly depth
+    1000 and the point where ``json.loads`` itself overflows, and only that band said
+    ``INTERNAL`` (critic finding 11). The walk is now iterative and skipped on clean input."""
+    text = '{"kind":"pf.dc","network":' + "[" * depth + "]" * depth + "}"
+    out = SolveResult.model_validate_json(run_json(text))
+    assert out.status == "failed" and out.error is not None
+    assert out.error.code == "BAD_REQUEST", out.error

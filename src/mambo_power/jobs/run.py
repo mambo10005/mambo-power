@@ -247,13 +247,22 @@ class _Node(dict[str, Any]):
 def _reject_duplicate_keys(text: str) -> None:
     """Raise :class:`_DuplicateKeyError` naming the key and its dotted path if any object in
     ``text`` repeats a key, at any depth. Malformed or too-deep JSON returns silently: pydantic
-    reports those with its own message, exactly as before this check existed."""
+    reports those with its own message, exactly as before this check existed.
+
+    The path walk is iterative and runs only when the parse saw a duplicate, so a clean request
+    costs one ``json.loads`` and a request nested deeper than the interpreter's recursion limit
+    fails inside ``json.loads`` -- never here -- and stays ``BAD_REQUEST`` (critic finding 11: a
+    recursive walk outside the guard turned depth ~1000 into ``INTERNAL``).
+    """
+    seen_duplicate = False
 
     def hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        nonlocal seen_duplicate
         node = _Node()
         for key, value in pairs:
             if key in node and node.duplicated is None:
                 node.duplicated = key
+                seen_duplicate = True
             node[key] = value
         return node
 
@@ -261,26 +270,21 @@ def _reject_duplicate_keys(text: str) -> None:
         root = json.loads(text, object_pairs_hook=hook)
     except Exception:  # noqa: BLE001 — pydantic's turn
         return
+    if not seen_duplicate:
+        return
 
-    def walk(node: Any, path: str) -> tuple[str, str] | None:
+    stack: list[tuple[Any, str]] = [(root, "")]
+    while stack:
+        node, path = stack.pop()
         if isinstance(node, _Node):
             if node.duplicated is not None:
-                return node.duplicated, path or "request"
-            for k, v in node.items():
-                hit = walk(v, f"{path}.{k}" if path else k)
-                if hit:
-                    return hit
+                raise _DuplicateKeyError(
+                    f'duplicate key "{node.duplicated}" at {path or "request"}'
+                )
+            # Reversed so the first key in text order is examined first (depth-first, in order).
+            stack.extend((v, f"{path}.{k}" if path else k) for k, v in reversed(node.items()))
         elif isinstance(node, list):
-            for i, v in enumerate(node):
-                hit = walk(v, f"{path}[{i}]")
-                if hit:
-                    return hit
-        return None
-
-    hit = walk(root, "")
-    if hit is not None:
-        key, path = hit
-        raise _DuplicateKeyError(f'duplicate key "{key}" at {path}')
+            stack.extend((v, f"{path}[{i}]") for i, v in reversed(list(enumerate(node))))
 
 
 def run_json(text: str) -> str:
