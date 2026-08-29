@@ -1,12 +1,12 @@
 """The analysis-kinds registry: what the installed version can run (ADR-004, design item 6).
 
 ``KINDS`` maps a kind name (``"pf.ac"``, ``"pf.dc"``, ``"opf.dc"``, ``"n1"``, ``"market.nodal"``,
-``"market.multiperiod"``, ``"market.zonal"``) to a :class:`KindSpec` — the options model the
-request's ``options`` dict is validated against, the result model the runner returns, and the
-runner itself. The registry is the capability list a service publishes, and the contract test
-(AC-6/AC-8, wave M4 AC-7, wave M5 AC-7, wave M6 AC-7) asserts every entry's models are importable
-and its runner callable. Later waves add kinds with :func:`register`; nothing else in the package
-changes.
+``"market.multiperiod"``, ``"market.zonal"``, ``"market.agents"``) to a :class:`KindSpec` — the
+options model the request's ``options`` dict is validated against, the result model the runner
+returns, and the runner itself. The registry is the capability list a service publishes, and the
+contract test (AC-6/AC-8, wave M4 AC-7, wave M5 AC-7, wave M6 AC-7, wave M7 AC-6) asserts every
+entry's models are importable and its runner callable. Later waves add kinds with :func:`register`;
+nothing else in the package changes.
 
 ``market.nodal`` was the first kind whose subject is not a bare ``Network``:
 :func:`mambo_power.market.nodal.solve_nodal` takes a ``Scenario``. Wave M4 kept ``SolveRequest``
@@ -29,6 +29,7 @@ from typing import NoReturn
 from pydantic import BaseModel
 
 from mambo_power.contingency import N1Options, n1
+from mambo_power.market.agents import MarketAgentsOptions, solve_agents
 from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multiperiod
 from mambo_power.market.nodal import MarketNodalOptions, solve_nodal
 from mambo_power.market.zonal import MarketZonalOptions, UnzonedBusError, solve_zonal
@@ -38,6 +39,7 @@ from mambo_power.pf import AcOptions, solve_ac, solve_dc
 from mambo_power.results import (
     AcPowerFlowResult,
     DcPowerFlowResult,
+    MarketAgentsResult,
     MarketMultiperiodResult,
     MarketNodalResult,
     MarketZonalResult,
@@ -50,39 +52,41 @@ Runner = Callable[[Scenario, BaseModel | None], BaseModel]
 
 
 class InfeasibleLpError(Exception):
-    """``opf.dc``'s, ``market.nodal``'s, ``market.multiperiod``'s or ``market.zonal``'s runner
-    found a non-Optimal, non-Unbounded status (e.g. ``OpfDcResult.status == "Infeasible"``) —
-    see :func:`_translate_non_optimal_status`.
+    """``opf.dc``'s, ``market.nodal``'s, ``market.multiperiod``'s, ``market.zonal``'s or
+    ``market.agents``'s runner found a non-Optimal, non-Unbounded status (e.g.
+    ``OpfDcResult.status == "Infeasible"``) — see :func:`_translate_non_optimal_status`.
 
     None of :func:`mambo_power.opf.solve_dc_opf`, :func:`mambo_power.market.nodal.solve_nodal`,
-    :func:`mambo_power.market.multiperiod.solve_multiperiod` or
-    :func:`mambo_power.market.zonal.solve_zonal` ever raises on a non-Optimal LP/QP status
+    :func:`mambo_power.market.multiperiod.solve_multiperiod`,
+    :func:`mambo_power.market.zonal.solve_zonal` or
+    :func:`mambo_power.market.agents.solve_agents` ever raises on a non-Optimal LP/QP status
     (their own docstrings, mirroring :func:`mambo_power.pf.solve_ac`'s
     never-raise-on-non-convergence convention) — each reports the status as data. But an
     infeasible LP has *no* dispatch at all, unlike a non-converged AC iterate which still
     carries a meaningful partial state; wave M3's design (item 7) draws that line deliberately,
     so every such job kind reports it as a structured job failure (``INFEASIBLE_LP``) rather
     than a "successful" result carrying a non-Optimal status. Raised only here, by the job
-    runners — not by ``solve_dc_opf``/``solve_nodal``/``solve_multiperiod``/``solve_zonal``
+    runners — not by
+    ``solve_dc_opf``/``solve_nodal``/``solve_multiperiod``/``solve_zonal``/``solve_agents``
     themselves.
     """
 
 
 class UnboundedLpError(Exception):
-    """``opf.dc``'s, ``market.nodal``'s, ``market.multiperiod``'s or ``market.zonal``'s runner
-    found status ``"Unbounded"``; see :class:`InfeasibleLpError` for why this is a job failure
-    rather than an ``"ok"`` result."""
+    """``opf.dc``'s, ``market.nodal``'s, ``market.multiperiod``'s, ``market.zonal``'s or
+    ``market.agents``'s runner found status ``"Unbounded"``; see :class:`InfeasibleLpError` for
+    why this is a job failure rather than an ``"ok"`` result."""
 
 
 def _translate_non_optimal_status(kind: str, status: str, message: str | None) -> NoReturn:
     """Translate a non-``"Optimal"`` LP/QP status into :class:`InfeasibleLpError`/
     :class:`UnboundedLpError`, for :mod:`mambo_power.jobs.run` to map to a structured failure —
     see :class:`InfeasibleLpError`. Shared by ``opf.dc``'s, ``market.nodal``'s,
-    ``market.multiperiod``'s and ``market.zonal``'s runners (wave M3 spec Design item 6, reused
-    rather than reimplemented by wave M5's S7 and wave M6's S7b): all four wrap a welfare/cost
-    LP with the identical two failure shapes (infeasible: no feasible dispatch; unbounded: every
-    bound is finite by construction, but a malformed input could still trigger it), so the
-    translation is one function, not four copies.
+    ``market.multiperiod``'s, ``market.zonal``'s and ``market.agents``'s runners (wave M3 spec
+    Design item 6, reused rather than reimplemented by wave M5's S7, wave M6's S7b and wave M7's
+    S7): all five wrap a welfare/cost LP with the identical two failure shapes (infeasible: no
+    feasible dispatch; unbounded: every bound is finite by construction, but a malformed input
+    could still trigger it), so the translation is one function, not five copies.
 
     ``"Unbounded"`` maps to :class:`UnboundedLpError`; every other non-``"Optimal"`` status
     (``"Infeasible"`` and, in principle, any other HiGHS status this wave's options cannot
@@ -204,6 +208,52 @@ def _run_market_zonal(scenario: Scenario, options: BaseModel | None) -> BaseMode
     return result
 
 
+def _run_market_agents(scenario: Scenario, options: BaseModel | None) -> BaseModel:
+    """Runner for ``market.agents``: :func:`mambo_power.market.agents.solve_agents` on
+    ``scenario`` directly, then translates a non-Optimal status via the same shared
+    :func:`_translate_non_optimal_status` the other market runners use — see
+    :class:`InfeasibleLpError`. ``options.strategies`` is which bidding rule each generator plays
+    (market design data, like ``market.zonal``'s ``options.corridors``), not solved for; only the
+    in-process ``strategies`` argument to :func:`~mambo_power.market.agents.solve_agents` is a
+    seam this runner never uses, since only the config union crosses ``jobs`` (spec W2, W6).
+
+    The one other thing this runner does is translate the plain ``ValueError``
+    :func:`~mambo_power.market.agents.solve_agents` raises for a caller mistake in the agent set
+    (its own docstring: a strategy naming a generator the network does not have, one naming a
+    generator present in the network but absent from its arrays -- out of service, or on a bus
+    that is -- one naming a generator with no ``Generator.cost`` to depart from, or an injected
+    :class:`~mambo_power.market.strategy.MarkupStrategy` whose step is too coarse for
+    ``offer_tol``) into a :class:`~mambo_power.model.NetworkValidationError`, which
+    :func:`mambo_power.jobs.run` already maps to ``VALIDATION`` -- the same translation
+    :func:`_run_market_zonal` applies to :class:`~mambo_power.market.zonal.UnzonedBusError`, for
+    the same reason: without it this is a caller mistake about how ``options.strategies`` relates
+    to the network, not an engine bug, and reporting it as ``INTERNAL`` is exactly the mapping
+    M6's own walk found four instances of on ``market.zonal`` (AC-6, spec provenance). An unknown
+    ``StrategyConfig.kind`` and a non-positive ``max_iterations``/``offer_tol`` never reach this
+    runner at all -- both fail ``MarketAgentsOptions`` validation itself (a discriminated union
+    with no matching member, and ``Field(gt=0)``, respectively) and are already ``BAD_OPTIONS``
+    before ``jobs.run`` ever calls a runner.
+
+    ``ValueError`` is caught this broadly, rather than a narrower dedicated exception type,
+    because :func:`~mambo_power.market.agents.solve_agents`'s own docstring commits to it:
+    "Does raise ``ValueError`` up front for a caller mistake in the agent set" is the whole of
+    what it raises before any solve starts, and the two exceptions it separately documents
+    raising past that point (``NonConvexCostError``/``NonConcaveBidError`` for a cost or bid the
+    clearing cannot accept, ``NotImplementedError`` for a strategy handed a cost shape it does
+    not support) are neither one a ``ValueError``, so this ``except`` cannot swallow them.
+    """
+    assert isinstance(options, MarketAgentsOptions)  # run(): options_model-validated
+    try:
+        result = solve_agents(scenario, options=options)
+    except ValueError as exc:
+        raise NetworkValidationError(
+            [ValidationIssue(code="DANGLING_REF", path="options.strategies", message=str(exc))]
+        ) from exc
+    if result.status != "Optimal":
+        _translate_non_optimal_status("market.agents", result.status, result.message)
+    return result
+
+
 KINDS: dict[str, KindSpec] = {}
 """Every analysis kind the installed version can run, keyed by name (insertion order)."""
 
@@ -252,5 +302,13 @@ register(
         options_model=MarketZonalOptions,
         result_model=MarketZonalResult,
         runner=_run_market_zonal,
+    )
+)
+register(
+    KindSpec(
+        kind="market.agents",
+        options_model=MarketAgentsOptions,
+        result_model=MarketAgentsResult,
+        runner=_run_market_agents,
     )
 )
