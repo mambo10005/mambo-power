@@ -388,9 +388,10 @@ def _extract_and_validate(
 ) -> _ExtractedProblem:
     """Extract and validate a builder's cost/bid arguments — one implementation, every caller.
 
-    Raises :class:`ValueError` for a mis-shaped ``cost_coeffs``, a generator index appearing in
-    ``pwl_costs`` whose ``cost_coeffs`` row is nonzero, a load index appearing in both bid maps,
-    or a bid load index outside ``[0, n_load)``; :class:`NonConvexCostError` for a
+    Raises :class:`ValueError` for a mis-shaped ``cost_coeffs``, a ``pwl_costs`` generator index
+    outside ``[0, n_gen)``, a generator index appearing in ``pwl_costs`` whose ``cost_coeffs`` row
+    is nonzero, a load index appearing in both bid maps, or a bid load index outside
+    ``[0, n_load)``; :class:`NonConvexCostError` for a
     non-convex generator cost (``c2 < 0``, or a PWL curve with decreasing marginal cost) and
     :class:`NonConcaveBidError` for a non-concave demand bid (``v2 > 0``, or a PWL curve with
     increasing marginal value). All of them fire before the caller has created a
@@ -409,6 +410,15 @@ def _extract_and_validate(
     # fast, per NonConvexCostError's/NonConcaveBidError's own docstrings.
     pwl_costs_ = pwl_costs or {}
     pwl_gen_idxs = sorted(pwl_costs_)
+    # the generator-side range check, the mirror of the load side's below: an index outside
+    # [0, n_gen) used to reach numpy as a bare IndexError from the epigraph rows (critic finding
+    # 6, M7 S11) -- a structured ValueError naming the index and n_gen, before anything is built.
+    for idx in pwl_gen_idxs:
+        if not (0 <= idx < n_gen):
+            raise ValueError(
+                f"pwl_costs generator index {idx} out of range for {n_gen} generators "
+                "(NetworkArrays.gen_ids)"
+            )
     segments_by_gen = {i: _convex_pwl_segments(pwl_costs_[i]) for i in pwl_gen_idxs}
 
     # generator-side exclusivity, the mirror of the load-side check below. A PWL generator's
@@ -419,7 +429,7 @@ def _extract_and_validate(
     # (2026-08-28), the doubly-charged generator is driven from 223.19 MW to 0.00 MW and the
     # objective lands 2409.70 high, with status still Optimal. Silent and plausible, which is
     # exactly why it is a raise and not a warning.
-    double_charged = [i for i in pwl_gen_idxs if 0 <= i < n_gen and bool(np.any(coeffs[i] != 0.0))]
+    double_charged = [i for i in pwl_gen_idxs if bool(np.any(coeffs[i] != 0.0))]
     if double_charged:
         raise ValueError(
             f"generator index(es) {double_charged} appear in both cost_coeffs (nonzero row) and "

@@ -182,3 +182,27 @@ def test_the_load_side_mirror_still_fires(
             demand_bid_coeffs={0: (0.0, 50.0, 0.0)},
             demand_pwl_bids={0: [(0.0, 0.0), (10.0, 500.0)]},
         )
+
+
+def test_an_out_of_range_pwl_index_is_a_structured_value_error_not_an_index_error(
+    case14_arrays: NetworkArrays, true_coeffs: np.ndarray, pwl_offer: list[tuple[float, float]]
+) -> None:
+    """The load side has always range-checked its bid index and raised ``ValueError``; the
+    generator side stepped *around* an out-of-range ``pwl_costs`` index in its own guard
+    (``0 <= i < n_gen``) and let numpy raise a bare ``IndexError`` from the epigraph rows
+    (critic finding 6, M7 S11). Now it is the same structured error the load side gives,
+    naming the index and ``n_gen``, before any HiGHS object exists.
+
+    Through ``jobs`` this cannot be reached at all: every ``pwl_costs`` map a kind's runner
+    builds comes from ``gen_cost_coeffs`` over the network's own arrays, whose indices are
+    valid by construction. Were it reachable, ``jobs.run`` maps any non-listed exception from a
+    runner to ``INTERNAL`` -- which is the right verdict for a builder-level contract breach
+    that no request field can cause.
+    """
+    n_gen = len(case14_arrays.gen_ids)
+    bad = n_gen + 94  # 99 on case14, the critic's reproduction
+    with pytest.raises(ValueError, match=rf"pwl_costs generator index {bad} out of range") as e:
+        dc_opf(case14_arrays, true_coeffs, OpfDcOptions(), pwl_costs={bad: pwl_offer})
+    assert f"{n_gen} generators" in str(e.value), str(e.value)
+    with pytest.raises(ValueError, match=r"pwl_costs generator index -1 out of range"):
+        _extract_and_validate(true_coeffs, {-1: pwl_offer}, None, None, n_gen, 1)
