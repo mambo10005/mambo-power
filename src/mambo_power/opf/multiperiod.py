@@ -118,6 +118,7 @@ from mambo_power.opf.dc_opf import (
     _extract_and_validate,
     _flow_limit_rows,
     _hypograph_rows,
+    _pass_diagonal_hessian,
     _RowBlock,
 )
 
@@ -426,24 +427,17 @@ def multiperiod_dc_opf(
             h.addVars(n_storage, np.zeros(n_storage), storage_energy)
 
     # --- Hessian over tier 1 only, passed before any tier-2 column exists (module docstring).
-    if n_dispatch_total:
-        hess_diag = np.zeros(n_dispatch_total)
-        for t in range(n_periods):
-            base = t * per_period_dispatch
-            hess_diag[base : base + n_gen] = 2.0 * c2
-            hess_diag[base + n_gen : base + n_gen + n_demand] = -2.0 * v2
-        nz = np.flatnonzero(hess_diag)
-        if nz.size:
-            hess = highspy.HighsHessian()
-            hess.dim_ = n_dispatch_total
-            hess.format_ = highspy.HessianFormat.kTriangular
-            starts = np.zeros(n_dispatch_total + 1, dtype=np.int32)
-            starts[nz + 1] = 1
-            starts = np.cumsum(starts).astype(np.int32)
-            hess.start_ = starts.tolist()
-            hess.index_ = nz.tolist()
-            hess.value_ = hess_diag[nz].tolist()
-            h.passHessian(hess)
+    # dc_opf's own helper, not a copy of it (ADR-008 one level down): one block per period,
+    # per_period_dispatch wide, whose 3*n_storage storage columns carry no quadratic term.
+    _pass_diagonal_hessian(
+        h,
+        c2,
+        v2,
+        n_gen,
+        n_demand,
+        n_blocks=n_periods,
+        block_stride=per_period_dispatch,
+    )
 
     # --- tier 2 columns: the free PWL cost_g / val_d variables, period by period.
     for t in range(n_periods):

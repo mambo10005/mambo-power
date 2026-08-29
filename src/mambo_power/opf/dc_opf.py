@@ -388,8 +388,9 @@ def _extract_and_validate(
 ) -> _ExtractedProblem:
     """Extract and validate a builder's cost/bid arguments — one implementation, every caller.
 
-    Raises :class:`ValueError` for a mis-shaped ``cost_coeffs``, a load index appearing in both
-    bid maps, or a bid load index outside ``[0, n_load)``; :class:`NonConvexCostError` for a
+    Raises :class:`ValueError` for a mis-shaped ``cost_coeffs``, a generator index appearing in
+    ``pwl_costs`` whose ``cost_coeffs`` row is nonzero, a load index appearing in both bid maps,
+    or a bid load index outside ``[0, n_load)``; :class:`NonConvexCostError` for a
     non-convex generator cost (``c2 < 0``, or a PWL curve with decreasing marginal cost) and
     :class:`NonConcaveBidError` for a non-concave demand bid (``v2 > 0``, or a PWL curve with
     increasing marginal value). All of them fire before the caller has created a
@@ -409,6 +410,22 @@ def _extract_and_validate(
     pwl_costs_ = pwl_costs or {}
     pwl_gen_idxs = sorted(pwl_costs_)
     segments_by_gen = {i: _convex_pwl_segments(pwl_costs_[i]) for i in pwl_gen_idxs}
+
+    # generator-side exclusivity, the mirror of the load-side check below. A PWL generator's
+    # cost_coeffs row is all-zero by convention (module docstring; the convention
+    # :func:`~mambo_power.opf.gen_cost_coeffs` maintains by construction), because its whole cost
+    # is carried by the epigraph rows. A nonzero row *and* a pwl_costs entry means the objective
+    # charges for the same generator twice, and the LP is happy to solve it: measured on case14
+    # (2026-08-28), the doubly-charged generator is driven from 223.19 MW to 0.00 MW and the
+    # objective lands 2409.70 high, with status still Optimal. Silent and plausible, which is
+    # exactly why it is a raise and not a warning.
+    double_charged = [i for i in pwl_gen_idxs if 0 <= i < n_gen and bool(np.any(coeffs[i] != 0.0))]
+    if double_charged:
+        raise ValueError(
+            f"generator index(es) {double_charged} appear in both cost_coeffs (nonzero row) and "
+            "pwl_costs — a generator's cost must be either polynomial or piecewise-linear, not "
+            "both; a PWL generator's cost_coeffs row must be all-zero"
+        )
 
     demand_bid_coeffs_ = demand_bid_coeffs or {}
     demand_pwl_bids_ = demand_pwl_bids or {}
@@ -475,6 +492,73 @@ def _extract_and_validate(
         demand_pwl_idxs=demand_pwl_idxs,
         demand_segments_by_load=demand_segments_by_load,
     )
+
+
+def _pass_diagonal_hessian(
+    h: highspy.Highs,
+    c2: FloatArray,
+    v2: FloatArray,
+    n_gen: int,
+    n_demand: int,
+    n_blocks: int = 1,
+    block_stride: int | None = None,
+) -> None:
+    """Build and pass the dispatch block’s diagonal Hessian — one implementation, every builder.
+
+    ADR-008’s reasoning one level down. :func:`_extract_and_validate` unified *what* the
+    coefficients are; this unifies *what the solver is told about their quadratic part*. Three
+    builders assembled it verbatim — :func:`dc_opf`,
+    :func:`~mambo_power.opf.multiperiod.multiperiod_dc_opf` and
+    :func:`~mambo_power.opf.zonal.zonal_dc_opf` — and every one of them re-encoded the same four
+    facts: HiGHS’s ``0.5·xᵀQx`` convention (so a generator’s entry is ``2·c2[g]`` and an elastic
+    load’s the sign-mirrored ``−2·v2[d]``), the ``[gen | demand]`` order of the dispatch prefix,
+    the triangular CSR form a purely diagonal Hessian takes, and the rule that a Hessian with no
+    nonzero entry is not passed at all — which is what keeps a pure LP a pure LP (module
+    docstring).
+
+    What stays with the caller is *layout*, the same division of labour
+    :class:`_ExtractedProblem` already draws. :func:`dc_opf` and ``zonal_dc_opf`` have one
+    dispatch block and take the defaults; ``multiperiod_dc_opf`` has ``n_periods`` of them, each
+    ``block_stride = n_gen + n_demand + 3·n_storage`` wide, whose storage columns carry no
+    quadratic term and so stay zero. ``dim`` is ``n_blocks · block_stride`` — the caller’s own
+    tier-1 column count, unchanged.
+
+    :func:`~mambo_power.opf.redispatch.redispatch_dc_opf` is deliberately **not** a caller: its
+    ``Δ⁺``/``Δ⁻`` pair carries ``2·c2·[[1, −1], [−1, 1]]``, a 2×2 block with off-diagonal
+    entries (:func:`~mambo_power.opf.redispatch._hessian_pairs`). That is a different Hessian,
+    not a copy of this one.
+
+    Args:
+        h: the HiGHS object, with its dispatch columns added and no later column appended yet.
+        c2: per-generator quadratic cost coefficient, length ``n_gen``.
+        v2: per-elastic-load quadratic bid coefficient, length ``n_demand``.
+        n_gen: generator columns at the head of each block.
+        n_demand: elastic-demand columns immediately after them.
+        n_blocks: how many such blocks the Hessian spans (periods, for multiperiod).
+        block_stride: columns per block; defaults to ``n_gen + n_demand``, i.e. no other tier-1
+            column family — exactly the single-block builders’ case.
+    """
+    stride = n_gen + n_demand if block_stride is None else block_stride
+    dim = n_blocks * stride
+    if not dim:
+        return
+    hess_diag = np.zeros(dim)
+    for block in range(n_blocks):
+        base = block * stride
+        hess_diag[base : base + n_gen] = 2.0 * c2
+        hess_diag[base + n_gen : base + n_gen + n_demand] = -2.0 * v2
+    nz = np.flatnonzero(hess_diag)
+    if not nz.size:
+        return
+    hess = highspy.HighsHessian()
+    hess.dim_ = dim
+    hess.format_ = highspy.HessianFormat.kTriangular
+    starts = np.zeros(dim + 1, dtype=np.int32)
+    starts[nz + 1] = 1
+    hess.start_ = np.cumsum(starts).astype(np.int32).tolist()
+    hess.index_ = nz.tolist()
+    hess.value_ = hess_diag[nz].tolist()
+    h.passHessian(hess)
 
 
 @dataclass(frozen=True)
@@ -741,22 +825,7 @@ def dc_opf(
     # appended — the same ordering already proven safe against later addVars calls by the
     # existing case14_pwl fixture test (quadratic + PWL generators mixed in one solve).
     n_dispatch = n_gen + n_demand
-    if n_dispatch:
-        hess_diag = np.zeros(n_dispatch)
-        hess_diag[:n_gen] = 2.0 * c2
-        hess_diag[n_gen:] = -2.0 * v2
-        nz = np.flatnonzero(hess_diag)
-        if nz.size:
-            hess = highspy.HighsHessian()
-            hess.dim_ = n_dispatch
-            hess.format_ = highspy.HessianFormat.kTriangular
-            starts = np.zeros(n_dispatch + 1, dtype=np.int32)
-            starts[nz + 1] = 1
-            starts = np.cumsum(starts).astype(np.int32)
-            hess.start_ = starts.tolist()
-            hess.index_ = nz.tolist()
-            hess.value_ = hess_diag[nz].tolist()
-            h.passHessian(hess)
+    _pass_diagonal_hessian(h, c2, v2, n_gen, n_demand)
 
     # PWL cost columns: one free "cost_g" variable per PWL generator, appended after the
     # n_dispatch generator+demand columns (module docstring, "PWL costs"). Objective coefficient
