@@ -54,6 +54,7 @@ import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import mambo_power
+from mambo_power.market._clearing import clearing_rows
 from mambo_power.market.nodal import load_bid_coeffs
 from mambo_power.market.strategy import (
     MarkupStrategy,
@@ -65,7 +66,6 @@ from mambo_power.market.strategy import (
 )
 from mambo_power.model import GeneratorCost, Network, PiecewiseCost, PolynomialCost, Scenario
 from mambo_power.numerics.arrays import NetworkArrays
-from mambo_power.numerics.bbus import pf_shift
 from mambo_power.numerics.ptdf import ptdf as compute_ptdf
 from mambo_power.opf import gen_cost_coeffs
 from mambo_power.opf.dc_opf import (
@@ -75,13 +75,7 @@ from mambo_power.opf.dc_opf import (
     dc_opf,
     lmp_decomposition,
 )
-from mambo_power.results import (
-    BusLmpResult,
-    GenDispatchResult,
-    LoadDispatchResult,
-    OpfBranchFlowResult,
-    ResultProvenance,
-)
+from mambo_power.results import BusLmpResult, ResultProvenance
 from mambo_power.results.agents import AgentOfferResult, MarketAgentsResult, TerminationReason
 
 __all__ = [
@@ -488,84 +482,6 @@ def _settled(amplitude: float, offer_tol: float) -> bool:
     )
 
 
-def _clearing_rows(
-    net: Network,
-    arr: NetworkArrays,
-    solution: OpfSolution,
-    lmp: FloatArray,
-    elastic_idxs: list[int],
-) -> tuple[
-    list[GenDispatchResult], list[LoadDispatchResult], list[OpfBranchFlowResult], float, float
-]:
-    """The final round's per-generator, per-load and per-branch rows, plus the two settlement
-    totals -- the same constructions :func:`mambo_power.market.nodal.solve_nodal` applies to its
-    own single clearing, on this loop's last one.
-
-    The branch flow is ``PTDF[k] . (net injection) + phase-shift injection``, with each elastic
-    load's own historical MW removed from the fixed load vector so it is not counted twice
-    alongside the dispatched elastic quantity (``dc_opf``'s double-counting contract). Settlement
-    is the final round's alone: total load payment and total generator receipts are each computed
-    directly from that dispatch and those LMPs, never accumulated over the search that led to it.
-    """
-    assert solution.duals is not None  # callers branch on status first
-    generators = [
-        GenDispatchResult(
-            id=gen_id,
-            bus=arr.bus_ids[int(arr.gen_bus[i])],
-            p_mw=float(solution.dispatch_mw[i]),
-            bound_dual=float(solution.duals.gen_bound[i]),
-        )
-        for i, gen_id in enumerate(arr.gen_ids)
-    ]
-    elastic_pos = {idx: j for j, idx in enumerate(elastic_idxs)}
-    loads_by_id = {load.id: load for load in net.loads}
-    loads = []
-    for i, load_id in enumerate(arr.load_ids):
-        j = elastic_pos.get(i)
-        if j is not None:
-            p_mw = float(solution.demand_dispatch_mw[j])
-            bound_dual = float(solution.demand_bound[j])
-        else:
-            p_mw = float(loads_by_id[load_id].p_mw)
-            bound_dual = 0.0
-        loads.append(
-            LoadDispatchResult(
-                id=load_id,
-                bus=arr.bus_ids[int(arr.load_bus[i])],
-                p_mw=p_mw,
-                bound_dual=bound_dual,
-            )
-        )
-
-    elastic_idx_arr = np.asarray(elastic_idxs, dtype=np.int64)
-    elastic_bus = arr.load_bus[elastic_idx_arr]
-    elastic_own_mw = arr.load_p_max_pu[elastic_idx_arr] * arr.base_mva
-    p_load_mw = arr.p_load_pu * arr.base_mva - np.bincount(
-        elastic_bus, weights=elastic_own_mw, minlength=arr.n_bus
-    )
-    gen_by_bus = np.bincount(arr.gen_bus, weights=solution.dispatch_mw, minlength=arr.n_bus)
-    demand_by_bus = np.bincount(
-        elastic_bus, weights=solution.demand_dispatch_mw, minlength=arr.n_bus
-    )
-    injection_mw = gen_by_bus - demand_by_bus - p_load_mw - arr.g_shunt_pu * arr.base_mva
-    flows_mw = solution.ptdf @ injection_mw + pf_shift(arr) * arr.base_mva
-    branches = [
-        OpfBranchFlowResult(
-            id=branch_id,
-            from_bus=arr.bus_ids[int(arr.f[k])],
-            to_bus=arr.bus_ids[int(arr.t[k])],
-            p_from_mw=float(flows_mw[k]),
-            flow_limit_dual=float(solution.duals.flow_limit[k]),
-        )
-        for k, branch_id in enumerate(arr.branch_ids)
-    ]
-
-    lmp_by_bus_id = {bus_id: float(lmp[i]) for i, bus_id in enumerate(arr.bus_ids)}
-    total_load_payment = sum(lmp_by_bus_id[row.bus] * row.p_mw for row in loads)
-    total_generator_receipts = sum(lmp_by_bus_id[row.bus] * row.p_mw for row in generators)
-    return generators, loads, branches, total_load_payment, total_generator_receipts
-
-
 def solve_agents(
     scenario: Scenario,
     options: MarketAgentsOptions | None = None,
@@ -692,9 +608,11 @@ def solve_agents(
         }
 
     assert breakdown is not None  # set on every Optimal round, and the loop broke on one
-    generators, loads, branches, total_load_payment, total_generator_receipts = _clearing_rows(
-        net, arr, solution, breakdown.lmp, elastic_idxs
-    )
+    # The final round's rows and settlement -- the one construction market.nodal applies to its
+    # single clearing (market/_clearing.py), applied to this loop's last one. Settlement is the
+    # final round's alone: computed directly from that dispatch and those LMPs, never accumulated
+    # over the search that led to it.
+    rows = clearing_rows(net, arr, solution, breakdown.lmp, elastic_idxs)
     final = history[-1]
     offer_rows = [
         AgentOfferResult(
@@ -712,8 +630,8 @@ def solve_agents(
         provenance=_provenance(opts, started_at, time.perf_counter() - clock),
         status=solution.status,
         message=None,
-        generators=generators,
-        loads=loads,
+        generators=rows.generators,
+        loads=rows.loads,
         buses=[
             BusLmpResult(
                 id=bus_id,
@@ -723,14 +641,14 @@ def solve_agents(
             )
             for i, bus_id in enumerate(arr.bus_ids)
         ],
-        branches=branches,
+        branches=rows.branches,
         offers=offer_rows,
         iterations=round_index,
         converged=reason == "converged",
         termination_reason=reason,
-        total_load_payment=total_load_payment,
-        total_generator_receipts=total_generator_receipts,
-        congestion_rent=total_load_payment - total_generator_receipts,
+        total_load_payment=rows.total_load_payment,
+        total_generator_receipts=rows.total_generator_receipts,
+        congestion_rent=rows.total_load_payment - rows.total_generator_receipts,
     )
 
 

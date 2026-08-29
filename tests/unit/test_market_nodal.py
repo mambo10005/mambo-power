@@ -279,3 +279,36 @@ def test_ac8_branch_rows_are_id_keyed_and_carry_the_flow_limit_dual() -> None:
     # -sum_k(mu_k * flow_k) reproduces congestion_rent (already proved as an identity above);
     # here it is just the sign/magnitude of this one row's own dual, read directly.
     assert br12.flow_limit_dual == pytest.approx(-35.0, abs=1e-6)
+
+
+# --- The rows and settlement are one construction, shared with market.agents (M7 S11) ------------
+
+
+@pytest.mark.parametrize(
+    "net",
+    [
+        matpower.load(FIXTURES_DIR / "case14.m"),
+        _two_bus_network(bid=PiecewiseBid(points=D1_BID_POINTS)),
+        with_bids(rated_network(matpower.load(FIXTURES_DIR / "case14.m"))),
+    ],
+    ids=["case14", "two-bus-pwl-bid", "rated-case14-with-bids"],
+)
+def test_nodal_and_agent_less_agents_rows_and_settlement_are_identical(net: Network) -> None:
+    """``solve_nodal`` and ``solve_agents`` with nobody bidding strategically build their
+    generator, load and branch rows and their two settlement totals through one shared
+    helper (``market/_clearing.py``, critic finding 4). Equal by ``==`` on the row models and
+    the floats -- not ``approx`` -- because the two solvers clear the same LP with the same
+    coefficients and then apply the same construction; anything short of identity would mean
+    a second copy had crept back in."""
+    from mambo_power.market.agents import MarketAgentsOptions, solve_agents
+
+    nodal = solve_nodal(Scenario(network=net), MarketNodalOptions())
+    agents = solve_agents(Scenario(network=net), MarketAgentsOptions(max_iterations=5))
+    assert nodal.status == agents.status == "Optimal"
+    assert nodal.generators == agents.generators
+    assert nodal.loads == agents.loads
+    assert nodal.branches == agents.branches
+    assert nodal.buses == agents.buses
+    assert nodal.total_load_payment == agents.total_load_payment
+    assert nodal.total_generator_receipts == agents.total_generator_receipts
+    assert nodal.congestion_rent == agents.congestion_rent
