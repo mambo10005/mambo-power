@@ -242,8 +242,8 @@ result = solve_agents(
     Scenario(network=net),
     MarketAgentsOptions(
         strategies={"g1": {"kind": "markup", "step": 0.5}, "g2": {"kind": "price_taker"}},
-        offer_tol=1.0,        # >= 2 * step, and validated as such
-        max_iterations=200,   # a bound, not a target
+        offer_tol=1.0,  # >= 2 * step, and validated as such
+        max_iterations=200,  # a bound, not a target
     ),
 )
 ```
