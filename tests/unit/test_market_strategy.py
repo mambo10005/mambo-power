@@ -15,15 +15,16 @@ one ad hoc per test.
   polynomial one: AC-3(a) does not know it is the only path a piecewise offer reaches the array
   builder through this wave, but that is exactly what makes it load-bearing.
 * :class:`~mambo_power.market.strategy.MarkupStrategy`'s two-point climb is checked against the
-  rule as measured (A4, ``.bionic/docs/record/m7-tmp/m7-a4-two-point-climb.py``): direction continues on improved
-  profit, reverses on a *real* worsened profit, defaults to ``+1`` with no prior movement, and the
-  result never drops below true cost. A tie within relative tolerance -- an agent at capacity
-  seeing two rounds of solver-noise-only LMP difference -- must **not** reverse (found downstream
-  on the AC-5 duopoly, where a strict ``<`` turned a settled climb into the true-cost outcome
-  reported as convergence); a paired test at the same zero-movement baseline confirms a real
-  decrease still reverses. It is deliberately scoped to a linear
-  :class:`~mambo_power.model.PolynomialCost` and raises loudly, rather than approximating
-  something, on anything else.
+  rule as measured (A4, ``.bionic/docs/record/m7-tmp/m7-a4-two-point-climb.py``): direction
+  continues on improved profit, reverses on a *real* worsened profit, defaults to ``+1`` with no
+  prior movement, and the result never drops below true cost. A tie within relative tolerance -- an
+  agent at capacity seeing two rounds of solver-noise-only LMP difference -- must **not** reverse
+  (found downstream on the AC-5 duopoly, where a strict ``<`` turned a settled climb into the
+  true-cost outcome reported as convergence); a paired test at the same zero-movement baseline
+  confirms a real decrease still reverses. It is deliberately scoped to a linear
+  :class:`~mambo_power.model.PolynomialCost` and raises loudly, rather than approximating something,
+  on anything else.
+
 * :class:`~mambo_power.market.strategy.Observation`'s round-0/round-1 shapes are constructed
   directly and asserted to carry ``None`` — never a fabricated zero-valued
   :class:`~mambo_power.market.strategy.RoundRecord`. Two distinct bad histories are asserted

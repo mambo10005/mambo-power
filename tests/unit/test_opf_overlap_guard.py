@@ -6,7 +6,8 @@ The load side has always raised when a load index appears in both ``demand_bid_c
 term and once by the epigraph rows — and the LP is perfectly happy to solve it.
 
 **Why that was worth a raise rather than a note.** Measured on ``case14`` against the pre-guard
-build (``.bionic/docs/record/m7-tmp/m7-a2-overlap-guard-probe.py``, reproduced 2026-08-28 by this slice):
+build (``.bionic/docs/record/m7-tmp/m7-a2-overlap-guard-probe.py``, reproduced 2026-08-28 by this
+slice):
 
 ===========================  ===============  ===================
 form                         status           objective ($)

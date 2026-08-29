@@ -244,13 +244,14 @@ class MarkupStrategy:
     * *direction* reverses if the last move made things *really* worse: ``profit[t-1] <
       profit[t-2]`` **and** the two are not a tie within ``math.isclose(..., rel_tol=1e-9,
       abs_tol=1e-9)``. The tolerance is relative, not the reference probe's absolute ``1e-9``
-      (``.bionic/docs/record/m7-tmp/m7-a4-two-point-climb.py:79``): an agent sitting at capacity while price is
-      set elsewhere sees consecutive rounds whose LMP differs only by the solver's own ULP noise
-      -- on the AC-5 duopoly (300 MW, price $40.00) that is a profit difference of order
-      ``1e-12``, comfortably inside a relative 1e-9 band and comfortably outside what an absolute
-      ``1e-9`` band catches once profit is in the thousands of dollars, as it is on every fixture
-      this wave uses. A strict ``<`` (no tolerance at all) flips direction on that noise and turns
-      a settled strategic climb into the true-cost outcome presented as convergence;
+      (``.bionic/docs/record/m7-tmp/m7-a4-two-point-climb.py:79``): an agent sitting at capacity
+      while price is set elsewhere sees consecutive rounds whose LMP differs only by the solver's
+      own ULP noise -- on the AC-5 duopoly (300 MW, price $40.00) that is a profit difference of
+      order ``1e-12``, comfortably inside a relative 1e-9 band and comfortably outside what an
+      absolute ``1e-9`` band catches once profit is in the thousands of dollars, as it is on every
+      fixture this wave uses. A strict ``<`` (no tolerance at all) flips direction on that noise and
+      turns a settled strategic climb into the true-cost outcome presented as convergence;
+
     * *direction* is ``-1`` outright when the agent cleared **nothing in both of the last two
       rounds** (``cleared_mw <= _IDLE_MW_ABS_TOL``, 1e-9 MW, at ``t-1`` and ``t-2`` -- not an
       exact zero, because HiGHS can return 1e-14 MW for a unit it did not dispatch, and 1e-9 MW
