@@ -1,5 +1,5 @@
-"""AC-4, AC-5: ``market.nodal`` clearing -- settlement identity and price-taker reduction (spec
-W4, design item 5).
+"""AC-4, AC-5, AC-8: ``market.nodal`` clearing -- settlement identity, price-taker reduction, and
+per-branch flow rows (spec W4, design item 5).
 
 Reuses the exact two-bus network ``m4-research.md`` §4.1 / S3's own AC-1 test in
 ``test_opf_dc_demand.py`` hand-derive (slack ``b1``/``g1`` linear cost 10, ``b2``/``g2`` linear
@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from mambo_power.io import matpower
 from mambo_power.market.nodal import MarketNodalOptions, solve_nodal
 from mambo_power.model import (
     Branch,
@@ -28,7 +29,11 @@ from mambo_power.model import (
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.opf import solve_dc_opf
 from mambo_power.opf.dc_opf import OpfDcOptions, dc_opf
-from mambo_power.results import MarketNodalResult
+from mambo_power.pf import dc as pfdc
+from mambo_power.results import MarketNodalResult, MarketZonalResult, OpfBranchFlowResult
+from tests._bids import with_bids
+from tests._fixtures import FIXTURES_DIR
+from tests._rated import rated_network
 
 
 def _two_bus_network(*, bid: LoadBid | None) -> Network:
@@ -176,3 +181,101 @@ def test_ac5_price_taker_reduction_matches_plain_opf_dc_opf() -> None:
     congestion_market = {b.id: b.congestion for b in market_result.buses}
     congestion_opf = {b.id: b.congestion for b in opf_result.buses}
     assert congestion_market == pytest.approx(congestion_opf, abs=1e-6)
+
+
+# --- AC-8: MarketNodalResult carries OpfBranchFlowResult rows, symmetrically with MarketZonalResult
+
+
+PF_DC_FLOW_TOL_MW = 1e-9
+"""Absolute tolerance, MW, for ``MarketNodalResult.branches[*].p_from_mw`` against an independent
+``pf.dc`` readback of the same dispatch. Reuses ``tests/unit/test_opf_redispatch.py``'s own pin
+for the identical claim (``RedispatchSolution.branch_flow_mw`` vs. ``pf.dc``) rather than
+inventing a second number for one comparison -- both constructions are the same PTDF-times-
+injection formula (module docstring, ``opf/dc_opf.py``'s flow-limit-row derivation) evaluated
+through two independent code paths (the LP's own PTDF multiply here, ``scipy.sparse.linalg.splu``
+over ``B'`` in ``pf.dc``), so both residuals are pure floating-point noise, not modelling slack.
+Measured here: 0.0 MW on the two-bus fixture, 7.99e-14 MW (sup-norm) on rated case14 with bids --
+four orders below this pin."""
+
+
+def test_ac8_branch_flows_match_an_independent_pf_dc_readback_on_the_two_bus_fixture() -> None:
+    """``MarketNodalResult.branches[*].p_from_mw`` is the flow ``pf.dc`` computes at the same
+    dispatch (generators *and* the elastic load's solved quantity) -- proved through a code path
+    that shares nothing with ``solve_nodal``'s own PTDF-injection construction except the network
+    and the dispatch it produced."""
+    net = _two_bus_network(bid=PiecewiseBid(points=D1_BID_POINTS))
+    result = solve_nodal(Scenario(network=net), MarketNodalOptions())
+    assert result.status == "Optimal"
+
+    out = net.model_copy(deep=True)
+    dispatch_by_id = {g.id: g.p_mw for g in result.generators}
+    demand_by_id = {ld.id: ld.p_mw for ld in result.loads}
+    for gen in out.generators:
+        gen.p_mw = dispatch_by_id[gen.id]
+    for load in out.loads:
+        load.p_mw = demand_by_id[load.id]
+    arr = NetworkArrays.from_network(out)
+    expected = pfdc.solve(arr).p_from_pu * arr.base_mva
+
+    branch_flow = {b.id: b.p_from_mw for b in result.branches}
+    assert branch_flow.keys() == {"br12"}
+    assert [branch_flow["br12"]] == pytest.approx(expected, abs=PF_DC_FLOW_TOL_MW)
+
+
+def test_ac8_branch_flows_match_an_independent_pf_dc_readback_on_a_rated_multi_branch_network() -> (
+    None
+):
+    """The same claim as above, on rated case14 with a mix of price-taking and interior bid loads
+    (``tests/_rated.py`` / ``tests/_bids.py``, this repo's own fixture-derivation tradition) --
+    multiple branches, several of them rating-bound, rather than the one-branch hand fixture."""
+    base = rated_network(matpower.load(FIXTURES_DIR / "case14.m"))
+    load_ids = [ld.id for ld in base.loads if ld.p_mw > 0][:3]
+    net = with_bids(base, load_ids, interior_load_ids=load_ids[:1])
+    result = solve_nodal(Scenario(network=net), MarketNodalOptions())
+    assert result.status == "Optimal"
+    assert result.branches, "case14 has branches; an empty list would make this test vacuous"
+
+    out = net.model_copy(deep=True)
+    dispatch_by_id = {g.id: g.p_mw for g in result.generators}
+    demand_by_id = {ld.id: ld.p_mw for ld in result.loads}
+    for gen in out.generators:
+        gen.p_mw = dispatch_by_id[gen.id]
+    for load in out.loads:
+        load.p_mw = demand_by_id[load.id]
+    arr = NetworkArrays.from_network(out)
+    expected_by_id = {
+        branch_id: float(pfdc.solve(arr).p_from_pu[k] * arr.base_mva)
+        for k, branch_id in enumerate(arr.branch_ids)
+    }
+
+    branch_flow = {b.id: b.p_from_mw for b in result.branches}
+    assert branch_flow.keys() == expected_by_id.keys()
+    for branch_id, expected_mw in expected_by_id.items():
+        assert branch_flow[branch_id] == pytest.approx(expected_mw, abs=PF_DC_FLOW_TOL_MW)
+
+
+def test_ac8_nodal_and_zonal_expose_branches_under_the_same_field_name_and_row_type() -> None:
+    """W4/AC-8: ``MarketNodalResult`` gains ``OpfBranchFlowResult`` rows under the **same** field
+    name ``MarketZonalResult`` already carries them under -- asserted structurally against both
+    models' own field metadata, not just observed by reading two docstrings side by side."""
+    assert "branches" in MarketNodalResult.model_fields
+    assert "branches" in MarketZonalResult.model_fields
+    nodal_branches_type = MarketNodalResult.model_fields["branches"].annotation
+    zonal_branches_type = MarketZonalResult.model_fields["branches"].annotation
+    assert nodal_branches_type == zonal_branches_type == list[OpfBranchFlowResult]
+
+
+def test_ac8_branch_rows_are_id_keyed_and_carry_the_flow_limit_dual() -> None:
+    """Every branch gets a row, keyed by its own id, carrying both the flow and the flow-limit
+    row's shadow price -- the two figures the settlement identity's flow-dual side needs
+    (``-sum_k mu_k * f_k``), both readable from this object alone."""
+    net = _two_bus_network(bid=PiecewiseBid(points=D1_BID_POINTS))
+    result = solve_nodal(Scenario(network=net))
+    assert {b.id for b in result.branches} == {"br12"}
+    br12 = next(b for b in result.branches if b.id == "br12")
+    assert br12.from_bus == "b1"
+    assert br12.to_bus == "b2"
+    assert br12.p_from_mw == pytest.approx(20.0, abs=1e-6)  # the branch is rating-bound (AC-4)
+    # -sum_k(mu_k * flow_k) reproduces congestion_rent (already proved as an identity above);
+    # here it is just the sign/magnitude of this one row's own dual, read directly.
+    assert br12.flow_limit_dual == pytest.approx(-35.0, abs=1e-6)

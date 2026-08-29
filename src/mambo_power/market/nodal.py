@@ -7,6 +7,16 @@ id-keyed-result shape) but pulls both generator costs (``Generator.cost``) and l
 settlement (payments, receipts, congestion rent): total load payment minus total generator
 receipts equals the congestion rent, i.e. ``-sum(mu_k * flow_k)`` over the binding branches
 (see the wave spec's AC-4 for the exact identity and its proof).
+
+**Branch rows (M7 W4, AC-8).** ``dc_opf``'s own :class:`~mambo_power.opf.dc_opf.OpfSolution`
+carries no per-branch flow -- only the PTDF matrix and the flow-limit duals -- so
+:func:`solve_nodal` derives ``flow_k = PTDF[k] . (net injection) + phase-shift injection`` itself,
+from the dispatch it already solved for. This is not a parallel formula: it is exactly the
+construction :func:`mambo_power.opf.dc_opf.dc_opf`'s own flow-limit rows are built from (that
+module's docstring), and the one :func:`mambo_power.opf.solve_dc_opf` and
+:func:`mambo_power.opf.redispatch.redispatch_dc_opf` already apply at their own solved points --
+no second solve, no new model field, and (``tests/unit/test_market_nodal.py``'s AC-8 test) it
+agrees with an independent :func:`mambo_power.pf.dc.solve` readback of the same dispatch.
 """
 
 from __future__ import annotations
@@ -14,11 +24,13 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 import mambo_power
 from mambo_power.model import Network, Scenario
 from mambo_power.numerics.arrays import NetworkArrays
+from mambo_power.numerics.bbus import pf_shift
 from mambo_power.opf import gen_cost_coeffs
 from mambo_power.opf.dc_opf import (
     NonConcaveBidError,
@@ -32,6 +44,7 @@ from mambo_power.results import (
     GenDispatchResult,
     LoadDispatchResult,
     MarketNodalResult,
+    OpfBranchFlowResult,
     ResultProvenance,
 )
 
@@ -180,6 +193,36 @@ def solve_nodal(scenario: Scenario, options: MarketNodalOptions | None = None) -
         for i, bus_id in enumerate(arr.bus_ids)
     ]
 
+    # Branch flows (module docstring, "Branch rows"; AC-8): flow_k = PTDF[k] . (net injection) +
+    # phase-shift injection -- exactly the construction dc_opf's own flow-limit rows are built
+    # from (opf/dc_opf.py module docstring), and the same one opf/__init__.py's solve_dc_opf and
+    # opf/redispatch.py's redispatch_dc_opf already apply. p_load_mw excludes each elastic load's
+    # own historical MW (dc_opf's double-counting contract) so it is not counted twice alongside
+    # demand_by_bus, which carries the *dispatched* elastic quantity instead.
+    elastic_idx_arr = np.asarray(elastic_idxs, dtype=np.int64)
+    elastic_bus = arr.load_bus[elastic_idx_arr]
+    elastic_own_mw = arr.load_p_max_pu[elastic_idx_arr] * arr.base_mva
+    p_load_mw = arr.p_load_pu * arr.base_mva - np.bincount(
+        elastic_bus, weights=elastic_own_mw, minlength=arr.n_bus
+    )
+    g_shunt_mw = arr.g_shunt_pu * arr.base_mva
+    gen_by_bus = np.bincount(arr.gen_bus, weights=solution.dispatch_mw, minlength=arr.n_bus)
+    demand_by_bus = np.bincount(
+        elastic_bus, weights=solution.demand_dispatch_mw, minlength=arr.n_bus
+    )
+    injection_mw = gen_by_bus - demand_by_bus - p_load_mw - g_shunt_mw
+    flows_mw = ptdf_matrix @ injection_mw + pf_shift(arr) * arr.base_mva
+    branches = [
+        OpfBranchFlowResult(
+            id=branch_id,
+            from_bus=arr.bus_ids[int(arr.f[k])],
+            to_bus=arr.bus_ids[int(arr.t[k])],
+            p_from_mw=float(flows_mw[k]),
+            flow_limit_dual=float(solution.duals.flow_limit[k]),
+        )
+        for k, branch_id in enumerate(arr.branch_ids)
+    ]
+
     # Settlement (module docstring): total_load_payment and
     # total_generator_receipts are each computed directly from dispatch and LMPs, as their own
     # independently meaningful quantities -- not asserted equal to the identity's other
@@ -196,6 +239,7 @@ def solve_nodal(scenario: Scenario, options: MarketNodalOptions | None = None) -
         generators=generators,
         loads=loads,
         buses=buses,
+        branches=branches,
         total_load_payment=total_load_payment,
         total_generator_receipts=total_generator_receipts,
         congestion_rent=congestion_rent,

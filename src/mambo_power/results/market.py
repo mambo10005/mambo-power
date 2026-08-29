@@ -1,16 +1,27 @@
-"""``market.nodal`` clearing result: dispatch (generators and loads), per-bus LMP, settlement.
+"""``market.nodal`` clearing result: dispatch (generators and loads), per-bus LMP, per-branch flow,
+settlement.
 Mirrors the ``results/opf.py`` pattern: id-keyed rows plus
 :class:`~mambo_power.results.provenance.ResultProvenance`, never attached to a
 :class:`~mambo_power.model.Network`. Reuses :class:`~mambo_power.results.opf.GenDispatchResult`/
-:class:`~mambo_power.results.opf.BusLmpResult` verbatim for the generator-dispatch and LMP rows
-(ADR-006's reuse discipline) -- only the load-dispatch row and settlement fields are new.
+:class:`~mambo_power.results.opf.BusLmpResult`/:class:`~mambo_power.results.opf.
+OpfBranchFlowResult` verbatim for the generator-dispatch, LMP and branch-flow rows (ADR-006's
+reuse discipline) -- only the load-dispatch row and settlement fields are new.
+
+**Branch rows, closing M5's A23 symmetrically (M7 W4, AC-8).** M6 gave
+:class:`~mambo_power.results.MarketZonalResult` per-branch flow/dual rows under
+:attr:`~mambo_power.results.MarketZonalResult.branches`, on the strength of a settlement identity
+that needed them; this result carried no such rows, which is exactly the asymmetry M6's own AC-4
+re-audit found itself structurally blind to (continuation-m6 carry-over 12). ``branches`` here is
+the **same field name and the same row type** as ``MarketZonalResult``'s, populated by
+:func:`mambo_power.market.nodal.solve_nodal` from the one clearing it already has -- no second
+solve, no new model field.
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mambo_power.results.opf import BusLmpResult, GenDispatchResult
+from mambo_power.results.opf import BusLmpResult, GenDispatchResult, OpfBranchFlowResult
 from mambo_power.results.provenance import ResultProvenance
 
 
@@ -56,6 +67,13 @@ class MarketNodalResult(BaseModel):
     generators: list[GenDispatchResult] = Field(default_factory=list)
     loads: list[LoadDispatchResult] = Field(default_factory=list)
     buses: list[BusLmpResult] = Field(default_factory=list)
+    branches: list[OpfBranchFlowResult] = Field(
+        default_factory=list,
+        description="Per-branch flow and flow-limit shadow price at the solved dispatch -- the "
+        "same field name and row type as MarketZonalResult.branches (module docstring, AC-8). "
+        "Makes the settlement identity's flow-dual side, -sum_k(mu_k * f_k), computable from "
+        "this object alone.",
+    )
     total_load_payment: float = Field(
         default=0.0,
         description="Sum over every load of LMP(bus_d)*p_d, $/h -- computed directly from "
