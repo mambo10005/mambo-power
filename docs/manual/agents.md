@@ -78,9 +78,12 @@ negative.
 !!! warning "`MarkupStrategy` requires a linear cost, and no bundled fixture has one"
     It is scoped to a linear `PolynomialCost` (`coefficients = [c1, c0]`) and raises
     `NotImplementedError` on anything else: a piecewise or higher-degree curve has no single
-    scalar the climb has established a meaning for. All **147** generators across the six bundled
-    MATPOWER cases carry quadratic costs, so a markup agent can be attached to none of them and
-    works only on a network built for it — as
+    scalar the climb has established a meaning for. `solve_agents` asks every strategy for its
+    round-0 offer **before the first clearing** and turns that refusal into a `ValueError` naming
+    the generator (through `jobs`, a `VALIDATION` failure — never `INTERNAL`), so the mistake is
+    reported as a mistake in the agent set, not as a fault mid-run. All **147** generators across
+    the six bundled MATPOWER cases carry quadratic costs, so a markup agent can be attached to
+    none of them and works only on a network built for it — as
     [`examples/12_agent_market.py`](../examples/index.md#12-strategic-bidding) does. A
     price-taker has no such restriction and offers whatever shape its true cost is, MATPOWER
     cases included.
@@ -285,11 +288,12 @@ before any solve, for a mistake in the agent set:
 | A strategy naming a generator the arrays do not carry (out of service, or on a bus that is) | `ValueError` |
 | A strategy naming a generator with no `Generator.cost` to depart from | `ValueError` |
 | An injected `MarkupStrategy` whose step is too coarse for `offer_tol` | `ValueError` |
-| A `MarkupStrategy` handed a non-linear cost | `NotImplementedError` |
+| A strategy that cannot bid on its generator's true cost (a `MarkupStrategy` on a quadratic or piecewise cost) | `ValueError`, naming the generator, before the first clearing; the strategy's own `NotImplementedError` is chained as the cause |
 | An offer a strategy produced that the clearing cannot accept | `NonConvexCostError` / `NonConcaveBidError` |
 
-The convexity guards are applied to the **offer**, every round, exactly as they would be to a true
-cost: a strategy does not get a laxer contract than the network does.
+The first six are raised up front, before any solve. The convexity guards are applied to the
+**offer**, every round, exactly as they would be to a true cost: a strategy does not get a laxer
+contract than the network does.
 
 ## Jobs API
 

@@ -226,9 +226,11 @@ def _resolve_agents(
     have, a strategy on a generator the arrays do not carry (out of service, or on a bus that
     is -- its offer would be silently ignored), a strategy on a generator with no
     ``Generator.cost`` (there is no true cost for it to depart from, and an
-    :class:`~mambo_power.market.strategy.Observation` cannot be built without one), and an
+    :class:`~mambo_power.market.strategy.Observation` cannot be built without one), an
     injected :class:`~mambo_power.market.strategy.MarkupStrategy` whose step is too coarse for
-    ``offer_tol`` (the config path's own validator, applied to the object path).
+    ``offer_tol`` (the config path's own validator, applied to the object path). The fifth
+    rejection -- a strategy that cannot bid on its generator's true cost at all -- needs the
+    strategy's own answer, and lives in :func:`_initial_offers`, which runs next.
     """
     if strategies is not None and options.strategies:
         raise ValueError(
@@ -287,6 +289,33 @@ def _resolve_agents(
             )
         )
     return agents
+
+
+def _initial_offers(agents: list[_Agent]) -> dict[str, GeneratorCost]:
+    """Round 0's offers -- every agent's answer to an observation with no history -- and the
+    fifth up-front rejection: a strategy that **cannot bid on its generator's true cost**.
+
+    Found by *asking the strategy*, not by knowing its internals: a ``NotImplementedError`` from
+    the round-0 ``offer`` (a :class:`~mambo_power.market.strategy.MarkupStrategy` on a quadratic
+    or piecewise cost, which is every generator in every bundled MATPOWER case) is re-raised as
+    ``ValueError`` naming the generator, with the strategy's own exception chained as the cause,
+    so :func:`mambo_power.jobs.run` reports it as ``VALIDATION`` like the other four
+    :func:`_resolve_agents` rejections. The offers returned *are* round 0's -- the loop does not
+    ask again -- so a strategy sees exactly one observation per round. Without this the
+    strategy's exception escaped the loop mid-run and reached ``jobs`` as ``INTERNAL``: the first
+    mistake a user attaching a markup agent to case14 makes, filed as an engine fault (walk
+    finding, M7 S9).
+    """
+    offers: dict[str, GeneratorCost] = {}
+    for agent in agents:
+        try:
+            offers[agent.id] = agent.strategy.offer(_observation(agent, 0, []))
+        except NotImplementedError as exc:
+            raise ValueError(
+                f'the {agent.label} strategy on generator "{agent.id}" cannot bid on that '
+                f"generator's true cost: {exc}"
+            ) from exc
+    return offers
 
 
 def _observation(agent: _Agent, round_index: int, history: list[_Round]) -> Observation:
@@ -504,9 +533,13 @@ def solve_agents(
     and :class:`~mambo_power.opf.dc_opf.NonConvexCostError` /
     :class:`~mambo_power.opf.dc_opf.NonConcaveBidError` for a cost or bid the clearing cannot
     accept -- including an *offer* a strategy produced, which is checked on the offer, every
-    round, exactly as it would be on a true cost. ``NotImplementedError`` from a strategy handed a
-    cost shape it does not support (:class:`~mambo_power.market.strategy.MarkupStrategy` on a
-    non-linear cost) propagates unchanged: that is a configuration mistake, not a market outcome.
+    round, exactly as it would be on a true cost. A strategy that cannot bid on its generator's
+    true cost at all (:class:`~mambo_power.market.strategy.MarkupStrategy` on a non-linear cost,
+    which raises ``NotImplementedError`` from its own ``offer``) is one of the up-front
+    ``ValueError`` cases: :func:`_initial_offers` collects round 0's offers before the first
+    clearing and re-raises that error with the generator id, so the mistake
+    reaches ``jobs`` as ``VALIDATION`` like the other four rather than escaping the loop as
+    ``INTERNAL``.
 
     ``Scenario`` and ``Network`` are not modified -- the offers reach the clearing as coefficients
     (AC-2).
@@ -517,6 +550,7 @@ def solve_agents(
     net = scenario.network
     arr = NetworkArrays.from_network(net)
     agents = _resolve_agents(net, arr, opts, strategies)
+    offers = _initial_offers(agents)
     demand_bid_coeffs, demand_pwl_bids = load_bid_coeffs(net, arr)
     elastic_idxs = sorted(set(demand_bid_coeffs) | set(demand_pwl_bids))
 
@@ -527,10 +561,6 @@ def solve_agents(
     breakdown: LmpBreakdown | None = None
     round_index = 0
     while True:
-        offers = {
-            agent.id: agent.strategy.offer(_observation(agent, round_index, history))
-            for agent in agents
-        }
         cost_coeffs, pwl_costs = gen_cost_coeffs(net, arr, costs=offers)
         solution = dc_opf(
             arr,
@@ -580,6 +610,10 @@ def solve_agents(
             reason = "iteration_cap"
             break
         round_index += 1
+        offers = {
+            agent.id: agent.strategy.offer(_observation(agent, round_index, history))
+            for agent in agents
+        }
 
     assert breakdown is not None  # set on every Optimal round, and the loop broke on one
     generators, loads, branches, total_load_payment, total_generator_receipts = _clearing_rows(

@@ -724,14 +724,25 @@ def test_two_sources_of_agents_at_once_is_rejected() -> None:
         )
 
 
-def test_a_markup_strategy_on_a_quadratic_cost_still_raises_through_the_loop() -> None:
-    """``MarkupStrategy``'s ``NotImplementedError`` is a configuration mistake and propagates --
-    the loop does not swallow it into a status string (spec C3: every generator in every
-    committed MATPOWER fixture is quadratic, so this is the failure a docs example would hit)."""
+def test_a_markup_strategy_on_a_quadratic_cost_is_rejected_before_any_clearing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``MarkupStrategy`` on a non-linear true cost is a caller mistake in the agent set, and
+    is caught where the other four are: up front, as ``ValueError`` naming the generator, before
+    the first clearing (M7 S9 fix 2 -- previously the strategy's own ``NotImplementedError``
+    escaped the loop and reached ``jobs.run`` as ``INTERNAL``). ``dc_opf`` is sabotaged to
+    prove "before any clearing" rather than assume it; ``MarkupStrategy`` itself still raises
+    ``NotImplementedError`` (its own contract, ``test_market_strategy.py``)."""
+
+    def never(*args: object, **kwargs: object) -> object:
+        raise AssertionError("dc_opf was reached: the agent set was not rejected up front")
+
+    monkeypatch.setattr(agents_module, "dc_opf", never)
     net = duopoly_network().model_copy(deep=True)
     net.generators[0].cost = PolynomialCost(coefficients=[0.01, 20.0, 0.0])
-    with pytest.raises(NotImplementedError, match=r"only a linear PolynomialCost"):
+    with pytest.raises(ValueError, match=r'"agent_a".*only a linear PolynomialCost') as info:
         solve_agents(Scenario(network=net), _markup_options("agent_a", max_iterations=4))
+    assert isinstance(info.value.__cause__, NotImplementedError)
 
 
 def test_no_agents_at_all_is_a_market_in_which_nobody_bids() -> None:

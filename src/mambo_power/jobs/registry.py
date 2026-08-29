@@ -221,9 +221,11 @@ def _run_market_agents(scenario: Scenario, options: BaseModel | None) -> BaseMod
     :func:`~mambo_power.market.agents.solve_agents` raises for a caller mistake in the agent set
     (its own docstring: a strategy naming a generator the network does not have, one naming a
     generator present in the network but absent from its arrays -- out of service, or on a bus
-    that is -- one naming a generator with no ``Generator.cost`` to depart from, or an injected
+    that is -- one naming a generator with no ``Generator.cost`` to depart from, an injected
     :class:`~mambo_power.market.strategy.MarkupStrategy` whose step is too coarse for
-    ``offer_tol``) into a :class:`~mambo_power.model.NetworkValidationError`, which
+    ``offer_tol``, or a strategy that cannot bid on its generator's true cost at all -- a markup
+    agent on one of the bundled MATPOWER cases, every generator of which is quadratic) into a
+    :class:`~mambo_power.model.NetworkValidationError`, which
     :func:`mambo_power.jobs.run` already maps to ``VALIDATION`` -- the same translation
     :func:`_run_market_zonal` applies to :class:`~mambo_power.market.zonal.UnzonedBusError`, for
     the same reason: without it this is a caller mistake about how ``options.strategies`` relates
@@ -237,10 +239,12 @@ def _run_market_agents(scenario: Scenario, options: BaseModel | None) -> BaseMod
     ``ValueError`` is caught this broadly, rather than a narrower dedicated exception type,
     because :func:`~mambo_power.market.agents.solve_agents`'s own docstring commits to it:
     "Does raise ``ValueError`` up front for a caller mistake in the agent set" is the whole of
-    what it raises before any solve starts, and the two exceptions it separately documents
-    raising past that point (``NonConvexCostError``/``NonConcaveBidError`` for a cost or bid the
-    clearing cannot accept, ``NotImplementedError`` for a strategy handed a cost shape it does
-    not support) are neither one a ``ValueError``, so this ``except`` cannot swallow them.
+    what it raises before any solve starts, and the exceptions it separately documents raising
+    past that point (``NonConvexCostError``/``NonConcaveBidError`` for a cost or bid the clearing
+    cannot accept) are not ``ValueError`` instances, so this ``except`` cannot swallow them. A strategy's
+    ``NotImplementedError`` for a cost shape it does not support no longer reaches this runner
+    at all: ``solve_agents`` asks every strategy for its round-0 offer up front and re-raises
+    that as one of its up-front ``ValueError`` cases (M7 S9).
     """
     assert isinstance(options, MarketAgentsOptions)  # run(): options_model-validated
     try:

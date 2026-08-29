@@ -1390,6 +1390,32 @@ def test_ac6_four_caller_mistakes_never_report_internal(options: dict[str, objec
     assert out.error.code in ("BAD_OPTIONS", "VALIDATION")
 
 
+def test_market_agents_markup_on_a_quadratic_cost_is_a_validation_failure(
+    case14: Network,
+) -> None:
+    """The first mistake every user makes (walk finding, M7 S9 fix 2): every generator in every
+    bundled MATPOWER case carries a quadratic cost, and ``MarkupStrategy`` supports only a linear
+    one. That is a caller mistake about how ``options.strategies`` relates to the network, so it
+    must land as ``VALIDATION`` naming the generator -- not as ``INTERNAL``, which is where an
+    unlisted ``NotImplementedError`` from inside the loop used to go."""
+    gen_id = case14.generators[0].id
+    assert case14.generators[0].cost is not None
+    assert len(case14.generators[0].cost.coefficients) == 3  # quadratic, the premise
+    out = run(
+        SolveRequest(
+            kind="market.agents",
+            network=case14,
+            options={"strategies": {gen_id: {"kind": "markup", "step": 0.5}}, "offer_tol": 1.0},
+        )
+    )
+    error = _assert_failed(out, "VALIDATION")
+    assert f'"{gen_id}"' in error.message
+    assert "only a linear PolynomialCost" in error.message
+    assert error.issues is not None
+    assert [issue.code for issue in error.issues] == ["DANGLING_REF"]
+    assert error.issues[0].path == "options.strategies"
+
+
 def test_market_agents_shares_the_status_translation_function(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
