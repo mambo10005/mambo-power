@@ -523,3 +523,15 @@ def test_markup_config_rejects_non_positive_step() -> None:
 def test_build_strategy_price_taker_ignores_extra_state() -> None:
     strategy = build_strategy(PriceTakerConfig())
     assert isinstance(strategy, PriceTakerStrategy)
+
+
+@pytest.mark.parametrize("step", [float("nan"), float("inf"), -float("inf")])
+def test_markup_strategy_rejects_a_non_finite_step(step: float) -> None:
+    """``nan <= 0`` is ``False``, so a plain sign check let ``step=nan`` through -- and
+    ``max(true_level, nan)`` returns ``true_level``, so the strategy then ran as a silent
+    price-taker reporting ``converged`` (critic finding 5, M7 S11). ``inf`` was caught only
+    incidentally, by the loop's ``offer_tol`` floor. Both are refused at construction, naming
+    ``step``, on the object path the config path's ``gt=0`` cannot see."""
+    with pytest.raises(ValueError, match=r"MarkupStrategy\.step must be") as excinfo:
+        MarkupStrategy(step=step)
+    assert "step" in str(excinfo.value) and str(step) in str(excinfo.value)

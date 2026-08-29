@@ -291,8 +291,13 @@ class MarkupStrategy:
     """
 
     def __init__(self, step: float) -> None:
-        if step <= 0:
-            raise ValueError(f"MarkupStrategy.step must be positive, got {step}")
+        # ``not (step > 0)`` rather than ``step <= 0``: NaN compares False both ways, so the
+        # latter let ``step=nan`` through, and ``max(true_level, nan)`` then made the strategy a
+        # silent price-taker reporting ``converged`` (critic finding 5, M7 S11). ``inf`` is
+        # refused for the same reason a config's ``gt=0`` would refuse it: an infinite step is
+        # no climb at all.
+        if not (step > 0) or not math.isfinite(step):
+            raise ValueError(f"MarkupStrategy.step must be positive and finite, got {step}")
         self.step = step
 
     @property
