@@ -69,11 +69,17 @@ class RoundRecord(BaseModel):
 
     ``offer`` is the whole :class:`~mambo_power.model.entities.GeneratorCost` the agent bid that
     round (not just a scalar), because that is what the loop actually held; a strategy that needs
-    a scalar reading of it derives one, as :class:`MarkupStrategy` does.
+    a scalar reading of it derives one, as :class:`MarkupStrategy` does. ``round_index`` is
+    carried on the record itself (not just implied by which :class:`Observation` slot it fills)
+    so that slot can be checked against it: :class:`Observation` rejects a *stale* record --
+    one genuinely from some other round -- and not only a missing one. Without this, a caller
+    could hand round 2's outcome to an observation whose ``previous_round`` should be round 5's,
+    and nothing would notice the pair was never adjacent.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    round_index: int = Field(ge=0, description="The round this outcome is from.")
     offer: GeneratorCost = Field(description="The generator's own offer that round.")
     lmp: float = Field(description="The LMP at the generator's own bus that round, $/MWh.")
     cleared_mw: float = Field(description="The generator's own cleared dispatch that round, MW.")
@@ -90,8 +96,12 @@ class Observation(BaseModel):
     happened: both are ``None`` for the very first round's observation (there is no round to
     report), and only ``previous_round`` is set for the second round's (there is one prior round,
     not two). ``None`` is a documented "this round does not exist yet" marker — never a silent
-    zero-valued :class:`RoundRecord` standing in for missing history. A gap (``two_rounds_ago``
-    set while ``previous_round`` is not) is not a valid history and is rejected below.
+    zero-valued :class:`RoundRecord` standing in for missing history. Two shapes of a bad history
+    are rejected below, both by :meth:`_history_is_contiguous`: a **missing** entry
+    (``two_rounds_ago`` set while ``previous_round`` is not) and a **stale** one (either record
+    present but its own ``round_index`` is not exactly ``round_index - 1`` / ``round_index - 2``)
+    — a stale pair silently accepted as adjacent would be exactly the kind of
+    plausible-wrong-answer this epic keeps finding.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -114,11 +124,29 @@ class Observation(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _history_has_no_gap(self) -> Observation:
+    def _history_is_contiguous(self) -> Observation:
         if self.two_rounds_ago is not None and self.previous_round is None:
             raise ValueError(
                 "Observation.two_rounds_ago is set but Observation.previous_round is not -- "
                 "an own-node history cannot skip the immediately preceding round"
+            )
+        if (
+            self.previous_round is not None
+            and self.previous_round.round_index != self.round_index - 1
+        ):
+            raise ValueError(
+                f"Observation.previous_round is from round {self.previous_round.round_index}, "
+                f"not round_index - 1 ({self.round_index - 1}) -- a stale record, not this "
+                "observation's immediately preceding round"
+            )
+        if (
+            self.two_rounds_ago is not None
+            and self.two_rounds_ago.round_index != self.round_index - 2
+        ):
+            raise ValueError(
+                f"Observation.two_rounds_ago is from round {self.two_rounds_ago.round_index}, "
+                f"not round_index - 2 ({self.round_index - 2}) -- a stale record, not the round "
+                "before this observation's immediately preceding one"
             )
         return self
 

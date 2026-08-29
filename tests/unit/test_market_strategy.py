@@ -10,15 +10,22 @@ one ad hoc per test.
 **What each behaviour is checked against.**
 
 * :class:`~mambo_power.market.strategy.PriceTakerStrategy` must return the *exact* true-cost
-  coefficients (``==``, not ``pytest.approx``) — AC-3(a)'s ``array_equal`` claim starts here.
+  coefficients (``==``, not ``pytest.approx``) — AC-3(a)'s ``array_equal`` claim starts here — and
+  must do so for a :class:`~mambo_power.model.PiecewiseCost` true cost just as much as a
+  polynomial one: AC-3(a) does not know it is the only path a piecewise offer reaches the array
+  builder through this wave, but that is exactly what makes it load-bearing.
 * :class:`~mambo_power.market.strategy.MarkupStrategy`'s two-point climb is checked against the
   rule as measured (A4, ``.bionic/tmp/m7-a4-two-point-climb.py``): direction continues on improved
   profit, reverses on worsened profit, defaults to ``+1`` with no prior movement, and the result
-  never drops below true cost.
+  never drops below true cost. It is deliberately scoped to a linear
+  :class:`~mambo_power.model.PolynomialCost` and raises loudly, rather than approximating
+  something, on anything else.
 * :class:`~mambo_power.market.strategy.Observation`'s round-0/round-1 shapes are constructed
   directly and asserted to carry ``None`` — never a fabricated zero-valued
-  :class:`~mambo_power.market.strategy.RoundRecord`; the history-gap case is asserted to be
-  rejected, not silently accepted.
+  :class:`~mambo_power.market.strategy.RoundRecord`. Two distinct bad histories are asserted
+  rejected, not silently accepted: a **missing** entry (``two_rounds_ago`` set without
+  ``previous_round``) and a **stale** one (a record present in the right slot but tagged with the
+  wrong round -- not actually adjacent).
 * :data:`~mambo_power.market.strategy.StrategyConfig` round-trips through
   ``model_dump_json``/``model_validate_json`` (via a minimal wrapper model, since the union itself
   is not a ``BaseModel``) and :func:`~mambo_power.market.strategy.build_strategy` resolves it to
@@ -53,8 +60,10 @@ def _linear_cost(marginal: float, *, intercept: float = 0.0) -> PolynomialCost:
     return PolynomialCost(coefficients=[marginal, intercept])
 
 
-def _record(offer_level: float, lmp: float, cleared_mw: float) -> RoundRecord:
-    return RoundRecord(offer=_linear_cost(offer_level), lmp=lmp, cleared_mw=cleared_mw)
+def _record(round_index: int, offer_level: float, lmp: float, cleared_mw: float) -> RoundRecord:
+    return RoundRecord(
+        round_index=round_index, offer=_linear_cost(offer_level), lmp=lmp, cleared_mw=cleared_mw
+    )
 
 
 def _observation(
@@ -101,28 +110,34 @@ def test_price_taker_returns_true_cost_exactly_with_history_present() -> None:
     obs = _observation(
         2,
         true_cost=true_cost,
-        previous_round=_record(24.0, 26.0, 150.0),
-        two_rounds_ago=_record(22.0, 24.0, 140.0),
+        previous_round=_record(1, 24.0, 26.0, 150.0),
+        two_rounds_ago=_record(0, 22.0, 24.0, 140.0),
     )
     offer = PriceTakerStrategy().offer(obs)
     assert isinstance(offer, PolynomialCost)
     assert offer.coefficients == true_cost.coefficients
 
 
-def test_price_taker_handles_non_linear_and_piecewise_costs() -> None:
+def test_price_taker_returns_a_piecewise_true_cost_exactly() -> None:
+    """AC-3(a) does not carve out an exception for a piecewise true cost, and this is the only
+    path a PWL offer reaches the array builder in this wave -- the overlap guard (W1(c)) exists
+    to protect exactly this path."""
+    piecewise = PiecewiseCost(points=[(0.0, 0.0), (100.0, 2000.0), (300.0, 6500.0)])
+    obs = _observation(0, true_cost=piecewise)
+    offer = PriceTakerStrategy().offer(obs)
+    assert isinstance(offer, PiecewiseCost)
+    assert offer.points == piecewise.points
+    assert offer is piecewise or offer == piecewise  # verbatim, not a reconstruction
+
+
+def test_price_taker_handles_non_linear_polynomial_costs() -> None:
     """Unlike MarkupStrategy, a price-taker never reads inside the cost, so it is not scoped to
     linear costs at all."""
     quadratic = PolynomialCost(coefficients=[0.01, 20.0, 5.0])
     obs = _observation(0, true_cost=quadratic)
-    quadratic_offer = PriceTakerStrategy().offer(obs)
-    assert isinstance(quadratic_offer, PolynomialCost)
-    assert quadratic_offer.coefficients == [0.01, 20.0, 5.0]
-
-    piecewise = PiecewiseCost(points=[(0.0, 0.0), (100.0, 2000.0)])
-    obs2 = _observation(0, true_cost=piecewise)
-    offer2 = PriceTakerStrategy().offer(obs2)
-    assert isinstance(offer2, PiecewiseCost)
-    assert offer2.points == [(0.0, 0.0), (100.0, 2000.0)]
+    offer = PriceTakerStrategy().offer(obs)
+    assert isinstance(offer, PolynomialCost)
+    assert offer.coefficients == [0.01, 20.0, 5.0]
 
 
 # ---- MarkupStrategy: the base cases (round 0 and round 1) --------------------------------------
@@ -143,7 +158,7 @@ def test_markup_round_one_probes_upward_by_one_step() -> None:
     obs = _observation(
         1,
         true_cost_level=20.0,
-        previous_round=_record(offer_level=20.0, lmp=25.0, cleared_mw=100.0),
+        previous_round=_record(0, offer_level=20.0, lmp=25.0, cleared_mw=100.0),
     )
     offer = MarkupStrategy(step=0.5).offer(obs)
     assert isinstance(offer, PolynomialCost)
@@ -158,8 +173,8 @@ def test_markup_continues_direction_when_last_move_raised_profit() -> None:
     obs = _observation(
         2,
         true_cost_level=20.0,
-        two_rounds_ago=_record(offer_level=20.0, lmp=25.0, cleared_mw=100.0),  # profit 500
-        previous_round=_record(offer_level=20.5, lmp=26.0, cleared_mw=110.0),  # profit 660
+        two_rounds_ago=_record(0, offer_level=20.0, lmp=25.0, cleared_mw=100.0),  # profit 500
+        previous_round=_record(1, offer_level=20.5, lmp=26.0, cleared_mw=110.0),  # profit 660
     )
     offer = MarkupStrategy(step=0.5).offer(obs)
     assert isinstance(offer, PolynomialCost)
@@ -171,8 +186,8 @@ def test_markup_reverses_direction_when_last_move_lowered_profit() -> None:
     obs = _observation(
         2,
         true_cost_level=20.0,
-        two_rounds_ago=_record(offer_level=20.5, lmp=26.0, cleared_mw=110.0),  # profit 660
-        previous_round=_record(offer_level=21.0, lmp=24.0, cleared_mw=90.0),  # profit 360
+        two_rounds_ago=_record(0, offer_level=20.5, lmp=26.0, cleared_mw=110.0),  # profit 660
+        previous_round=_record(1, offer_level=21.0, lmp=24.0, cleared_mw=90.0),  # profit 360
     )
     offer = MarkupStrategy(step=0.5).offer(obs)
     assert isinstance(offer, PolynomialCost)
@@ -185,8 +200,8 @@ def test_markup_direction_defaults_positive_on_zero_movement() -> None:
     obs = _observation(
         2,
         true_cost_level=20.0,
-        two_rounds_ago=_record(offer_level=20.0, lmp=22.0, cleared_mw=50.0),  # profit 100
-        previous_round=_record(offer_level=20.0, lmp=23.0, cleared_mw=60.0),  # profit 180
+        two_rounds_ago=_record(0, offer_level=20.0, lmp=22.0, cleared_mw=50.0),  # profit 100
+        previous_round=_record(1, offer_level=20.0, lmp=23.0, cleared_mw=60.0),  # profit 180
     )
     offer = MarkupStrategy(step=0.5).offer(obs)
     assert isinstance(offer, PolynomialCost)
@@ -199,8 +214,8 @@ def test_markup_offer_never_goes_below_true_cost() -> None:
     obs = _observation(
         2,
         true_cost_level=20.0,
-        two_rounds_ago=_record(offer_level=20.5, lmp=21.0, cleared_mw=50.0),  # profit 50
-        previous_round=_record(offer_level=20.0, lmp=25.0, cleared_mw=80.0),  # profit 400
+        two_rounds_ago=_record(0, offer_level=20.5, lmp=21.0, cleared_mw=50.0),  # profit 50
+        previous_round=_record(1, offer_level=20.0, lmp=25.0, cleared_mw=80.0),  # profit 400
     )
     offer = MarkupStrategy(step=0.5).offer(obs)
     assert isinstance(offer, PolynomialCost)
@@ -225,6 +240,8 @@ def test_markup_strategy_rejects_non_linear_true_cost() -> None:
 
 
 def test_markup_strategy_rejects_piecewise_true_cost() -> None:
+    """A markup agent whose true cost is piecewise has no scalar to climb on -- it must fail
+    loudly, not silently emit something approximate."""
     piecewise = PiecewiseCost(points=[(0.0, 0.0), (100.0, 2000.0)])
     obs = _observation(0, true_cost=piecewise)
     with pytest.raises(NotImplementedError, match="linear PolynomialCost"):
@@ -237,9 +254,11 @@ def test_markup_strategy_rejects_piecewise_true_cost() -> None:
 def test_price_taker_is_a_pure_function_of_its_observation() -> None:
     strategy = PriceTakerStrategy()
     obs = _observation(0, true_cost_level=20.0)
+    before = vars(strategy).copy()
     first = strategy.offer(obs)
     second = strategy.offer(obs)
     assert first == second
+    assert vars(strategy) == before  # no attribute of the strategy moved
 
 
 def test_markup_is_a_pure_function_of_its_observation() -> None:
@@ -247,17 +266,17 @@ def test_markup_is_a_pure_function_of_its_observation() -> None:
     obs = _observation(
         2,
         true_cost_level=20.0,
-        two_rounds_ago=_record(offer_level=20.0, lmp=25.0, cleared_mw=100.0),
-        previous_round=_record(offer_level=20.5, lmp=26.0, cleared_mw=110.0),
+        two_rounds_ago=_record(0, offer_level=20.0, lmp=25.0, cleared_mw=100.0),
+        previous_round=_record(1, offer_level=20.5, lmp=26.0, cleared_mw=110.0),
     )
+    before = vars(strategy).copy()
     first = strategy.offer(obs)
-    step_before = strategy.step
     second = strategy.offer(obs)
     assert first == second
-    assert strategy.step == step_before  # no attribute of the strategy moved
+    assert vars(strategy) == before  # no attribute of the strategy moved, step included
 
 
-# ---- Observation: the round-0/round-1 shapes, and the rejected gap -----------------------------
+# ---- Observation: the round-0/round-1 shapes, and the rejected bad histories -------------------
 
 
 def test_observation_round_zero_has_no_history_at_all() -> None:
@@ -267,7 +286,7 @@ def test_observation_round_zero_has_no_history_at_all() -> None:
 
 
 def test_observation_round_one_has_exactly_one_prior_round() -> None:
-    obs = _observation(1, previous_round=_record(20.0, 25.0, 100.0))
+    obs = _observation(1, previous_round=_record(0, 20.0, 25.0, 100.0))
     assert obs.previous_round is not None
     assert obs.two_rounds_ago is None
 
@@ -275,14 +294,14 @@ def test_observation_round_one_has_exactly_one_prior_round() -> None:
 def test_observation_round_two_has_both_prior_rounds() -> None:
     obs = _observation(
         2,
-        previous_round=_record(20.5, 26.0, 110.0),
-        two_rounds_ago=_record(20.0, 25.0, 100.0),
+        previous_round=_record(1, 20.5, 26.0, 110.0),
+        two_rounds_ago=_record(0, 20.0, 25.0, 100.0),
     )
     assert obs.previous_round is not None
     assert obs.two_rounds_ago is not None
 
 
-def test_observation_rejects_a_history_gap() -> None:
+def test_observation_rejects_a_missing_previous_round() -> None:
     """two_rounds_ago set without previous_round is not a valid history -- there is no round it
     could have followed."""
     with pytest.raises(ValidationError, match="two_rounds_ago"):
@@ -292,7 +311,35 @@ def test_observation_rejects_a_history_gap() -> None:
             p_min_mw=0.0,
             p_max_mw=300.0,
             previous_round=None,
-            two_rounds_ago=_record(20.0, 25.0, 100.0),
+            two_rounds_ago=_record(0, 20.0, 25.0, 100.0),
+        )
+
+
+def test_observation_rejects_a_stale_previous_round() -> None:
+    """previous_round must be round_index - 1's own record, not merely present -- a record from
+    some other round is not "the immediately preceding round" just because it fills that slot."""
+    with pytest.raises(ValidationError, match="stale"):
+        Observation(
+            round_index=3,
+            true_cost=_linear_cost(20.0),
+            p_min_mw=0.0,
+            p_max_mw=300.0,
+            previous_round=_record(1, 20.5, 26.0, 110.0),  # round 1, not round 2
+            two_rounds_ago=None,
+        )
+
+
+def test_observation_rejects_a_stale_two_rounds_ago() -> None:
+    """The literal case this check exists for: round 5's own outcome correctly fills
+    previous_round for round 6, but two_rounds_ago is round 2's -- three rounds stale, not one."""
+    with pytest.raises(ValidationError, match="stale"):
+        Observation(
+            round_index=6,
+            true_cost=_linear_cost(20.0),
+            p_min_mw=0.0,
+            p_max_mw=300.0,
+            previous_round=_record(5, 24.0, 30.0, 200.0),  # correctly round_index - 1
+            two_rounds_ago=_record(2, 22.0, 28.0, 180.0),  # should be round 4, is round 2
         )
 
 
@@ -304,6 +351,19 @@ def test_observation_rejects_unknown_fields() -> None:
                 "true_cost": _linear_cost(20.0).model_dump(),
                 "p_min_mw": 0.0,
                 "p_max_mw": 300.0,
+                "rival_offer": 99.0,
+            }
+        )
+
+
+def test_round_record_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError, match="[Ee]xtra"):
+        RoundRecord.model_validate(
+            {
+                "round_index": 0,
+                "offer": _linear_cost(20.0).model_dump(),
+                "lmp": 25.0,
+                "cleared_mw": 100.0,
                 "rival_offer": 99.0,
             }
         )
