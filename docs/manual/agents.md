@@ -73,7 +73,10 @@ history fields entirely; there is nothing a price-taker's past has to tell it.
 offers true cost (there is nothing yet to have an opinion about); round 1 probes upward by one
 step; from round 2 on, direction is kept if the last move raised profit and reversed if it did
 not, and the new offer is floored at the agent's own true marginal cost so a markup never goes
-negative.
+negative. One more rule keeps an agent honest when nobody wants it: if it cleared nothing in
+both of the last two rounds, its profit is `0 == 0` (a tie, not a decrease) and the climb would
+otherwise continue by a step a round until the iteration cap — so direction is `-1` instead, and
+the agent walks back down to its true cost and rests there, which the loop reports as `converged`.
 
 !!! warning "`MarkupStrategy` requires a linear cost, and no bundled fixture has one"
     It is scoped to a linear `PolynomialCost` (`coefficients = [c1, c0]`) and raises

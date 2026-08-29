@@ -260,6 +260,54 @@ def test_markup_reverses_on_a_real_profit_decrease_at_the_same_zero_movement_bas
     assert offer.coefficients[0] == pytest.approx(44.5)  # reversed down, not 45.5
 
 
+# ---- MarkupStrategy: an idle agent walks back, it does not climb forever -----------------------
+
+
+def test_markup_walks_back_after_two_idle_rounds() -> None:
+    """Walk finding (M7 S9 fix 3): an agent that cleared nothing two rounds running has profit
+    0 == 0, which the tie rule reads as "not worse, keep going" -- so it climbed from a $30 true
+    cost to $130 and ended at the iteration cap. A higher offer cannot help an agent nobody
+    dispatched, so the direction is -1 and the next offer is ``offer_prev - step``."""
+    obs = _observation(
+        2,
+        true_cost_level=30.0,
+        two_rounds_ago=_record(0, offer_level=30.0, lmp=22.0, cleared_mw=0.0),  # idle
+        previous_round=_record(1, offer_level=30.5, lmp=22.0, cleared_mw=0.0),  # idle
+    )
+    offer = MarkupStrategy(step=0.5).offer(obs)
+    assert isinstance(offer, PolynomialCost)
+    assert offer.coefficients[0] == pytest.approx(30.0)  # 30.5 - 0.5, not 31.0
+
+
+def test_markup_walks_back_after_two_idle_rounds_floored_at_true_cost() -> None:
+    """Same idle pair, but the walk-back would land below true cost -- the floor holds, exactly
+    as it does for a climbing agent: an idle agent already at true cost stays there."""
+    obs = _observation(
+        2,
+        true_cost_level=30.0,
+        two_rounds_ago=_record(0, offer_level=30.0, lmp=22.0, cleared_mw=0.0),
+        previous_round=_record(1, offer_level=30.0, lmp=22.0, cleared_mw=0.0),
+    )
+    offer = MarkupStrategy(step=0.5).offer(obs)
+    assert isinstance(offer, PolynomialCost)
+    assert offer.coefficients[0] == 30.0  # exact: the true cost itself, not 29.5 and not 30.5
+
+
+def test_markup_one_idle_round_is_not_yet_a_reason_to_walk_back() -> None:
+    """The rule needs *two* idle rounds: one round at zero can be the round the probe just
+    priced itself out in, and the tie/decrease rules already handle that (here profit fell from
+    500 to 0, a real decrease, so direction reverses on its own)."""
+    obs = _observation(
+        2,
+        true_cost_level=20.0,
+        two_rounds_ago=_record(0, offer_level=20.0, lmp=25.0, cleared_mw=100.0),  # profit 500
+        previous_round=_record(1, offer_level=20.5, lmp=20.0, cleared_mw=0.0),  # idle, profit 0
+    )
+    offer = MarkupStrategy(step=0.5).offer(obs)
+    assert isinstance(offer, PolynomialCost)
+    assert offer.coefficients[0] == pytest.approx(20.0)  # reversed by the decrease rule
+
+
 # ---- MarkupStrategy: scope guards -----------------------------------------------------------
 
 

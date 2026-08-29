@@ -242,6 +242,15 @@ class MarkupStrategy:
       ``1e-9`` band catches once profit is in the thousands of dollars, as it is on every fixture
       this wave uses. A strict ``<`` (no tolerance at all) flips direction on that noise and turns
       a settled strategic climb into the true-cost outcome presented as convergence;
+    * *direction* is ``-1`` outright when the agent cleared **nothing in both of the last two
+      rounds** (``cleared_mw <= 0`` at ``t-1`` and ``t-2``). An undispatched agent's profit is
+      ``0 == 0`` round after round, which the tie rule above correctly reads as "not worse" --
+      and so, left to the first two rules, it would keep the default ``+1`` and climb by one
+      step per round until the iteration cap (walk finding, M7 S9: a $30 true cost climbed to
+      $130 on a market clearing at $22). A higher offer cannot help an agent nobody is
+      dispatching; the only move with any chance of a sale is back down, and the floor below
+      stops that walk at true cost. Two rounds, not one: one idle round can be the one the
+      probe just priced itself out in, and the real-decrease rule already reverses on that;
     * the new offer is ``offer[t-1] + direction * step``, **floored at the agent's own true
       marginal cost** -- a markup never goes negative relative to cost.
 
@@ -290,6 +299,8 @@ class MarkupStrategy:
             )
             if really_decreased:
                 direction = -direction
+            if previous.cleared_mw <= 0.0 and two_ago.cleared_mw <= 0.0:
+                direction = -1.0
 
         new_level = max(true_level, offer_prev + direction * self.step)
         return _with_marginal_offer(observation.true_cost, new_level)

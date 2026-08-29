@@ -511,6 +511,34 @@ def test_ac5i_the_true_cost_baseline_the_markup_is_measured_against() -> None:
     )
 
 
+def test_an_out_of_merit_markup_agent_settles_at_true_cost_not_at_the_cap() -> None:
+    """The walk's shape (M7 S9 fix 3): a markup agent whose true cost sits above the price the
+    rest of the market clears at is never dispatched. Before the idle rule its profit was
+    0 == 0 every round, read as "not worse", so it climbed by a step per round until
+    ``max_iterations`` and the run ended ``iteration_cap``. Now it probes up once, sees two
+    idle rounds, walks back to its true cost and stays there -- and the loop reports that
+    resting point as ``converged``."""
+    net = non_pivotal_control_network(strategic_true_cost=30.0, rival_true_cost=22.0)
+    recorder = _Recorder(MarkupStrategy(step=STEP))
+    result = solve_agents(
+        Scenario(network=net),
+        MarketAgentsOptions(offer_tol=2 * STEP, max_iterations=40),
+        strategies={"strategic": recorder},
+    )
+    assert result.status == "Optimal"
+    assert result.termination_reason == "converged"
+    assert result.converged is True
+    (row,) = result.offers
+    assert row.cleared_mw == 0.0
+    assert _level(row.offer) == 30.0  # true cost, exactly
+    assert row.markup == 0.0
+    assert _lmp_at(result, "b1") == pytest.approx(22.0, abs=PRICE_ABS_TOL)
+    levels = [_level(offer) for offer in recorder.offers]
+    assert levels[:2] == [30.0, 30.5]  # true cost, then the one upward probe
+    assert max(levels) == 30.5  # and never higher
+    assert result.iterations < 40
+
+
 @pytest.mark.parametrize("step", [0.5, 1.0, 2.0, 0.25, 0.3, 0.1, 0.2, 0.7, 0.05])
 def test_a_settled_climb_converges_at_every_step_not_only_representable_ones(
     step: float,
