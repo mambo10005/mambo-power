@@ -1599,3 +1599,16 @@ def test_prior_seven_kinds_still_accept_their_existing_network_form_unchanged(
     assert out.status == "ok"
     assert out.error is None
     assert out.result is not None
+
+
+def test_run_json_accepts_a_request_whose_only_oddity_is_a_key_spelled_like_a_marker() -> None:
+    """The duplicate-key path finder marks nodes with an attribute, not a key: a request that
+    legitimately carries a key named ``__dup__`` (here an unknown option pydantic will reject on
+    its own terms, not as a duplicate) must never be reported as a duplicate."""
+    req = SolveRequest(kind="pf.dc", network=duopoly_network(), job_id="marker-1")
+    text = req.model_dump_json()
+    assert text.count('"options":{}') == 1
+    with_marker = text.replace('"options":{}', '"options":{"__dup__":1}', 1)
+    out = SolveResult.model_validate_json(run_json(with_marker))
+    assert out.error is not None and "duplicate" not in out.error.message.lower()
+    assert out.error.code == "BAD_OPTIONS"  # pf.dc takes no options: pydantic's verdict, not ours
