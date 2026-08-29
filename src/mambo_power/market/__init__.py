@@ -15,13 +15,14 @@ first whose supply curve is *decided* rather than read from the network: generat
 offers until the offer vector settles (wave M7).
 """
 
-from mambo_power.market.agents import MarketAgentsOptions, solve_agents
+from mambo_power.market.agents import AgentSetError, MarketAgentsOptions, solve_agents
 from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multiperiod
 from mambo_power.market.nodal import MarketNodalOptions, load_bid_coeffs, solve_nodal
 from mambo_power.market.zonal import CorridorLimit, MarketZonalOptions, solve_zonal, zone_partition
 from mambo_power.opf.dc_opf import NonConcaveBidError, NonConvexCostError
 
 __all__ = [
+    "AgentSetError",
     "CorridorLimit",
     "MarketAgentsOptions",
     "MarketMultiperiodOptions",

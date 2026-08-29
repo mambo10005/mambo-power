@@ -83,6 +83,7 @@ from mambo_power.results import (
 from mambo_power.results.agents import AgentOfferResult, MarketAgentsResult, TerminationReason
 
 __all__ = [
+    "AgentSetError",
     "MarketAgentsOptions",
     "solve_agents",
 ]
@@ -95,6 +96,29 @@ the AC-5 duopoly at 84 update rounds with a step of $0.50/MWh, and halving the s
 doubles the count (84 / 44 / 24 rounds at steps of 0.5 / 1.0 / 2.0, measured 2026-08-28), so 200
 covers a step of $0.25/MWh as well. A run that reaches it is *reported* as having reached it
 (``termination_reason == "iteration_cap"``), never quietly presented as settled."""
+
+
+class AgentSetError(ValueError):
+    """A caller mistake in the *agent set* -- how ``options.strategies`` (or the in-process
+    ``strategies`` argument) relates to the network -- caught before any solve starts.
+
+    A :class:`ValueError` **subclass**, deliberately, for the same two reasons as
+    :class:`~mambo_power.market.zonal.UnzonedBusError`. It stays a ``ValueError`` because that is
+    what :func:`solve_agents` has always raised for these and what an in-process caller catches.
+    It is a distinguishable *type* because ``jobs``' runner cannot otherwise tell it apart from
+    any other ``ValueError`` a solve might raise -- and the clearing's own
+    :class:`~mambo_power.opf.dc_opf.NonConvexCostError` / ``NonConcaveBidError`` *are*
+    ``ValueError`` subclasses. Catching bare ``ValueError`` relabelled an engine rejection of a
+    non-convex cost as ``VALIDATION`` at ``options.strategies``, a field the caller need not have
+    set, while ``market.nodal`` reported the same network as ``INTERNAL`` (audit finding 2, M7
+    S10). Only this type maps to ``VALIDATION``; everything else keeps the verdict every other
+    kind gives it.
+
+    Raised by :func:`_resolve_agents` (two agent sources at once, a strategy on a generator the
+    network does not have, one its arrays do not carry, one with no cost, a
+    :class:`~mambo_power.market.strategy.MarkupStrategy` step too coarse for ``offer_tol``) and by
+    :func:`_initial_offers` (a strategy that cannot bid on its generator's true cost).
+    """
 
 
 class MarketAgentsOptions(BaseModel):
@@ -233,7 +257,7 @@ def _resolve_agents(
     strategy's own answer, and lives in :func:`_initial_offers`, which runs next.
     """
     if strategies is not None and options.strategies:
-        raise ValueError(
+        raise AgentSetError(
             "solve_agents was given both options.strategies and its own strategies argument -- "
             "an agent set has exactly one source, so pass configs (which cross JSON) or Strategy "
             "objects (which do not), never both"
@@ -250,20 +274,22 @@ def _resolve_agents(
     index_of = {gen_id: i for i, gen_id in enumerate(arr.gen_ids)}
     for gen_id, (_, strategy) in resolved.items():
         if gen_id not in gens_by_id:
-            raise ValueError(f'a strategy names generator "{gen_id}", which is not in the network')
+            raise AgentSetError(
+                f'a strategy names generator "{gen_id}", which is not in the network'
+            )
         if gen_id not in index_of:
-            raise ValueError(
+            raise AgentSetError(
                 f'a strategy names generator "{gen_id}", which is in the network but not in its '
                 f"arrays (out of service, or on a bus that is) -- its offer would never reach "
                 f"the clearing"
             )
         if gens_by_id[gen_id].cost is None:
-            raise ValueError(
+            raise AgentSetError(
                 f'a strategy names generator "{gen_id}", which has no cost -- an agent bids '
                 f"relative to its own true cost, and there is none to observe"
             )
         if isinstance(strategy, MarkupStrategy) and options.offer_tol < 2.0 * strategy.step:
-            raise ValueError(
+            raise AgentSetError(
                 f"offer_tol={options.offer_tol} is below 2 * step for the MarkupStrategy on "
                 f'generator "{gen_id}" (step={strategy.step}) -- see MarketAgentsOptions.'
                 f"offer_tol; a fixed-step climber settles into a two-step oscillation"
@@ -298,7 +324,8 @@ def _initial_offers(agents: list[_Agent]) -> dict[str, GeneratorCost]:
     Found by *asking the strategy*, not by knowing its internals: a ``NotImplementedError`` from
     the round-0 ``offer`` (a :class:`~mambo_power.market.strategy.MarkupStrategy` on a quadratic
     or piecewise cost, which is every generator in every bundled MATPOWER case) is re-raised as
-    ``ValueError`` naming the generator, with the strategy's own exception chained as the cause,
+    :class:`AgentSetError` naming the generator, with the strategy's own exception chained as the
+    cause,
     so :func:`mambo_power.jobs.run` reports it as ``VALIDATION`` like the other four
     :func:`_resolve_agents` rejections. The offers returned *are* round 0's -- the loop does not
     ask again -- so a strategy sees exactly one observation per round. Without this the
@@ -311,7 +338,7 @@ def _initial_offers(agents: list[_Agent]) -> dict[str, GeneratorCost]:
         try:
             offers[agent.id] = _checked_offer(agent, _observation(agent, 0, []))
         except NotImplementedError as exc:
-            raise ValueError(
+            raise AgentSetError(
                 f'the {agent.label} strategy on generator "{agent.id}" cannot bid on that '
                 f"generator's true cost: {exc}"
             ) from exc
@@ -548,7 +575,8 @@ def solve_agents(
     Never raises for an infeasible or unbounded LP: a round that fails to clear ends the run and
     is reported through ``status``/``message``, mirroring
     :func:`mambo_power.market.nodal.solve_nodal`'s never-raise convention. Does raise
-    ``ValueError`` up front for a caller mistake in the agent set (see :func:`_resolve_agents`),
+    :class:`AgentSetError` (a ``ValueError``) up front for a caller mistake in the agent set (see
+    :func:`_resolve_agents`),
     and :class:`~mambo_power.opf.dc_opf.NonConvexCostError` /
     :class:`~mambo_power.opf.dc_opf.NonConcaveBidError` for a cost or bid the clearing cannot
     accept -- including an *offer* a strategy produced, which is checked on the offer, every

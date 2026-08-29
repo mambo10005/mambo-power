@@ -53,7 +53,7 @@ from mambo_power.jobs import registry as jobs_registry
 from mambo_power.market import CorridorLimit, MarketMultiperiodOptions, MarketNodalOptions
 from mambo_power.market.agents import MarketAgentsOptions
 from mambo_power.market.zonal import MarketZonalOptions
-from mambo_power.model import Network, Period, Scenario
+from mambo_power.model import Network, Period, Scenario, validate_network
 from mambo_power.numerics import SetpointConflictWarning
 from mambo_power.opf import OpfDcOptions
 from mambo_power.pf import AcOptions, solve_ac, solve_dc
@@ -1414,6 +1414,34 @@ def test_market_agents_markup_on_a_quadratic_cost_is_a_validation_failure(
     assert error.issues is not None
     assert [issue.code for issue in error.issues] == ["DANGLING_REF"]
     assert error.issues[0].path == "options.strategies"
+
+
+def test_market_agents_reports_an_engine_error_with_the_same_code_as_market_nodal(
+    case14: Network,
+) -> None:
+    """Audit finding 2 (M7 S10): the runner's ``except`` must catch only the *agent-set*
+    mistakes, never an error the clearing itself raises. A non-convex generator cost passes
+    ``validate_network`` (``c2 < 0`` is a legal polynomial) and is rejected by ``dc_opf`` with a
+    ``NonConvexCostError`` -- a ``ValueError`` subclass -- under every kind that clears it. The
+    same bad network must get the same verdict from ``market.agents`` as from ``market.nodal``,
+    and that verdict is not ``VALIDATION`` blamed on ``options.strategies``, a field the caller
+    need not even have set (here every generator is a price-taker, the default)."""
+    gens = list(case14.generators)
+    cost = gens[0].cost
+    assert cost is not None and len(cost.coefficients) == 3  # quadratic, the premise
+    bad_cost = cost.model_copy(update={"coefficients": [-0.01, *cost.coefficients[1:]]})
+    gens[0] = gens[0].model_copy(update={"cost": bad_cost})
+    net = case14.model_copy(update={"generators": gens})
+    assert not validate_network(net)  # legal data: the engine, not the model, sees the mistake
+
+    nodal = run(SolveRequest(kind="market.nodal", network=net))
+    agents = run(SolveRequest(kind="market.agents", network=net))
+    nodal_error = _assert_failed(nodal, nodal.error.code if nodal.error else "")
+    agents_error = _assert_failed(agents, agents.error.code if agents.error else "")
+    assert agents_error.code == nodal_error.code
+    assert agents_error.code != "VALIDATION"
+    assert "NonConvexCostError" in agents_error.message
+    assert agents_error.issues is None
 
 
 def test_market_agents_shares_the_status_translation_function(

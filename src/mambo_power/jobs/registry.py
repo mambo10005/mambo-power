@@ -29,7 +29,7 @@ from typing import NoReturn
 from pydantic import BaseModel
 
 from mambo_power.contingency import N1Options, n1
-from mambo_power.market.agents import MarketAgentsOptions, solve_agents
+from mambo_power.market.agents import AgentSetError, MarketAgentsOptions, solve_agents
 from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multiperiod
 from mambo_power.market.nodal import MarketNodalOptions, solve_nodal
 from mambo_power.market.zonal import MarketZonalOptions, UnzonedBusError, solve_zonal
@@ -217,11 +217,12 @@ def _run_market_agents(scenario: Scenario, options: BaseModel | None) -> BaseMod
     in-process ``strategies`` argument to :func:`~mambo_power.market.agents.solve_agents` is a
     seam this runner never uses, since only the config union crosses ``jobs`` (spec W2, W6).
 
-    The one other thing this runner does is translate the plain ``ValueError``
-    :func:`~mambo_power.market.agents.solve_agents` raises for a caller mistake in the agent set
-    (its own docstring: a strategy naming a generator the network does not have, one naming a
-    generator present in the network but absent from its arrays -- out of service, or on a bus
-    that is -- one naming a generator with no ``Generator.cost`` to depart from, an injected
+    The one other thing this runner does is translate
+    :class:`~mambo_power.market.agents.AgentSetError` -- the ``ValueError`` subclass
+    :func:`~mambo_power.market.agents.solve_agents` raises up front for a caller mistake in the
+    agent set (its own docstring: a strategy naming a generator the network does not have, one
+    naming a generator present in the network but absent from its arrays -- out of service, or on
+    a bus that is -- one naming a generator with no ``Generator.cost`` to depart from, an injected
     :class:`~mambo_power.market.strategy.MarkupStrategy` whose step is too coarse for
     ``offer_tol``, or a strategy that cannot bid on its generator's true cost at all -- a markup
     agent on one of the bundled MATPOWER cases, every generator of which is quadratic) into a
@@ -236,20 +237,21 @@ def _run_market_agents(scenario: Scenario, options: BaseModel | None) -> BaseMod
     with no matching member, and ``Field(gt=0)``, respectively) and are already ``BAD_OPTIONS``
     before ``jobs.run`` ever calls a runner.
 
-    ``ValueError`` is caught this broadly, rather than a narrower dedicated exception type,
-    because :func:`~mambo_power.market.agents.solve_agents`'s own docstring commits to it:
-    "Does raise ``ValueError`` up front for a caller mistake in the agent set" is the whole of
-    what it raises before any solve starts, and the exceptions it separately documents raising
-    past that point (``NonConvexCostError``/``NonConcaveBidError`` for a cost or bid the clearing
-    cannot accept) are not ``ValueError`` instances, so this ``except`` cannot swallow them. A
-    strategy's ``NotImplementedError`` for a cost shape it does not support no longer reaches
-    this runner at all: ``solve_agents`` asks every strategy for its round-0 offer up front and
-    re-raises that as one of its up-front ``ValueError`` cases (M7 S9).
+    Only that one type is caught, never bare ``ValueError``: the clearing's own
+    :class:`~mambo_power.opf.dc_opf.NonConvexCostError` / ``NonConcaveBidError`` (a cost or bid
+    the clearing cannot accept, raised by ``dc_opf`` under every kind that clears) are
+    ``ValueError`` subclasses too, and a bare ``except ValueError`` relabelled them as
+    ``VALIDATION`` at ``options.strategies`` while ``market.nodal`` reported the same network as
+    ``INTERNAL`` (audit finding 2, M7 S10). Those now fall through to :func:`mambo_power.jobs.run`
+    and get whatever verdict every other kind gives them. A strategy's ``NotImplementedError``
+    for a cost shape it does not support never reaches this runner either: ``solve_agents`` asks
+    every strategy for its round-0 offer up front and re-raises that as an ``AgentSetError``
+    (M7 S9).
     """
     assert isinstance(options, MarketAgentsOptions)  # run(): options_model-validated
     try:
         result = solve_agents(scenario, options=options)
-    except ValueError as exc:
+    except AgentSetError as exc:
         raise NetworkValidationError(
             [ValidationIssue(code="DANGLING_REF", path="options.strategies", message=str(exc))]
         ) from exc

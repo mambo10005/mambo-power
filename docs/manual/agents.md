@@ -89,7 +89,7 @@ the agent walks back down to its true cost and rests there, which the loop repor
     It is scoped to a linear `PolynomialCost` (`coefficients = [c1, c0]`) and raises
     `NotImplementedError` on anything else: a piecewise or higher-degree curve has no single
     scalar the climb has established a meaning for. `solve_agents` asks every strategy for its
-    round-0 offer **before the first clearing** and turns that refusal into a `ValueError` naming
+    round-0 offer **before the first clearing** and turns that refusal into an `AgentSetError` naming
     the generator (through `jobs`, a `VALIDATION` failure — never `INTERNAL`), so the mistake is
     reported as a mistake in the agent set, not as a fault mid-run. All **147** generators across
     the six bundled MATPOWER cases carry quadratic costs, so a markup agent can be attached to
@@ -303,12 +303,12 @@ before any solve, for a mistake in the agent set:
 
 | The mistake | Raised |
 | --- | --- |
-| Both `options.strategies` and `strategies=` given | `ValueError` |
-| A strategy naming a generator the network does not have | `ValueError` |
-| A strategy naming a generator the arrays do not carry (out of service, or on a bus that is) | `ValueError` |
-| A strategy naming a generator with no `Generator.cost` to depart from | `ValueError` |
-| An injected `MarkupStrategy` whose step is too coarse for `offer_tol` | `ValueError` |
-| A strategy that cannot bid on its generator's true cost (a `MarkupStrategy` on a quadratic or piecewise cost) | `ValueError`, naming the generator, before the first clearing; the strategy's own `NotImplementedError` is chained as the cause |
+| Both `options.strategies` and `strategies=` given | `AgentSetError` (a `ValueError` subclass; every row below is the same type) |
+| A strategy naming a generator the network does not have | `AgentSetError` |
+| A strategy naming a generator the arrays do not carry (out of service, or on a bus that is) | `AgentSetError` |
+| A strategy naming a generator with no `Generator.cost` to depart from | `AgentSetError` |
+| An injected `MarkupStrategy` whose step is too coarse for `offer_tol` | `AgentSetError` |
+| A strategy that cannot bid on its generator's true cost (a `MarkupStrategy` on a quadratic or piecewise cost) | `AgentSetError`, naming the generator, before the first clearing; the strategy's own `NotImplementedError` is chained as the cause |
 | A strategy whose `offer` returned something other than a `GeneratorCost` (`None`, say) | `TypeError`, naming the generator and what came back, at the call site before that round's clearing |
 | An offer a strategy produced that the clearing cannot accept | `NonConvexCostError` / `NonConcaveBidError` |
 
