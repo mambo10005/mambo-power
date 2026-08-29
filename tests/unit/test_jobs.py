@@ -1313,6 +1313,55 @@ def test_market_agents_strategy_config_round_trips_through_run_json_as_data_not_
     }
 
 
+def test_run_json_rejects_a_duplicated_strategies_key_as_bad_request() -> None:
+    """AC-6's last clause: "never a silently accepted last-wins duplicate". Python's JSON parser
+    (and pydantic's) keep the *last* of two equal keys and say nothing, so a request that named
+    generator ``agent_a`` twice under ``options.strategies`` -- once a price-taker, once a markup
+    agent -- ran to ``status=ok`` with only the markup one in the provenance (audit finding 3).
+    It must fail the way malformed JSON fails: ``BAD_REQUEST``, naming the key, before any solve.
+    """
+    net = duopoly_network()
+    req = SolveRequest(
+        kind="market.agents",
+        network=net,
+        options=_markup_options("agent_a", "agent_b").model_dump(),
+        job_id="dup-1",
+    )
+    text = req.model_dump_json()
+    marker = '"agent_b":{"kind":"markup","step":0.5}'
+    assert text.count(marker) == 1
+    duplicated = text.replace(marker, '"agent_a":{"kind":"price_taker"},' + marker)
+    assert duplicated.count('"agent_a":{"kind"') == 2  # the generator itself is named elsewhere
+
+    out = SolveResult.model_validate_json(run_json(duplicated))
+    error = _assert_failed(out, "BAD_REQUEST")
+    assert out.kind == "market.agents" and out.job_id == "dup-1"
+    assert "duplicate" in error.message.lower()
+    assert '"agent_a"' in error.message
+    assert "options.strategies" in error.message
+    # the same text with the duplicate removed is the request every other test runs: still ok
+    assert json.loads(run_json(text))["status"] == "ok"
+
+
+def test_run_json_rejects_a_duplicated_top_level_key_as_bad_request_for_any_kind() -> None:
+    """The check is at the parse, so it is not a ``market.agents`` rule: a duplicated ``kind`` on
+    a ``pf.dc`` request is the same ``BAD_REQUEST``, and a duplicate at any depth (here inside
+    ``network``) is too."""
+    req = SolveRequest(kind="pf.dc", network=_network("case14"), job_id="dup-2")
+    text = req.model_dump_json()
+    assert text.startswith('{"kind":"pf.dc",')
+    top = text.replace('{"kind":"pf.dc",', '{"kind":"pf.ac","kind":"pf.dc",', 1)
+    out = SolveResult.model_validate_json(run_json(top))
+    error = _assert_failed(out, "BAD_REQUEST")
+    assert '"kind"' in error.message and "duplicate" in error.message.lower()
+    assert out.kind == "pf.dc" and out.job_id == "dup-2"  # still echoed, best-effort as ever
+
+    assert '"base_mva":100.0,' in text
+    deep = text.replace('"base_mva":100.0,', '"base_mva":100.0,"base_mva":100.0,', 1)
+    error = _assert_failed(SolveResult.model_validate_json(run_json(deep)), "BAD_REQUEST")
+    assert '"base_mva"' in error.message and "network" in error.message
+
+
 # --- never raises: the four AC-6 caller mistakes, each mapped away from INTERNAL -----------------
 def test_market_agents_unknown_strategy_kind_is_bad_options() -> None:
     net = smooth_pivotal_network()

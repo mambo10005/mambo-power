@@ -104,7 +104,7 @@ discriminator lives on the parent, not inside the result.
 | `UNSOLVABLE_NETWORK` | A valid network the numerics it was handed to cannot solve, e.g. DC on a branch with `x == 0` (`UnsolvableNetworkError`) — user data, not a solver bug. |
 | `INFEASIBLE_LP` | An `opf.dc`, `market.nodal`, `market.multiperiod`, `market.zonal` or `market.agents` LP/QP came back with a non-`"Optimal"`, non-`"Unbounded"` status: there is no feasible dispatch at all, so there is nothing to return. For `market.agents` this is the round the loop stopped in, whichever round that was. |
 | `UNBOUNDED_LP` | The same five kinds, status `"Unbounded"`. |
-| `BAD_REQUEST` | `run_json` only: the text is not valid JSON, not a `SolveRequest`, or carries neither/both of `network` and `scenario`. |
+| `BAD_REQUEST` | `run_json` only: the text is not valid JSON, not a `SolveRequest`, or carries neither/both of `network` and `scenario`. Also JSON that names the same key twice in one object, at any depth and for every kind (a generator listed twice under `options.strategies`, say): the message names the key and its path, and the request is never run on the last-wins value a JSON parser would otherwise keep silently. |
 | `INTERNAL` | Anything else the runner raised (singular matrix, a bug): `"ExceptionType: message"`. |
 
 **Non-convergence is not a failure.** An AC power flow that does not converge returns
