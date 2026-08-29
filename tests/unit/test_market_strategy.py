@@ -308,6 +308,37 @@ def test_markup_one_idle_round_is_not_yet_a_reason_to_walk_back() -> None:
     assert offer.coefficients[0] == pytest.approx(20.0)  # reversed by the decrease rule
 
 
+def test_markup_treats_solver_dust_as_idle() -> None:
+    """The idle test is a tolerance, not ``<= 0.0`` (M7 S10, audit deferred tolerance): HiGHS
+    can return 1e-14 MW for a unit it did not dispatch, and an exact-zero test would read that
+    as "cleared something" -- the agent would then climb forever exactly as before S9's fix.
+    Two rounds at 1e-12 MW are two idle rounds: the offer steps *down*."""
+    obs = _observation(
+        2,
+        true_cost_level=30.0,
+        two_rounds_ago=_record(0, offer_level=30.0, lmp=22.0, cleared_mw=1e-12),
+        previous_round=_record(1, offer_level=30.5, lmp=22.0, cleared_mw=1e-12),
+    )
+    offer = MarkupStrategy(step=0.5).offer(obs)
+    assert isinstance(offer, PolynomialCost)
+    assert offer.coefficients[0] == pytest.approx(30.0)  # 30.5 - 0.5: idle, walked back
+
+
+def test_markup_does_not_call_a_real_microdispatch_idle() -> None:
+    """The band is 1e-9 MW, seven orders under the smallest quantity any bundled fixture trades
+    in: a unit that cleared 1e-6 MW in a round was dispatched, and the idle rule stays out of
+    it (here profit is a tie at ~0, the tie rule keeps the default +1, and the climb goes on)."""
+    obs = _observation(
+        2,
+        true_cost_level=30.0,
+        two_rounds_ago=_record(0, offer_level=30.0, lmp=22.0, cleared_mw=1e-6),
+        previous_round=_record(1, offer_level=30.5, lmp=22.0, cleared_mw=1e-6),
+    )
+    offer = MarkupStrategy(step=0.5).offer(obs)
+    assert isinstance(offer, PolynomialCost)
+    assert offer.coefficients[0] == pytest.approx(31.0)  # not idle: 30.5 + 0.5
+
+
 # ---- MarkupStrategy: scope guards -----------------------------------------------------------
 
 
@@ -478,14 +509,14 @@ def test_strategy_config_round_trips_markup() -> None:
 
 
 def test_strategy_config_rejects_unknown_kind() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="union_tag_invalid|'bogus'"):
         _ConfigWrapper.model_validate({"config": {"kind": "bogus"}})
 
 
 def test_markup_config_rejects_non_positive_step() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="greater than 0"):
         MarkupConfig(step=0.0)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="greater than 0"):
         MarkupConfig(step=-1.0)
 
 

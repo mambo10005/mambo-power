@@ -444,9 +444,10 @@ def _settled(amplitude: float, offer_tol: float) -> bool:
     are *the same number* whenever the loop has genuinely arrived -- which makes the verdict turn
     on whether that number is computed identically on both sides. It is not. ``offer_tol`` is one
     multiplication, while the amplitude is a peak-to-peak of offer levels each reached by hundreds
-    of accumulated additions of ``step``. Measured on the AC-5 duopoly (2026-08-28), the amplitude
-    lands **64 ULPs above** ``2 * step`` at a step of 0.1 (404 rounds) and **19 ULPs above** at
-    0.7 (61 rounds), while at 0.3 it lands 42 ULPs *below* and at 0.5 it is bit-exact. Under a
+    of accumulated additions of ``step``. Measured on the AC-5 duopoly (re-measured 2026-08-29,
+    M7 S10, in ULPs of ``offer_tol``), the amplitude lands **102 ULPs above** ``2 * step`` at a
+    step of 0.1 (2.83e-15 over, 404 rounds) and **26 ULPs above** at 0.7 (5.77e-15 over, 61
+    rounds), while at 0.3 it lands 51 ULPs *below* and at 0.5 it is bit-exact. Under a
     plain ``<=`` the first two are reported as a **cycle** -- a real climb, settled at its
     optimum, declared non-convergent -- and the other two converge by luck. The sign of the
     accumulated error is arbitrary, so convergence was being decided by a coin flip.
@@ -455,7 +456,7 @@ def _settled(amplitude: float, offer_tol: float) -> bool:
     ``offer_tol == 2 * step`` and make callers add headroom. That destroys what A9 is for: the
     derived value stops being an admissible one, and the headroom actually needed depends on the
     accumulated float error over a round count the caller cannot know in advance (it tracks the
-    number of rounds -- 64 ULPs over 404 of them, 19 over 61). A constant the caller must guess
+    number of rounds -- 102 ULPs over 404 of them, 26 over 61). A constant the caller must guess
     and cannot derive is precisely the tuning knob A9 exists to remove.
 
     The band is enormous on both sides of anything real: at a step of 0.1 it admits 2e-10 against

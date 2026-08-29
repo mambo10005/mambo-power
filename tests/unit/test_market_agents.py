@@ -549,8 +549,9 @@ def test_a_settled_climb_converges_at_every_step_not_only_representable_ones(
     the two sides of the loop's comparison are the same number whenever it has genuinely arrived.
     They are not computed the same way: ``offer_tol`` is one multiplication, the amplitude is a
     peak-to-peak of levels each reached by hundreds of accumulated additions. Measured on this
-    fixture, the amplitude lands 64 ULPs *above* ``2 * step`` at 0.1 and 19 above at 0.7, while at
-    0.3 it lands 42 below and at 0.5 it is bit-exact. Under a plain ``<=`` the first two report a
+    fixture (re-measured 2026-08-29, in ULPs of ``offer_tol``), the amplitude lands 102 ULPs
+    *above* ``2 * step`` at 0.1 and 26 above at 0.7, while at 0.3 it lands 51 below and at 0.5 it
+    is bit-exact. Under a plain ``<=`` the first two report a
     real climb as a ``cycle`` and the other two converge by luck.
 
     Every one of these runs is the same settled two-step oscillation; only the arithmetic differs.
