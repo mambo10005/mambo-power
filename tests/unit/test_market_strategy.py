@@ -16,8 +16,12 @@ one ad hoc per test.
   builder through this wave, but that is exactly what makes it load-bearing.
 * :class:`~mambo_power.market.strategy.MarkupStrategy`'s two-point climb is checked against the
   rule as measured (A4, ``.bionic/tmp/m7-a4-two-point-climb.py``): direction continues on improved
-  profit, reverses on worsened profit, defaults to ``+1`` with no prior movement, and the result
-  never drops below true cost. It is deliberately scoped to a linear
+  profit, reverses on a *real* worsened profit, defaults to ``+1`` with no prior movement, and the
+  result never drops below true cost. A tie within relative tolerance -- an agent at capacity
+  seeing two rounds of solver-noise-only LMP difference -- must **not** reverse (found downstream
+  on the AC-5 duopoly, where a strict ``<`` turned a settled climb into the true-cost outcome
+  reported as convergence); a paired test at the same zero-movement baseline confirms a real
+  decrease still reverses. It is deliberately scoped to a linear
   :class:`~mambo_power.model.PolynomialCost` and raises loudly, rather than approximating
   something, on anything else.
 * :class:`~mambo_power.market.strategy.Observation`'s round-0/round-1 shapes are constructed
@@ -220,6 +224,40 @@ def test_markup_offer_never_goes_below_true_cost() -> None:
     offer = MarkupStrategy(step=0.5).offer(obs)
     assert isinstance(offer, PolynomialCost)
     assert offer.coefficients[0] == pytest.approx(20.0)  # would be 19.5 unfloored
+
+
+def test_markup_does_not_reverse_on_a_profit_tie_within_relative_tolerance() -> None:
+    """The defect this guards against: an agent sitting at capacity while price is set elsewhere
+    sees consecutive rounds whose LMP differs only by solver-noise ULPs -- here a ~1e-12 $/MWh
+    difference, scaled by 300 MW to a ~3e-10 profit difference against a ~$6,000 profit level
+    (relative ~5e-14, deep inside the 1e-9 relative band). offer[t-1] == offer[t-2] (both 45.0,
+    at capacity, no movement), so direction defaults to +1; the tie must not flip it."""
+    obs = _observation(
+        2,
+        true_cost_level=20.0,
+        two_rounds_ago=_record(0, offer_level=45.0, lmp=40.0, cleared_mw=300.0),  # profit 6000.0
+        previous_round=_record(
+            1, offer_level=45.0, lmp=40.0 - 1e-12, cleared_mw=300.0
+        ),  # profit ~6000.0 - 3e-10, a tie, not a real decrease
+    )
+    offer = MarkupStrategy(step=0.5).offer(obs)
+    assert isinstance(offer, PolynomialCost)
+    assert offer.coefficients[0] == pytest.approx(45.5)  # continues up, not reversed to 44.5
+
+
+def test_markup_reverses_on_a_real_profit_decrease_at_the_same_zero_movement_baseline() -> None:
+    """Companion to the tie test above, same zero-movement baseline (offer[t-1] == offer[t-2] ==
+    45.0) but a real $3.00 profit drop (0.05% relative, far outside the 1e-9 tie band) -- this
+    must still reverse."""
+    obs = _observation(
+        2,
+        true_cost_level=20.0,
+        two_rounds_ago=_record(0, offer_level=45.0, lmp=40.00, cleared_mw=300.0),  # profit 6000.0
+        previous_round=_record(1, offer_level=45.0, lmp=39.99, cleared_mw=300.0),  # profit 5997.0
+    )
+    offer = MarkupStrategy(step=0.5).offer(obs)
+    assert isinstance(offer, PolynomialCost)
+    assert offer.coefficients[0] == pytest.approx(44.5)  # reversed down, not 45.5
 
 
 # ---- MarkupStrategy: scope guards -----------------------------------------------------------
