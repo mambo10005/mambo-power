@@ -49,7 +49,8 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   matrix and the phase-shift term, so the agents result can report congestion without a second
   solve.
 - A manual page ([Agent-based bidding](manual/agents.md)) and
-  [`examples/12_agent_market.py`](examples/index.md#12-strategic-bidding).
+  [`examples/12_agent_market.py`](examples/index.md#12-strategic-bidding). [Design › Decisions](design/decisions.md) gains ADR-010: offers as an overlay
+  the loop supplies, the own-node two-round observation, and what "settled" means.
 
 ### Added — wave M6 (zonal market and redispatch)
 
