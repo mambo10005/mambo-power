@@ -20,13 +20,14 @@ way ``market.nodal`` imports :func:`gen_cost_coeffs`. There is no ``solve_multip
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 import numpy as np
 import numpy.typing as npt
 
 import mambo_power
-from mambo_power.model import Network
+from mambo_power.model import GeneratorCost, Network
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import pf_shift
 from mambo_power.opf.dc_opf import NonConvexCostError, OpfDcOptions, dc_opf, lmp_decomposition
@@ -66,9 +67,14 @@ FloatArray = npt.NDArray[np.float64]
 PwlCosts = dict[int, list[tuple[float, float]]]
 
 
-def gen_cost_coeffs(net: Network, arr: NetworkArrays) -> tuple[FloatArray, PwlCosts]:
+def gen_cost_coeffs(
+    net: Network,
+    arr: NetworkArrays,
+    *,
+    costs: Mapping[str, GeneratorCost] | None = None,
+) -> tuple[FloatArray, PwlCosts]:
     """Per-generator ``[c2, c1, c0]`` (``NetworkArrays`` generator order) plus any PWL costs,
-    both from ``Generator.cost``.
+    from ``Generator.cost`` or from an explicit *costs* source.
 
     Returns ``(coeffs, pwl_costs)``: ``coeffs`` is ``(n_gen, 3)``; a generator with no cost
     (``cost is None``) or a :class:`~mambo_power.model.PiecewiseCost` gets an all-zero row — free
@@ -79,16 +85,48 @@ def gen_cost_coeffs(net: Network, arr: NetworkArrays) -> tuple[FloatArray, PwlCo
     :data:`NonConvexCostError` on this module) if any entry's breakpoint slopes are not
     non-decreasing, before any solve is attempted.
 
+    **The cost source** (M7 W3, spec A2). ``costs`` maps a generator id to the
+    :class:`~mambo_power.model.GeneratorCost` to use *in place of* that generator's own
+    ``Generator.cost``; a generator absent from the mapping keeps its own cost, and ``costs=None``
+    — every pre-M7 call site — is exactly "every generator keeps its own". This is what makes a
+    strategic **offer** overlay and the true-cost extraction one function under two arguments
+    rather than two implementations of one mapping:
+    :func:`mambo_power.market.agents.solve_agents` passes each round's offer map here instead of
+    assembling ``(cost_coeffs, pwl_costs)`` itself, so the all-zero-row convention above — and
+    :func:`~mambo_power.opf.dc_opf.dc_opf`'s generator-side overlap guard, which exists precisely
+    because a hand-rolled assembler can break that convention — hold identically for an offer and
+    for a true cost. The network is never touched: an offer is a *choice of coefficients*, not a
+    mutation of ``Generator.cost`` (AC-2).
+
+    Raises ``ValueError`` if ``costs`` names a generator id that is not in ``net``, or one that is
+    in ``net`` but absent from ``arr`` (out of service, or on a bus that is). In both cases the
+    entry would otherwise be silently ignored, and a cost source that quietly does nothing is
+    exactly the plausible-wrong-answer class this repo keeps finding.
+
     Exported (not module-private) because :func:`mambo_power.market.nodal.solve_nodal` needs the
     identical generator-cost extraction and imports this rather than carrying its own copy
     (M4 review Duplication FLAG) — the demand-bid-side mirror
     (:func:`mambo_power.market.nodal.load_bid_coeffs`) has no prior-wave analog to share.
     """
     gens_by_id = {g.id: g for g in net.generators}
+    if costs:
+        in_arrays = set(arr.gen_ids)
+        for gen_id in costs:
+            if gen_id not in gens_by_id:
+                raise ValueError(
+                    f'costs names generator "{gen_id}", which is not in the network -- its entry '
+                    f"would be silently ignored"
+                )
+            if gen_id not in in_arrays:
+                raise ValueError(
+                    f'costs names generator "{gen_id}", which is in the network but not in its '
+                    f"arrays (out of service, or on a bus that is) -- its entry would be silently "
+                    f"ignored"
+                )
     coeffs = np.zeros((len(arr.gen_ids), 3))
     pwl_costs: PwlCosts = {}
     for i, gen_id in enumerate(arr.gen_ids):
-        cost = gens_by_id[gen_id].cost
+        cost = costs.get(gen_id, gens_by_id[gen_id].cost) if costs else gens_by_id[gen_id].cost
         if cost is None:
             continue
         if cost.kind == "piecewise":

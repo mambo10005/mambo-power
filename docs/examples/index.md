@@ -1,6 +1,6 @@
 # Examples
 
-Eleven runnable scripts live under `examples/` in the repository. Each one is self-contained,
+Twelve runnable scripts live under `examples/` in the repository. Each one is self-contained,
 reads only files under `fixtures/`, prints a short deterministic summary and exits 0 in about a
 second. They are executed on every push — by `tests/unit/test_examples_run.py` inside the test
 matrix and by the dedicated `examples` CI job — and this page embeds them with
@@ -25,6 +25,7 @@ uv run python examples/02_ac_power_flow.py
 | [`09_nodal_market.py`](#9-nodal-market) | `market.solve_nodal` on a `Scenario`: elastic-demand dispatch, LMPs split by congestion, settlement | [Nodal market](../manual/market.md) |
 | [`10_multiperiod_market.py`](#10-multiperiod-market) | `market.solve_multiperiod` over a 24-period `Scenario`: ramp coupling, storage SoC with efficiency, the cyclic horizon, per-period LMPs and settlement | [Multiperiod market](../manual/multiperiod.md) |
 | [`11_zonal_redispatch.py`](#11-zonal-redispatch) | `market.solve_zonal`: zonal clearing, min-cost redispatch, the nodal reference, corridor duals, the three gap figures and the settlement identity | [Zonal market](../manual/zonal.md) |
+| [`12_agent_market.py`](#12-strategic-bidding) | `market.solve_agents`: generators offering through a `Strategy`, price-takers reproducing `solve_nodal` bit-exactly, a pivotal markup stopping at demand's own bid, the duopoly, `termination_reason`, `StrategyConfig` crossing `jobs` as JSON | [Agent-based bidding](../manual/agents.md) |
 
 ## 1. Load and validate
 
@@ -138,6 +139,21 @@ computed from the result object alone.
 
 ``` { .python }
 --8<-- "examples/11_zonal_redispatch.py"
+```
+
+## 12. Strategic bidding
+
+`market.solve_agents` on hand-built linear-cost networks (every bundled MATPOWER generator is
+quadratic, and a markup agent needs a linear offer to mark up): the overlay proved by a
+byte-identical network after every agent marked up, price-takers reproducing
+`market.solve_nodal` with `array_equal` on dispatch and LMPs and no tolerance anywhere, a pivotal
+supplier's markup climbing to the point where demand's own bid stops paying, checked against the
+closed-form optimum, the paired control where a rival rather than demand ends the climb, the
+two-agent duopoly reporting `converged`, the same run under an iteration cap reporting
+`iteration_cap` instead, and the `StrategyConfig` union crossing `jobs` as JSON data.
+
+``` { .python }
+--8<-- "examples/12_agent_market.py"
 ```
 
 ## Conventions for examples

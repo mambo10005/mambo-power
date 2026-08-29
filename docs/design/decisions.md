@@ -311,6 +311,91 @@ demand frozen at the zonal quantity (a redispatch that ignores the bids its own 
 honoured); a blanket price tolerance on the degenerate fixture (it would admit real regressions to
 hide a known degeneracy); unifying the Hessian copy inside this wave (sequencing, as above).
 
+## ADR-010 — Offers are an overlay the loop supplies; the agent sees only its own node, two rounds deep
+
+**Status:** accepted with wave M7, 2026-08-29.
+
+**Context.** The agents wave was asked for generators that *offer* rather than reveal their cost, a
+market that clears the offers, and a loop that runs until the offers settle. Three design questions
+decided what the wave measures and what it can promise.
+
+*Where the offer lives.* A deep-copied network with `Generator.cost` rewritten loses the
+true-versus-offered distinction the settlement needs and allocates a network per round; an `offer`
+field on `Generator` widens the schema and the JSON snapshot for one market mode. The offer is
+instead a mapping the loop hands to `gen_cost_coeffs`, which already accepted a per-generator cost
+override — so the clearing is the ordinary nodal DC-OPF on offered coefficients and the network is
+never touched (proved by `is`-identity of every `Generator.cost` after a run in which every agent
+marked up).
+
+*What the agent sees.* An exact best response needs the agent to clear the market at candidate
+offers, which means handing it the network and every rival's offer — a rival-omniscient agent whose
+strategy is a second copy of the solver. The observation is instead **own-node only**: the agent's
+true cost, bounds, and its own last rounds (price at its bus, cleared MW, the offer it made). At
+Step 2 this was one round of history; measured, every one-round rule either cycled or settled at a
+$0.02/h markup gain, because an agent that sees only `(offer, price, MW)` can tell whether it is
+marginal but not whether its last move *helped*. Two rounds of own history make a two-point hill
+climb computable, and that is what ships.
+
+*What "settled" means.* Simultaneous updates with exact best response cycle period-2 in five of six
+configurations; an incremental climber dithers around its optimum forever. Termination is therefore
+not "no offer moved" but a repeated state followed by an amplitude measurement, reported as one of
+three words — `converged`, `iteration_cap`, `cycle` — rather than a flag a reader could take as
+settled when the loop merely stopped.
+
+**Decision.** `market.solve_agents` clears offered coefficients through the unchanged nodal builder
+each round; a `Strategy` is a pure function of an own-node `Observation` carrying the agent's own
+last two rounds; updates are simultaneous; convergence is decided on the amplitude of the last
+repeated orbit against `offer_tol`, with `offer_tol ≥ 3 × step` derived for the shipped fixed-step
+climber and enforced at construction. Strategies cross `jobs` as a discriminated config union,
+never as callables.
+
+**Consequences.**
+
+1. **Price-takers reproduce `solve_nodal` bitwise, and that is the overlay's proof, not a
+   tolerance's.** Both paths hand the builder identical arrays, so `array_equal` holds on dispatch,
+   LMPs, loads and branch flows on all three cost shapes — and a one-ULP perturbation of an offer
+   *does* move the LP, so the agreement is exactness, not insensitivity. A tolerance would have
+   hidden a real defect the wave found (rounding reported dispatch to six decimals reddens exactly
+   those rows and nothing else). Bitwise is a claim about this build and this pinned solver, in one
+   process; a platform disagreement is a finding to record, not a tolerance to introduce.
+2. **Every comparison on solver output that is exact in arithmetic gets a stated tie rule — the wave
+   found the same defect class three times, on both sides of one boundary.** A strict `<` on profit
+   reversed the climb on one ULP and reported a false `converged`; `amplitude <= offer_tol` at
+   `offer_tol == 2 × step` reported genuine convergence as `cycle` at non-binary-exact steps; an
+   exact `cleared_mw <= 0.0` idle test would miss solver dust. Each now carries a named tolerance
+   constant with its reason. The one place no constant works — the profit-tie band, where noise
+   scales with the step and the real change with its square, so the bounds cross — is documented as
+   such: under the `3 × step` floor a noise-decided tie only picks which of two equal-profit offers
+   the climb rests on, and the verdict is the same either way.
+3. **The derived floor was wrong by a step, because every Step-2 fixture's optimum sat on a grid
+   point.** A half-grid optimum (true cost 33.33, step 0.01) settles in a three-step orbit, which
+   `2 × step` called `cycle` after 3339 rounds. The constant is derived from the climber's worst
+   orbit, not its typical one, and the validator recommends exactly that value — so the
+   recommendation must be the safe one.
+4. **A caller mistake reaches `jobs` as `VALIDATION`, and the up-front check has to ask the
+   strategy.** The loop cannot know which cost shapes a strategy accepts without knowing its
+   internals; it asks for round 0's offer before any clearing and re-raises a refusal as
+   `AgentSetError`, the one class the runner catches. The bare `except ValueError` it replaced also
+   swallowed `NonConvexCostError` — an engine fault labelled as a strategies mistake. And the
+   "silent last-wins duplicate" clause turned out to be a property of `json.loads`, applying to
+   every kind, so its fix lives in `run_json`, not in the agents runner.
+5. **The clearing rows are one construction with two callers.** The per-round clearing needed the
+   branch flows and settlement that `solve_nodal` assembles; the first landing copied that block
+   verbatim, and the critic made it `market/_clearing.py`. The PTDF it needs is computed once per
+   run and passed to `dc_opf`, which is 70 % of a 200-round case14 run; every other caller is
+   byte-identical with the keyword unused.
+6. **The walk found what the criteria could not.** Three shipped defects — a documented entry point
+   that did not exist, the first mistake every bundled fixture invites leaking as `INTERNAL`, and an
+   undispatched agent climbing to the cap — were outside every acceptance row and every one of
+   1146 tests, and were found in the first ten minutes of using the feature from its manual. The
+   walk is dispatched first, from the docs, forbidden the spec.
+
+*Rejected:* a price-taker short-circuit to `solve_nodal` (makes the exactness row true by
+construction and leaves the loop unexercised); round-robin updates (fixes the exact-best-response
+cycle, which the own-node observation cannot compute anyway); a market-wide offer cap (a knob the
+other three market modes lack); resizing the profit-tie band (no value separates noise from real
+change at every step — measured, and the reasoning independently accepted by the critic).
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

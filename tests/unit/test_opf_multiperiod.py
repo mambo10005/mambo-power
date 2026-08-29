@@ -668,6 +668,71 @@ def test_storage_relieves_a_binding_flow_limit() -> None:
     assert sol.duals.flow_limit[0, 0] == pytest.approx(0.0, abs=1e-9)
 
 
+# --- a quadratic cost and a quadratic bid at T=2, against a hand oracle -------------------------
+#
+# Every other quadratic in this module's reach compares the builder against ``dc_opf`` (the T=1
+# reductions below), and ``dc_opf`` shares ``_pass_diagonal_hessian`` with it: a wrong shared
+# Hessian diagonal (HiGHS's 0.5·xᵀQx convention, so a generator's entry is 2·c2 and an elastic
+# load's −2·v2) makes both wrong by the same amount and the comparison stays green (M7 audit,
+# finding 1). This case is derived by hand -- marginal cost = marginal value -- and never consults
+# ``dc_opf``.
+#
+#   gq: cost 0.05 p² + 10 p, [0, 200]   ->  MC = 0.1 p + 10       (interior in both periods)
+#   gl: cost 12 p,           [0, 50]    ->  12 $/MWh, at its cap whenever the price exceeds 12
+#   ld2 (elastic): value −0.05 d² + 40 d  ->  MV = 40 − 0.1 d;  bound 300 MW at t=0, 100 MW at t=1
+#   br12 unrated, no ramp data, no storage: the two periods are uncoupled.
+#
+#   t=0: the 300 MW bound is slack.  gl is cheaper than any price below and sits at 50, so
+#        d = gq + 50 and the interior condition MC(gq) = MV(d) reads
+#            0.1 gq + 10 = 40 − 0.1 (gq + 50)   ->   0.2 gq = 25   ->   gq = 125, d = 175
+#        price = MC(125) = MV(175) = 22.5.
+#   t=1: the 100 MW bound binds -- MV(100) = 30 exceeds the cost of the 100th MW -- so the
+#        period is a least-cost split of exactly 100 MW: gl at its 50 cap (12 < price), gq = 50,
+#        price = MC(50) = 15.  (The demand column's bound then carries 30 − 15 = 15 of surplus.)
+#
+#   dispatch = [[125, 50], [50, 50]]   demand = [[175], [100]]   balance price = [22.5, 15]
+#   objective_cost (generation cost only, every period; MultiperiodSolution's own definition)
+#            = (0.05·125² + 10·125 + 12·50) + (0.05·50² + 10·50 + 12·50)
+#            = (781.25 + 1250 + 600) + (125 + 500 + 600) = 2631.25 + 1225 = 3856.25
+#
+#   What a wrong diagonal does to this, so the tolerance is seen against it: with the generator
+#   entry halved (2·c2 -> 1·c2) HiGHS minimises an effective 0.025 p² and t=0's condition becomes
+#   0.05 gq + 10 = 35 − 0.1 gq  ->  gq = 166.67 (Δ = 41.7 MW); with the demand entry halved
+#   (−2·v2 -> −1·v2) it becomes 0.1 gq + 10 = 37.5 − 0.05 gq  ->  gq = 183.33 (Δ = 58.3 MW).
+#
+#   Tolerance: 1e-3 MW on dispatch, from measurement rather than from HiGHS's nominal 1e-7
+#   feasibility tolerances. HiGHS's active-set QP stops at gq = 124.99985 on this problem
+#   (measured 2026-08-29, identically at T=1, at T=2 and through ``dc_opf`` -- the solver's own
+#   stopping rule on the KKT residual, 0.2 · 1.5e-4 = 3e-5 $/MWh, not anything the builder does),
+#   so a 1e-6 band is a false alarm on a correct answer. 1e-3 is seven times the measured residual
+#   and 4.6 orders inside either sabotage; the objective's 1e-2 $ is that dispatch band times the
+#   22.5 $/MWh marginal cost (the measured shortfall is 3.4e-3 $), and the price's 1e-5 $/MWh is
+#   the residual's own scale (measured 2.5e-6 off) with the same order of margin.
+
+
+def test_quadratic_cost_and_quadratic_bid_at_t2_match_the_hand_oracle() -> None:
+    """The derivation in the comment above; nothing here reads a number back off ``dc_opf``."""
+    net = _two_bus([_gen("gq", "b1", 0.0, 200.0), _gen("gl", "b1", 0.0, 50.0)], load_mw=300.0)
+    arr = NetworkArrays.from_network(net)
+    assert arr.gen_ids == ["gq", "gl"] and arr.load_ids == ["ld2"]
+    coeffs = np.array([[0.05, 10.0, 0.0], [0.0, 12.0, 0.0]], dtype=np.float64)
+
+    sol = multiperiod_dc_opf(
+        arr,
+        coeffs,
+        2,
+        period_load_mw=np.array([[300.0], [100.0]]),
+        demand_bid_coeffs={0: (-0.05, 40.0, 0.0)},
+    )
+
+    assert sol.status == "Optimal"
+    np.testing.assert_allclose(sol.dispatch_mw, [[125.0, 50.0], [50.0, 50.0]], atol=1e-3)
+    np.testing.assert_allclose(sol.demand_dispatch_mw, [[175.0], [100.0]], atol=1e-3)
+    assert sol.objective_cost == pytest.approx(3856.25, abs=1e-2)
+    assert sol.duals is not None
+    np.testing.assert_allclose(sol.duals.balance, [22.5, 15.0], atol=1e-5)
+
+
 # --- T=1 reduces to dc_opf --------------------------------------------------------------------
 
 

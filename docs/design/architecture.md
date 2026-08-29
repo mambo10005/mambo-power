@@ -12,7 +12,7 @@ later waves add (their dependencies are already fixed by the epic design).
 
 ```mermaid
 flowchart TB
-    subgraph present["Shipped (M1-M6)"]
+    subgraph present["Shipped (M1-M7)"]
         model["model<br/>Network, entities, validation errors,<br/>ImportIssue, repair_islands,<br/>Scenario, Period"]
         io["io<br/>matpower, native, ImportReport"]
         numerics["numerics<br/>NetworkArrays, ybus, bbus, ptdf, lodf,<br/>effective_roles"]
@@ -24,11 +24,12 @@ flowchart TB
         opfrd["opf.redispatch<br/>redispatch_dc_opf<br/>(delta columns both sides)"]
         contingency["contingency<br/>n1, screen_n1, confirm_n1"]
         market["market<br/>solve_nodal (one period),<br/>solve_multiperiod (a horizon),<br/>solve_zonal (zonal + redispatch)"]
+        marketstrategy["market.strategy<br/>Observation, Strategy,<br/>PriceTakerStrategy, MarkupStrategy,<br/>StrategyConfig, build_strategy"]
         results["results<br/>BusResult, BranchResult, GenResult,<br/>ResultProvenance, from_arrays"]
         jobs["jobs<br/>SolveRequest, SolveResult, KINDS, run"]
     end
     subgraph later["Later waves"]
-        marketlater["market: agents (M7)"]
+        marketlater["market.agents<br/>solve_agents<br/>(the fixed-point loop, M7)"]
         formats["io: pandapower_json, pypsa,<br/>psse_raw, csv_bundle (M8)"]
     end
 
@@ -54,6 +55,7 @@ flowchart TB
     market --> opfz
     market --> opfrd
     market --> results
+    marketstrategy --> model
     opfmp --> numerics
     opfmp --> opf
     opfz --> numerics
@@ -68,6 +70,7 @@ flowchart TB
     jobs --> model
     jobs --> numerics
     marketlater -.-> market
+    marketlater -.-> marketstrategy
     formats -.-> model
 ```
 
@@ -107,6 +110,18 @@ Rules the diagram encodes:
   `solve_nodal` by name only, the same shared-not-copied arrangement `market.multiperiod` uses.
   The nodal reference is a genuinely separate solve, not a quantity inferred from the redispatch,
   because the two agreeing is what the wave's own tests assert.
+- `market.strategy` is a **seam, not a solver**, and its import direction says so: it reaches
+  `model` and nothing else — no `numerics`, no `opf`, no `results`. An offer is a
+  `GeneratorCost`, the model's own discriminated union, decided from an own-node `Observation`
+  carrying the agent's own cost, its own limits and its own last two rounds. That narrowness is
+  the design constraint made mechanical rather than merely documented: a strategy with a path to
+  the clearing could reconstruct the merit order and short-circuit the game the agents loop
+  exists to play out. `Strategy` is a `typing.Protocol`, not an ABC — one method, structural
+  conformance, and no other ABC in the repo to match — so an in-process caller may pass any
+  conforming object; what crosses the `jobs` boundary is `StrategyConfig`, a discriminated union
+  on `kind` resolved to an instance by `build_strategy`, never a callable. The offer is an
+  **overlay**, not a mutation: `Generator.cost` keeps the true cost untouched, which is the only
+  reason "markup" is a quantity this package can compute at all.
 - `jobs` is the outermost layer: it validates a request, calls a solver entry point (`pf`,
   `opf`, `contingency` or `market`, by kind), times it and wraps any exception into a
   structured failure. Since M5 its subject is a `Scenario`: a request carries either a bare
@@ -136,6 +151,8 @@ consumers honest when the owner changes.
 | Zone price | zonal balance-row dual, `opf.zonal` (M6) | `MarketZonalResult.zones`, manual | copper-plate degenerate: every zone price equals the nodal λ |
 | Corridor transfer capacity | caller-supplied `market.CorridorLimit` (M6) | zonal variable bounds, PyPSA `Link` `p_nom` | capacities handed to the oracle independently of the engine |
 | Final dispatch == the nodal optimum | `opf.redispatch`'s true-curve objective (M6) | `welfare_gap`, the redispatch rows | `assert_allclose` against `market.solve_nodal` from unrelated starting points |
+| Offered cost, as distinct from true cost | `market.strategy` (M7) | `market.agents`, `jobs` | `PriceTakerStrategy` returns `Observation.true_cost` verbatim — coefficients compared with `==`, and a piecewise true cost asserted `is`-or-`==` identical, not reconstructed |
+| An agent's own-node history | `market.strategy.Observation` (M7) | every `Strategy` implementation | a skipped round (`two_rounds_ago` set, `previous_round` not) and a stale one (a record whose own `round_index` is not the slot's) both raise, so a non-adjacent pair cannot pass as history |
 | Storage physical limits | `model.Storage` (M1, solver-read from M5) | LP bounds, result rows, docs | SoC balance every period; cyclic `SoC_T == soc_initial`; `min(charge, discharge) ≈ 0` invariant with a paired positive case |
 | Horizon shape | `model.Scenario.periods` / `model.Period` | `market.multiperiod`, `jobs` | `periods=None` reproduces `market.nodal` bit-exactly (`==`, not a tolerance) |
 | Analysis kinds registry | `jobs` | future SaaS capability list | contract test: every kind has request model, result model, runner |
@@ -180,7 +197,9 @@ src/mambo_power/
                     redispatch.py (redispatch_dc_opf)
   contingency/      __init__.py (n1), n1.py (screen_n1, confirm_n1)
   market/           __init__.py, nodal.py (solve_nodal), multiperiod.py (solve_multiperiod),
-                    zonal.py (solve_zonal, CorridorLimit)
+                    zonal.py (solve_zonal, CorridorLimit),
+                    strategy.py (Observation, Strategy, PriceTakerStrategy, MarkupStrategy,
+                                 StrategyConfig, build_strategy)
   results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, n1.py, feasibility.py,
                     market.py, multiperiod.py, zonal.py
   jobs/             __init__.py, models.py (SolveRequest, SolveResult), registry.py (KINDS), run.py (run, run_json)

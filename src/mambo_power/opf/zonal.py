@@ -119,6 +119,7 @@ from mambo_power.opf.dc_opf import (
     _epigraph_rows,
     _extract_and_validate,
     _hypograph_rows,
+    _pass_diagonal_hessian,
 )
 
 _OPTIMAL = "Optimal"
@@ -384,22 +385,9 @@ def zonal_dc_opf(
         h.changeColsCost(n_demand, np.arange(n_gen, n_dispatch, dtype=np.int32), -v1)
 
     # Hessian over the dispatch prefix, passed *before* any further column is appended -- the
-    # ordering dc_opf already proves safe against later addVars calls (module docstring).
-    if n_dispatch:
-        hess_diag = np.zeros(n_dispatch)
-        hess_diag[:n_gen] = 2.0 * c2
-        hess_diag[n_gen:] = -2.0 * v2
-        nz = np.flatnonzero(hess_diag)
-        if nz.size:
-            hess = highspy.HighsHessian()
-            hess.dim_ = n_dispatch
-            hess.format_ = highspy.HessianFormat.kTriangular
-            starts = np.zeros(n_dispatch + 1, dtype=np.int32)
-            starts[nz + 1] = 1
-            hess.start_ = np.cumsum(starts).astype(np.int32).tolist()
-            hess.index_ = nz.tolist()
-            hess.value_ = hess_diag[nz].tolist()
-            h.passHessian(hess)
+    # ordering dc_opf already proves safe against later addVars calls (module docstring). The
+    # assembly itself is dc_opf's helper, not a copy of it (ADR-008 one level down).
+    _pass_diagonal_hessian(h, c2, v2, n_gen, n_demand)
 
     # --- tier 1b: one exchange column per corridor, bounded [-cap, +cap] (module docstring,
     # "Corridor sign convention"). No objective coefficient: a transfer is neither a cost nor a

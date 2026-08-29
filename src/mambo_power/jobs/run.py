@@ -225,19 +225,94 @@ def _peek(text: str) -> tuple[str, str | None]:
     return (kind if isinstance(kind, str) else ""), (job_id if isinstance(job_id, str) else None)
 
 
+class _DuplicateKeyError(ValueError):
+    """A JSON object in a ``run_json`` request repeats a key.
+
+    ``json.loads`` keeps the last value silently, so a request that names one generator twice
+    under ``options.strategies`` -- or repeats ``kind``, or a field inside ``network`` -- would
+    run as if only the last spelling had been written. Every kind shares this boundary, so the
+    check is here, before pydantic, and the failure is ``BAD_REQUEST`` naming the key and its
+    path. Module-private: nothing outside ``run_json`` sees it.
+    """
+
+
+class _Node(dict[str, Any]):
+    """A parsed JSON object that remembers which key, if any, it repeated -- as an attribute,
+    never as a key, so a request that legitimately contains any spelling of key cannot collide
+    with the marker."""
+
+    duplicated: str | None = None
+
+
+def _reject_duplicate_keys(text: str) -> None:
+    """Raise :class:`_DuplicateKeyError` naming the key and its dotted path if any object in
+    ``text`` repeats a key, at any depth. Malformed or too-deep JSON returns silently: pydantic
+    reports those with its own message, exactly as before this check existed.
+
+    The path walk is iterative and runs only when the parse saw a duplicate, so a clean request
+    costs one ``json.loads`` and a request nested deeper than the interpreter's recursion limit
+    fails inside ``json.loads`` -- never here -- and stays ``BAD_REQUEST`` (critic finding 11: a
+    recursive walk outside the guard turned depth ~1000 into ``INTERNAL``).
+    """
+    seen_duplicate = False
+
+    def hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        nonlocal seen_duplicate
+        node = _Node()
+        for key, value in pairs:
+            if key in node and node.duplicated is None:
+                node.duplicated = key
+                seen_duplicate = True
+            node[key] = value
+        return node
+
+    try:
+        root = json.loads(text, object_pairs_hook=hook)
+    except Exception:  # noqa: BLE001 — pydantic's turn
+        return
+    if not seen_duplicate:
+        return
+
+    stack: list[tuple[Any, str]] = [(root, "")]
+    while stack:
+        node, path = stack.pop()
+        if isinstance(node, _Node):
+            if node.duplicated is not None:
+                raise _DuplicateKeyError(
+                    f'duplicate key "{node.duplicated}" at {path or "request"}'
+                )
+            # Reversed so the first key in text order is examined first (depth-first, in order).
+            stack.extend((v, f"{path}.{k}" if path else k) for k, v in reversed(node.items()))
+        elif isinstance(node, list):
+            stack.extend((v, f"{path}[{i}]") for i, v in reversed(list(enumerate(node))))
+
+
 def run_json(text: str) -> str:
     """JSON in, JSON out: parse ``text`` as a :class:`~mambo_power.jobs.SolveRequest`, ``run`` it.
 
     Returns ``SolveResult.model_dump_json()``. A request that does not parse is a failed result
     too: an invalid network → ``VALIDATION`` with every issue; malformed JSON or a request of
-    the wrong shape → ``BAD_REQUEST`` with the pydantic errors in ``error.details``. The kind
+    the wrong shape → ``BAD_REQUEST`` with the pydantic errors in ``error.details``; a JSON
+    object repeating a key at any depth → ``BAD_REQUEST`` naming the key and its path, for every
+    kind, because ``json`` would otherwise keep the last value silently. The kind
     and ``job_id`` are echoed when they can be read from the text (``kind = ""`` and no
     provenance otherwise).
     """
     started_at = datetime.now(UTC)
     clock = time.perf_counter()
     try:
+        _reject_duplicate_keys(text)
         request = SolveRequest.model_validate_json(text)
+    except _DuplicateKeyError as exc:
+        kind, job_id = _peek(text)
+        return _failed(
+            kind=kind,
+            job_id=job_id,
+            code="BAD_REQUEST",
+            message=f"request is not a valid SolveRequest: {exc}",
+            started_at=started_at,
+            clock=clock,
+        ).model_dump_json()
     except NetworkValidationError as exc:
         kind, job_id = _peek(text)
         return _failed(

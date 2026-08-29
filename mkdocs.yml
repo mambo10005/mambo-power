@@ -111,6 +111,7 @@ nav:
       - Nodal market: manual/market.md
       - Multiperiod market: manual/multiperiod.md
       - Zonal market: manual/zonal.md
+      - Agent-based bidding: manual/agents.md
       - Results: manual/results.md
       - Jobs API: manual/jobs.md
   - Examples: examples/index.md

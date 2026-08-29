@@ -28,10 +28,11 @@ from __future__ import annotations
 
 import json
 import warnings
+from datetime import UTC, datetime
 from typing import Any, NoReturn
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import mambo_power
 from mambo_power import jobs
@@ -50,14 +51,16 @@ from mambo_power.jobs import (
 )
 from mambo_power.jobs import registry as jobs_registry
 from mambo_power.market import CorridorLimit, MarketMultiperiodOptions, MarketNodalOptions
+from mambo_power.market.agents import MarketAgentsOptions
 from mambo_power.market.zonal import MarketZonalOptions
-from mambo_power.model import Network, Period, Scenario
+from mambo_power.model import Network, Period, Scenario, validate_network
 from mambo_power.numerics import SetpointConflictWarning
 from mambo_power.opf import OpfDcOptions
 from mambo_power.pf import AcOptions, solve_ac, solve_dc
 from mambo_power.results import (
     AcPowerFlowResult,
     DcPowerFlowResult,
+    MarketAgentsResult,
     MarketMultiperiodResult,
     MarketNodalResult,
     MarketZonalResult,
@@ -65,23 +68,24 @@ from mambo_power.results import (
     OpfDcResult,
     ResultProvenance,
 )
+from tests._agents import duopoly_network, smooth_pivotal_network
 from tests._fixtures import FIXTURES_DIR
 from tests._rated import rated_network
 from tests._zones import corridors, promote_areas_to_zones
 
 DERIVED_DIR = FIXTURES_DIR / "derived"
 TIMING = {"provenance": {"started_at", "elapsed_s"}}
-# NOTE (S7/AC-7, and again M6/S7b/AC-7): widened from the M4 set of 5 to include
-# "market.multiperiod" (M5), then to include "market.zonal" (M6) -- the one deliberate edit to a
-# pre-existing line in this file, unavoidable because this constant is compared against
-# jobs.KINDS by test_kinds_lists_exactly_the_m3_kinds/
+# NOTE (S7/AC-7, again M6/S7b/AC-7, and again M7/S7/AC-6): widened from the M4 set of 5 to
+# include "market.multiperiod" (M5), then "market.zonal" (M6), then "market.agents" (M7) -- the
+# one deliberate edit to a pre-existing line in this file, unavoidable because this constant is
+# compared against jobs.KINDS by test_kinds_lists_exactly_the_m3_kinds/
 # test_register_adds_a_kind_and_refuses_duplicates, both of which assert the *current* set of
-# registered kinds. Wave M6's AC-7 requires "jobs.KINDS lists exactly 7 kinds", so leaving this
-# at 6 would make those two pre-existing tests assert something now false, not preserve a
+# registered kinds. Wave M7's AC-6 requires "jobs.KINDS lists exactly 8 kinds", so leaving this
+# at 7 would make those two pre-existing tests assert something now false, not preserve a
 # compatibility guarantee -- the same treatment wave M4 gave this identical line when it added
-# "market.nodal" as the 5th kind, and wave M5 gave it again for the 6th. No other pre-existing
-# line in this file is touched; the request/response *compatibility* tests below are added new,
-# alongside the untouched originals.
+# "market.nodal" as the 5th kind, wave M5 gave it for the 6th, and wave M6 gave it for the 7th.
+# No other pre-existing line in this file is touched; the request/response *compatibility* tests
+# below are added new, alongside the untouched originals.
 KNOWN_KINDS = {
     "pf.ac",
     "pf.dc",
@@ -90,6 +94,7 @@ KNOWN_KINDS = {
     "market.nodal",
     "market.multiperiod",
     "market.zonal",
+    "market.agents",
 }
 
 
@@ -558,11 +563,14 @@ def test_non_convergence_is_ok_with_converged_false(case14: Network) -> None:
 # SolveRequest(kind=..., network=...) construction or any pre-existing serialized JSON.
 # =================================================================================================
 
-# NOTE (M6/S7b/AC-7): renamed from ALL_SIX_KINDS and widened with "market.zonal" -- the same kind
-# of unavoidable, count-bearing rename KNOWN_KINDS documents above (its own name would otherwise
-# assert a false "six" once a 7th kind exists). Its one usage (the purity parametrize below) and
-# the comment naming it were updated together; nothing else in this M5 section changed.
-ALL_SEVEN_KINDS = (
+# NOTE (M6/S7b/AC-7, again M7/S7/AC-6): renamed from ALL_SIX_KINDS and widened with
+# "market.zonal", then renamed again and widened with "market.agents" -- the same kind of
+# unavoidable, count-bearing rename KNOWN_KINDS documents above (its own name would otherwise
+# assert a false "seven" once an 8th kind exists). Its one usage (the purity parametrize below)
+# and the comment naming it were updated together; nothing else in this M5 section changed.
+# "market.agents" runs on case14 with no options (strategies={} default) exactly as every other
+# kind's purity check does: nobody bids strategically, so it clears like a plain market.nodal run.
+ALL_EIGHT_KINDS = (
     "pf.ac",
     "pf.dc",
     "opf.dc",
@@ -570,6 +578,7 @@ ALL_SEVEN_KINDS = (
     "market.nodal",
     "market.multiperiod",
     "market.zonal",
+    "market.agents",
 )
 
 
@@ -584,10 +593,10 @@ def _two_period_scenario(case14: Network) -> Scenario:
 
 # --- KINDS contract: the 6th kind -------------------------------------------------------------
 def test_kinds_registers_market_multiperiod_as_the_sixth_kind() -> None:
-    # NOTE (M6/S7b/AC-7): bumped 6 -> 7, the same necessary-count-edit treatment KNOWN_KINDS
-    # documents above -- a 7th kind (market.zonal) is now registered too, and this pre-existing
-    # exact-count assertion would otherwise assert something now false.
-    assert len(KINDS) == 7
+    # NOTE (M6/S7b/AC-7, bumped again M7/S7/AC-6): 6 -> 7 -> 8, the same necessary-count-edit
+    # treatment KNOWN_KINDS documents above -- an 8th kind (market.agents) is now registered too,
+    # and this pre-existing exact-count assertion would otherwise assert something now false.
+    assert len(KINDS) == 8
     assert "market.multiperiod" in KINDS
     spec = KINDS["market.multiperiod"]
     assert spec.options_model is MarketMultiperiodOptions
@@ -695,9 +704,9 @@ def test_run_market_multiperiod_with_real_periods_via_scenario(case14: Network) 
     assert len(out.result.periods) == 2
 
 
-# --- purity, across all seven kinds -----------------------------------------------------------
-@pytest.mark.parametrize("kind", ALL_SEVEN_KINDS)
-def test_run_is_pure_across_all_seven_kinds(kind: str, case14: Network) -> None:
+# --- purity, across all eight kinds -----------------------------------------------------------
+@pytest.mark.parametrize("kind", ALL_EIGHT_KINDS)
+def test_run_is_pure_across_all_eight_kinds(kind: str, case14: Network) -> None:
     req = SolveRequest(kind=kind, network=case14)
     first, second = run(req), run(req)
     assert first.result is not None and second.result is not None
@@ -815,7 +824,9 @@ def _case30_zonal_options(net: Network) -> MarketZonalOptions:
 
 # --- KINDS contract: the 7th kind ---------------------------------------------------------------
 def test_kinds_registers_market_zonal_as_the_seventh_kind() -> None:
-    assert len(KINDS) == 7
+    # NOTE (M7/S7/AC-6): bumped 7 -> 8, the same treatment given to the 6th kind's own count
+    # assertion above -- an 8th kind (market.agents) is now registered too.
+    assert len(KINDS) == 8
     assert "market.zonal" in KINDS
     spec = KINDS["market.zonal"]
     assert spec.options_model is MarketZonalOptions
@@ -1146,3 +1157,470 @@ def test_prior_kinds_still_accept_their_existing_scenario_form_unchanged(
     assert out.status == "ok"
     assert out.error is None
     assert out.result is not None
+
+
+# =================================================================================================
+# wave M7 S7 / AC-6 -- the market.agents kind, jobs.KINDS widened from 7 to exactly 8. Every test
+# below is *added*; the pre-existing lines touched are the ones AC-6 itself forces -- KNOWN_KINDS,
+# ALL_SEVEN_KINDS -> ALL_EIGHT_KINDS with its one usage and comment, and the two pre-existing
+# exact-count assertions bumped 7 -> 8 (test_kinds_registers_market_multiperiod_as_the_sixth_kind,
+# test_kinds_registers_market_zonal_as_the_seventh_kind) -- each explained at its own site above,
+# the same treatment wave M6 gave this file when it added market.zonal.
+#
+# AC-6's engine-side half (an unknown strategy kind, a strategy naming a nonexistent generator,
+# non-positive max_iterations/offer_tol -> BAD_OPTIONS or VALIDATION, never INTERNAL) is proved
+# directly on solve_agents/MarketAgentsOptions in tests/unit/test_market_agents.py -- this section
+# proves the jobs-surface half: that run()/run_json() actually deliver that classification rather
+# than routing it into run()'s INTERNAL catch-all, which is the mapping M6's own walk found four
+# instances of on market.zonal.
+# =================================================================================================
+
+
+def _price_taker_options(*gen_ids: str) -> MarketAgentsOptions:
+    return MarketAgentsOptions(strategies={gen_id: {"kind": "price_taker"} for gen_id in gen_ids})
+
+
+def _markup_options(
+    *gen_ids: str, step: float = 0.5, max_iterations: int = 400
+) -> MarketAgentsOptions:
+    """A markup config for each of *gen_ids*, with A9's derived ``offer_tol`` of ``3 * step`` --
+    mirrors ``tests/unit/test_market_agents.py``'s own ``_markup_options`` helper (a different
+    module's private helper, so duplicated rather than imported, the same way this file already
+    duplicates ``_case30_zonal_options`` rather than reaching into ``test_market_zonal.py``)."""
+    return MarketAgentsOptions(
+        strategies={gen_id: {"kind": "markup", "step": step} for gen_id in gen_ids},
+        offer_tol=3.0 * step,
+        max_iterations=max_iterations,
+    )
+
+
+# --- KINDS contract: the 8th kind -----------------------------------------------------------------
+def test_kinds_registers_market_agents_as_the_eighth_kind() -> None:
+    assert len(KINDS) == 8
+    assert "market.agents" in KINDS
+    spec = KINDS["market.agents"]
+    assert spec.options_model is MarketAgentsOptions
+    assert spec.result_model is MarketAgentsResult
+    assert callable(spec.runner)
+
+
+def test_kinds_is_sorted_with_market_agents_in_place() -> None:
+    assert kinds() == sorted(KNOWN_KINDS)
+    assert "market.agents" in kinds()
+
+
+# --- market.agents happy path, tests/_agents.py fixtures -----------------------------------------
+def test_run_market_agents_on_smooth_pivotal_is_ok_with_typed_result_and_provenance() -> None:
+    net = smooth_pivotal_network()
+    options = _price_taker_options("strategic")
+    out = run(SolveRequest(kind="market.agents", network=net, options=options.model_dump()))
+    assert out.status == "ok"
+    assert out.error is None
+    assert isinstance(out.result, MarketAgentsResult)
+    assert out.result.status == "Optimal"
+    assert out.result.converged is True
+    assert out.result.termination_reason == "converged"
+    assert [row.id for row in out.result.offers] == ["strategic"]
+    assert out.result.offers[0].strategy == "price_taker"
+    assert out.result.offers[0].markup == pytest.approx(0.0)
+    assert out.provenance is not None
+    assert out.provenance.kind == "market.agents"
+    assert out.provenance == out.result.provenance
+    assert out.provenance.options["strategies"] == {"strategic": {"kind": "price_taker"}}
+
+
+def test_run_market_agents_with_no_options_is_ok_no_agents_case14(case14: Network) -> None:
+    """``market.agents`` takes the same ``network=`` single-period request every prior kind's
+    jobs smoke test uses, with no options needed at all (``MarketAgentsOptions.strategies``
+    defaults to ``{}`` -- nobody bids strategically, so it clears like a plain price-taking
+    market)."""
+    out = run(SolveRequest(kind="market.agents", network=case14))
+    assert out.status == "ok"
+    assert isinstance(out.result, MarketAgentsResult)
+    assert out.result.status == "Optimal"
+    assert out.result.offers == []
+    assert out.result.generators  # generators still clear -- just not as named agents
+    assert out.result.termination_reason == "converged"  # a single round always repeats itself
+
+
+# --- purity, JSON round trip, options preserved (StrategyConfig union crosses as data) -----------
+def test_run_is_pure_for_market_agents_with_a_markup_strategy() -> None:
+    net = duopoly_network()
+    options = _markup_options("agent_a", "agent_b")
+    req = SolveRequest(kind="market.agents", network=net, options=options.model_dump())
+    first, second = run(req), run(req)
+    assert first.result is not None and second.result is not None
+    assert isinstance(first.result, MarketAgentsResult)
+    assert first.result.model_dump(exclude=TIMING) == second.result.model_dump(exclude=TIMING)
+
+
+def test_request_with_market_agents_strategy_config_round_trips_through_json() -> None:
+    """AC-6's own clause: a request carrying ``StrategyConfig`` (here ``MarkupConfig``, whose
+    ``step`` is the union member with a parameter to actually round-trip) survives
+    ``model_dump_json`` / ``model_validate_json`` exactly."""
+    net = duopoly_network()
+    options = _markup_options("agent_a", "agent_b")
+    req = SolveRequest(
+        kind="market.agents", network=net, options=options.model_dump(), job_id="ma-1"
+    )
+    again = SolveRequest.model_validate_json(req.model_dump_json())
+    assert again == req
+    assert again.options["strategies"] == {
+        "agent_a": {"kind": "markup", "step": 0.5},
+        "agent_b": {"kind": "markup", "step": 0.5},
+    }
+
+
+def test_result_round_trips_through_json_for_market_agents() -> None:
+    net = duopoly_network()
+    options = _markup_options("agent_a", "agent_b")
+    out = run(SolveRequest(kind="market.agents", network=net, options=options.model_dump()))
+    again = SolveResult.model_validate_json(out.model_dump_json())
+    assert again == out
+    assert type(again.result) is MarketAgentsResult
+
+
+def test_market_agents_strategy_config_round_trips_through_run_json_as_data_not_a_callable() -> (
+    None
+):
+    """AC-6: ``run_json`` (JSON text in, JSON text out -- not a dict, the mistake this project has
+    made before) for ``market.agents`` with a real ``StrategyConfig`` populated. The union crosses
+    as a plain JSON object tagged by ``kind``: no Python-importable path, no ``__module__``/
+    ``__qualname__``, nothing a deserializer could turn back into a callable -- only the ``kind``
+    string and the ``step`` number ``build_strategy`` reads."""
+    net = duopoly_network()
+    options = _markup_options("agent_a", "agent_b")
+    req = SolveRequest(
+        kind="market.agents", network=net, options=options.model_dump(), job_id="ma-2"
+    )
+    out_text = run_json(req.model_dump_json())
+    payload = json.loads(out_text)
+    assert payload["status"] == "ok", payload.get("error")
+    assert payload["kind"] == "market.agents"
+    assert payload["job_id"] == "ma-2"
+    strategies = payload["provenance"]["options"]["strategies"]
+    assert strategies == {
+        "agent_a": {"kind": "markup", "step": 0.5},
+        "agent_b": {"kind": "markup", "step": 0.5},
+    }
+    for config in strategies.values():
+        assert set(config) == {"kind", "step"}  # data only -- no callable/path-shaped field
+    out = SolveResult.model_validate_json(out_text)
+    assert isinstance(out.result, MarketAgentsResult)
+    assert {row.id: row.strategy for row in out.result.offers} == {
+        "agent_a": "markup",
+        "agent_b": "markup",
+    }
+
+
+def test_run_json_rejects_a_duplicated_strategies_key_as_bad_request() -> None:
+    """AC-6's last clause: "never a silently accepted last-wins duplicate". Python's JSON parser
+    (and pydantic's) keep the *last* of two equal keys and say nothing, so a request that named
+    generator ``agent_a`` twice under ``options.strategies`` -- once a price-taker, once a markup
+    agent -- ran to ``status=ok`` with only the markup one in the provenance (audit finding 3).
+    It must fail the way malformed JSON fails: ``BAD_REQUEST``, naming the key, before any solve.
+    """
+    net = duopoly_network()
+    req = SolveRequest(
+        kind="market.agents",
+        network=net,
+        options=_markup_options("agent_a", "agent_b").model_dump(),
+        job_id="dup-1",
+    )
+    text = req.model_dump_json()
+    marker = '"agent_b":{"kind":"markup","step":0.5}'
+    assert text.count(marker) == 1
+    duplicated = text.replace(marker, '"agent_a":{"kind":"price_taker"},' + marker)
+    assert duplicated.count('"agent_a":{"kind"') == 2  # the generator itself is named elsewhere
+
+    out = SolveResult.model_validate_json(run_json(duplicated))
+    error = _assert_failed(out, "BAD_REQUEST")
+    assert out.kind == "market.agents" and out.job_id == "dup-1"
+    assert "duplicate" in error.message.lower()
+    assert '"agent_a"' in error.message
+    assert "options.strategies" in error.message
+    # the same text with the duplicate removed is the request every other test runs: still ok
+    assert json.loads(run_json(text))["status"] == "ok"
+
+
+def test_run_json_rejects_a_duplicated_top_level_key_as_bad_request_for_any_kind() -> None:
+    """The check is at the parse, so it is not a ``market.agents`` rule: a duplicated ``kind`` on
+    a ``pf.dc`` request is the same ``BAD_REQUEST``, and a duplicate at any depth (here inside
+    ``network``) is too."""
+    req = SolveRequest(kind="pf.dc", network=_network("case14"), job_id="dup-2")
+    text = req.model_dump_json()
+    assert text.startswith('{"kind":"pf.dc",')
+    top = text.replace('{"kind":"pf.dc",', '{"kind":"pf.ac","kind":"pf.dc",', 1)
+    out = SolveResult.model_validate_json(run_json(top))
+    error = _assert_failed(out, "BAD_REQUEST")
+    assert '"kind"' in error.message and "duplicate" in error.message.lower()
+    assert out.kind == "pf.dc" and out.job_id == "dup-2"  # still echoed, best-effort as ever
+
+    assert '"base_mva":100.0,' in text
+    deep = text.replace('"base_mva":100.0,', '"base_mva":100.0,"base_mva":100.0,', 1)
+    error = _assert_failed(SolveResult.model_validate_json(run_json(deep)), "BAD_REQUEST")
+    assert '"base_mva"' in error.message and "network" in error.message
+
+
+# --- never raises: the four AC-6 caller mistakes, each mapped away from INTERNAL -----------------
+def test_market_agents_unknown_strategy_kind_is_bad_options() -> None:
+    net = smooth_pivotal_network()
+    out = run(
+        SolveRequest(
+            kind="market.agents",
+            network=net,
+            options={"strategies": {"strategic": {"kind": "bogus"}}},
+        )
+    )
+    error = _assert_failed(out, "BAD_OPTIONS")
+    assert "bogus" in error.message
+    assert error.details is not None
+    assert error.details[0]["loc"] == ["strategies", "strategic"]
+
+
+def test_market_agents_strategy_naming_a_nonexistent_generator_is_a_validation_failure() -> None:
+    """The market.agents analogue of M6's walk-found zonal defect (four caller mistakes reported
+    as INTERNAL): a strategy naming a generator the network does not have must land as
+    VALIDATION, with the offending generator id in the message, not as an engine bug."""
+    net = smooth_pivotal_network()
+    out = run(
+        SolveRequest(
+            kind="market.agents",
+            network=net,
+            options={"strategies": {"ghost": {"kind": "price_taker"}}},
+        )
+    )
+    error = _assert_failed(out, "VALIDATION")
+    assert "ghost" in error.message
+    assert "not in the network" in error.message
+    assert error.issues is not None
+    assert [issue.code for issue in error.issues] == ["DANGLING_REF"]
+    assert error.issues[0].path == "options.strategies"
+
+
+@pytest.mark.parametrize(
+    ("options", "match"),
+    [
+        pytest.param({"max_iterations": 0}, "greater than 0", id="max-iterations-zero"),
+        pytest.param({"max_iterations": -3}, "greater than 0", id="max-iterations-negative"),
+        pytest.param({"offer_tol": 0.0}, "greater than 0", id="offer-tol-zero"),
+        pytest.param({"offer_tol": -1.0}, "greater than 0", id="offer-tol-negative"),
+    ],
+)
+def test_market_agents_non_positive_bounds_are_bad_options(
+    options: dict[str, object], match: str
+) -> None:
+    net = smooth_pivotal_network()
+    error = _assert_failed(
+        run(SolveRequest(kind="market.agents", network=net, options=options)), "BAD_OPTIONS"
+    )
+    assert match in error.message
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({"strategies": {"strategic": {"kind": "bogus"}}}, id="unknown-strategy-kind"),
+        pytest.param(
+            {"strategies": {"ghost": {"kind": "price_taker"}}}, id="nonexistent-generator"
+        ),
+        pytest.param({"max_iterations": 0}, id="non-positive-max-iterations"),
+        pytest.param({"offer_tol": 0.0}, id="non-positive-offer-tol"),
+    ],
+)
+def test_ac6_four_caller_mistakes_never_report_internal(options: dict[str, object]) -> None:
+    """AC-6, stated directly: each of the four named caller mistakes maps to BAD_OPTIONS or
+    VALIDATION -- never INTERNAL, and never a silently-accepted result."""
+    net = smooth_pivotal_network()
+    out = run(SolveRequest(kind="market.agents", network=net, options=options))
+    assert out.status == "failed"
+    assert out.result is None
+    assert out.error is not None
+    assert out.error.code in ("BAD_OPTIONS", "VALIDATION")
+
+
+def test_market_agents_markup_on_a_quadratic_cost_is_a_validation_failure(
+    case14: Network,
+) -> None:
+    """The first mistake every user makes (walk finding, M7 S9 fix 2): every generator in every
+    bundled MATPOWER case carries a quadratic cost, and ``MarkupStrategy`` supports only a linear
+    one. That is a caller mistake about how ``options.strategies`` relates to the network, so it
+    must land as ``VALIDATION`` naming the generator -- not as ``INTERNAL``, which is where an
+    unlisted ``NotImplementedError`` from inside the loop used to go."""
+    gen_id = case14.generators[0].id
+    assert case14.generators[0].cost is not None
+    assert len(case14.generators[0].cost.coefficients) == 3  # quadratic, the premise
+    out = run(
+        SolveRequest(
+            kind="market.agents",
+            network=case14,
+            options={"strategies": {gen_id: {"kind": "markup", "step": 0.5}}, "offer_tol": 1.5},
+        )
+    )
+    error = _assert_failed(out, "VALIDATION")
+    assert f'"{gen_id}"' in error.message
+    assert "only a linear PolynomialCost" in error.message
+    assert error.issues is not None
+    assert [issue.code for issue in error.issues] == ["DANGLING_REF"]
+    assert error.issues[0].path == "options.strategies"
+
+
+def test_market_agents_reports_an_engine_error_with_the_same_code_as_market_nodal(
+    case14: Network,
+) -> None:
+    """Audit finding 2 (M7 S10): the runner's ``except`` must catch only the *agent-set*
+    mistakes, never an error the clearing itself raises. A non-convex generator cost passes
+    ``validate_network`` (``c2 < 0`` is a legal polynomial) and is rejected by ``dc_opf`` with a
+    ``NonConvexCostError`` -- a ``ValueError`` subclass -- under every kind that clears it. The
+    same bad network must get the same verdict from ``market.agents`` as from ``market.nodal``,
+    and that verdict is not ``VALIDATION`` blamed on ``options.strategies``, a field the caller
+    need not even have set (here every generator is a price-taker, the default)."""
+    gens = list(case14.generators)
+    cost = gens[0].cost
+    assert cost is not None and len(cost.coefficients) == 3  # quadratic, the premise
+    bad_cost = cost.model_copy(update={"coefficients": [-0.01, *cost.coefficients[1:]]})
+    gens[0] = gens[0].model_copy(update={"cost": bad_cost})
+    net = case14.model_copy(update={"generators": gens})
+    assert not validate_network(net)  # legal data: the engine, not the model, sees the mistake
+
+    nodal = run(SolveRequest(kind="market.nodal", network=net))
+    agents = run(SolveRequest(kind="market.agents", network=net))
+    nodal_error = _assert_failed(nodal, nodal.error.code if nodal.error else "")
+    agents_error = _assert_failed(agents, agents.error.code if agents.error else "")
+    assert agents_error.code == nodal_error.code
+    assert agents_error.code != "VALIDATION"
+    assert "NonConvexCostError" in agents_error.message
+    assert agents_error.issues is None
+
+
+def test_market_agents_shares_the_status_translation_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Design item 6 (reused, not re-implemented a fifth time): spies on the same
+    ``_translate_non_optimal_status`` object every other market kind's runner already shares,
+    confirming ``market.agents``'s runner exercises that identical function object too. Stubs
+    ``solve_agents`` itself (rather than hand-building a genuinely infeasible LP) because every
+    ``tests/_agents.py`` fixture's load is elastic, so an infeasible market.agents clearing is not
+    reachable by collapsing generator capacity the way case14's fixed-load infeasibility is."""
+    original = jobs_registry._translate_non_optimal_status
+    calls: list[str] = []
+
+    def spy(kind: str, status: str, message: str | None) -> NoReturn:
+        calls.append(kind)
+        original(kind, status, message)
+
+    monkeypatch.setattr(jobs_registry, "_translate_non_optimal_status", spy)
+
+    def stub_infeasible(scenario: Scenario, options: object = None, **kwargs: object) -> object:
+        return MarketAgentsResult(
+            provenance=ResultProvenance(
+                engine="mambo-power",
+                version=mambo_power.__version__,
+                kind="market.agents",
+                solver="highspy.Highs",
+                started_at=datetime.now(UTC),
+                elapsed_s=0.0,
+                options={},
+            ),
+            status="Infeasible",
+            message="stubbed for the status-translation spy",
+            termination_reason=None,
+        )
+
+    monkeypatch.setattr(jobs_registry, "solve_agents", stub_infeasible)
+    out = run(SolveRequest(kind="market.agents", network=smooth_pivotal_network()))
+    error = _assert_failed(out, "INFEASIBLE_LP")
+    assert "stubbed for the status-translation spy" in error.message
+    assert calls == ["market.agents"]
+
+
+class _UnregisteredResultModel(BaseModel):
+    """A pydantic model shaped like a result but deliberately never added to ``jobs.models.
+    ResultModel`` -- the one shape ``run.py:198``'s ``isinstance(raw, ResultModel)`` guard exists
+    to catch, distinct from the type-mismatch check just above it in the pipeline. Widening
+    ``ResultModel`` for a real kind (this slice's own change to ``jobs/models.py``) makes that
+    checked path exercise-able honestly for *registered* models; this guard is what still catches
+    a kind whose ``result_model`` was registered but never added to the union -- exactly the
+    "F7" ownership gap this slice's own dispatch hit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    marker: str = "not a real result"
+
+
+def test_run_py_198_union_guard_still_fires_for_a_result_model_never_added_to_the_union(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``jobs/models.py``'s ``ResultModel`` union was just widened to admit ``MarketAgentsResult``
+    -- this proves that widening did not make ``run.py:198``'s own ``isinstance(raw, ResultModel)``
+    guard decorative. Distinguished from ``test_runner_returning_the_wrong_type_is_internal``
+    (which exercises the *earlier* ``type(raw) is not spec.result_model`` check, by returning some
+    other *registered* kind's model): here ``type(raw) is spec.result_model`` holds -- the runner
+    returns exactly the type its own ``KindSpec.result_model`` names -- so only the union
+    membership check can catch it, which is the specific failure mode a slice forgetting to widen
+    ``ResultModel`` (this slice's own near-miss) would produce."""
+    monkeypatch.setitem(
+        KINDS,
+        "market.agents",
+        KindSpec(
+            kind="market.agents",
+            options_model=MarketAgentsOptions,
+            result_model=_UnregisteredResultModel,
+            runner=lambda scenario, options: _UnregisteredResultModel(),
+        ),
+    )
+    error = _assert_failed(
+        run(SolveRequest(kind="market.agents", network=smooth_pivotal_network())), "INTERNAL"
+    )
+    assert "_UnregisteredResultModel" in error.message
+    assert "is not in SolveResult.result" in error.message  # the union guard's own wording
+
+
+# --- backward compatibility: all seven prior kinds unchanged --------------------------------------
+PRIOR_SEVEN_KINDS = (
+    "pf.ac",
+    "pf.dc",
+    "opf.dc",
+    "n1",
+    "market.nodal",
+    "market.multiperiod",
+    "market.zonal",
+)
+
+
+@pytest.mark.parametrize("kind", PRIOR_SEVEN_KINDS)
+def test_prior_seven_kinds_still_accept_their_existing_network_form_unchanged(
+    kind: str, case14: Network
+) -> None:
+    """AC-6's explicit clause: registering ``market.agents`` as the 8th kind changes nothing about
+    the seven that came before it -- every pre-existing ``SolveRequest(kind=..., network=...)``
+    construction still resolves and runs exactly as it did before this slice."""
+    out = run(SolveRequest(kind=kind, network=case14))
+    assert out.status == "ok"
+    assert out.error is None
+    assert out.result is not None
+
+
+def test_run_json_accepts_a_request_whose_only_oddity_is_a_key_spelled_like_a_marker() -> None:
+    """The duplicate-key path finder marks nodes with an attribute, not a key: a request that
+    legitimately carries a key named ``__dup__`` (here an unknown option pydantic will reject on
+    its own terms, not as a duplicate) must never be reported as a duplicate."""
+    req = SolveRequest(kind="pf.dc", network=duopoly_network(), job_id="marker-1")
+    text = req.model_dump_json()
+    assert text.count('"options":{}') == 1
+    with_marker = text.replace('"options":{}', '"options":{"__dup__":1}', 1)
+    out = SolveResult.model_validate_json(run_json(with_marker))
+    assert out.error is not None and "duplicate" not in out.error.message.lower()
+    assert out.error.code == "BAD_OPTIONS"  # pf.dc takes no options: pydantic's verdict, not ours
+
+
+@pytest.mark.parametrize("depth", [990, 1100, 5000])
+def test_run_json_deep_nesting_is_bad_request_at_every_depth_not_internal(depth: int) -> None:
+    """The duplicate-key check must not turn a deep request into ``INTERNAL``: at 12aa3ce a
+    recursive path walk outside the parse guard raised ``RecursionError`` between roughly depth
+    1000 and the point where ``json.loads`` itself overflows, and only that band said
+    ``INTERNAL`` (critic finding 11). The walk is now iterative and skipped on clean input."""
+    text = '{"kind":"pf.dc","network":' + "[" * depth + "]" * depth + "}"
+    out = SolveResult.model_validate_json(run_json(text))
+    assert out.status == "failed" and out.error is not None
+    assert out.error.code == "BAD_REQUEST", out.error

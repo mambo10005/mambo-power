@@ -7,6 +7,13 @@ id-keyed-result shape) but pulls both generator costs (``Generator.cost``) and l
 settlement (payments, receipts, congestion rent): total load payment minus total generator
 receipts equals the congestion rent, i.e. ``-sum(mu_k * flow_k)`` over the binding branches
 (see the wave spec's AC-4 for the exact identity and its proof).
+
+**Branch rows (M7 W4, AC-8).** ``dc_opf``'s own :class:`~mambo_power.opf.dc_opf.OpfSolution`
+carries no per-branch flow -- only the PTDF matrix and the flow-limit duals -- so the flow
+``flow_k = PTDF[k] . (net injection) + phase-shift injection`` is derived from the dispatch already
+solved for, in :func:`mambo_power.market._clearing.clearing_rows`: one construction, shared with
+:func:`mambo_power.market.agents.solve_agents` (M7 S11), and not a parallel formula -- see that
+module's docstring for the derivation and the AC-8 readback that checks it.
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, ConfigDict
 
 import mambo_power
+from mambo_power.market._clearing import clearing_rows
 from mambo_power.model import Network, Scenario
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.opf import gen_cost_coeffs
@@ -27,13 +35,7 @@ from mambo_power.opf.dc_opf import (
     dc_opf,
     lmp_decomposition,
 )
-from mambo_power.results import (
-    BusLmpResult,
-    GenDispatchResult,
-    LoadDispatchResult,
-    MarketNodalResult,
-    ResultProvenance,
-)
+from mambo_power.results import BusLmpResult, MarketNodalResult, ResultProvenance
 
 __all__ = [
     "MarketNodalOptions",
@@ -138,37 +140,19 @@ def solve_nodal(scenario: Scenario, options: MarketNodalOptions | None = None) -
     # mirroring solve_dc_opf's own reuse (review Performance FLAG, carried forward from M3).
     ptdf_matrix = solution.ptdf
     lmp = lmp_decomposition(solution.duals, ptdf_matrix)
-    lmp_by_bus_id = {bus_id: float(lmp.lmp[i]) for i, bus_id in enumerate(arr.bus_ids)}
-
-    generators = [
-        GenDispatchResult(
-            id=gen_id,
-            bus=arr.bus_ids[int(arr.gen_bus[i])],
-            p_mw=float(solution.dispatch_mw[i]),
-            bound_dual=float(solution.duals.gen_bound[i]),
-        )
-        for i, gen_id in enumerate(arr.gen_ids)
-    ]
-
-    # Every load gets a row (results/market.py's LoadDispatchResult docstring): a bid load's
-    # dispatch/bound comes from OpfSolution.demand_dispatch_mw/demand_bound, in the same
-    # load-index order dc_opf itself uses (sorted(demand_bid_coeffs.keys() |
-    # demand_pwl_bids.keys())); a non-bid load stays at its own fixed Load.p_mw with
-    # bound_dual 0.0 (it is not an LP column).
+    # Every load gets a row, and the branch rows and settlement are the one construction shared
+    # with market.agents (market/_clearing.py, whose docstring carries the AC-8 derivation and
+    # the settlement note this block used to carry). The elastic load indices are handed over in
+    # the same load-index order dc_opf itself uses (sorted(demand_bid_coeffs.keys() |
+    # demand_pwl_bids.keys())).
     elastic_idxs = sorted(set(demand_bid_coeffs) | set(demand_pwl_bids))
-    elastic_pos = {idx: j for j, idx in enumerate(elastic_idxs)}
-    loads_by_id = {ld.id: ld for ld in net.loads}
-    loads = []
-    for i, load_id in enumerate(arr.load_ids):
-        bus_id = arr.bus_ids[int(arr.load_bus[i])]
-        j = elastic_pos.get(i)
-        if j is not None:
-            p_mw = float(solution.demand_dispatch_mw[j])
-            bound_dual = float(solution.demand_bound[j])
-        else:
-            p_mw = float(loads_by_id[load_id].p_mw)
-            bound_dual = 0.0
-        loads.append(LoadDispatchResult(id=load_id, bus=bus_id, p_mw=p_mw, bound_dual=bound_dual))
+    rows = clearing_rows(net, arr, solution, lmp.lmp, elastic_idxs)
+    generators, loads, branches = rows.generators, rows.loads, rows.branches
+    total_load_payment, total_generator_receipts = (
+        rows.total_load_payment,
+        rows.total_generator_receipts,
+    )
+    congestion_rent = total_load_payment - total_generator_receipts
 
     buses = [
         BusLmpResult(
@@ -180,15 +164,6 @@ def solve_nodal(scenario: Scenario, options: MarketNodalOptions | None = None) -
         for i, bus_id in enumerate(arr.bus_ids)
     ]
 
-    # Settlement (module docstring): total_load_payment and
-    # total_generator_receipts are each computed directly from dispatch and LMPs, as their own
-    # independently meaningful quantities -- not asserted equal to the identity's other
-    # (flow-based) side by construction. tests/unit/test_market_nodal.py's AC-4 test proves the
-    # equality holds, independently.
-    total_load_payment = sum(lmp_by_bus_id[row.bus] * row.p_mw for row in loads)
-    total_generator_receipts = sum(lmp_by_bus_id[row.bus] * row.p_mw for row in generators)
-    congestion_rent = total_load_payment - total_generator_receipts
-
     return MarketNodalResult(
         provenance=provenance,
         status=solution.status,
@@ -196,6 +171,7 @@ def solve_nodal(scenario: Scenario, options: MarketNodalOptions | None = None) -
         generators=generators,
         loads=loads,
         buses=buses,
+        branches=branches,
         total_load_payment=total_load_payment,
         total_generator_receipts=total_generator_receipts,
         congestion_rent=congestion_rent,
