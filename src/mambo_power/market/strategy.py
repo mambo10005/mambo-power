@@ -244,7 +244,7 @@ class MarkupStrategy:
     * *direction* reverses if the last move made things *really* worse: ``profit[t-1] <
       profit[t-2]`` **and** the two are not a tie within ``math.isclose(..., rel_tol=1e-9,
       abs_tol=1e-9)``. The tolerance is relative, not the reference probe's absolute ``1e-9``
-      (``.bionic/tmp/m7-a4-two-point-climb.py:79``): an agent sitting at capacity while price is
+      (``.bionic/docs/record/m7-tmp/m7-a4-two-point-climb.py:79``): an agent sitting at capacity while price is
       set elsewhere sees consecutive rounds whose LMP differs only by the solver's own ULP noise
       -- on the AC-5 duopoly (300 MW, price $40.00) that is a profit difference of order
       ``1e-12``, comfortably inside a relative 1e-9 band and comfortably outside what an absolute

@@ -15,7 +15,7 @@ one ad hoc per test.
   polynomial one: AC-3(a) does not know it is the only path a piecewise offer reaches the array
   builder through this wave, but that is exactly what makes it load-bearing.
 * :class:`~mambo_power.market.strategy.MarkupStrategy`'s two-point climb is checked against the
-  rule as measured (A4, ``.bionic/tmp/m7-a4-two-point-climb.py``): direction continues on improved
+  rule as measured (A4, ``.bionic/docs/record/m7-tmp/m7-a4-two-point-climb.py``): direction continues on improved
   profit, reverses on a *real* worsened profit, defaults to ``+1`` with no prior movement, and the
   result never drops below true cost. A tie within relative tolerance -- an agent at capacity
   seeing two rounds of solver-noise-only LMP difference -- must **not** reverse (found downstream
