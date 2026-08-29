@@ -1,7 +1,9 @@
 # `mambo_power.market`
 
-Market clearing at three granularities: one period nodally, a whole horizon, and one period
-zonally with the redispatch that makes it deliverable. See the [nodal manual
+Market clearing at three granularities — one period nodally, a whole horizon, and one period
+zonally with the redispatch that makes it deliverable — and, since M7, a fourth mode in which the
+supply curve is not read from the network but *decided*: generators bid, and the market clears
+their offers. See the [nodal manual
 page](../manual/market.md) for the elastic-demand formulation, LMP/settlement decomposition, the
 price-taker reduction and the oracle convention, the [multiperiod manual
 page](../manual/multiperiod.md) for ramp coupling, storage state of charge, the cyclic horizon
@@ -52,3 +54,27 @@ quadratic cost (147 of 147, measured), so a markup agent applies only to a netwo
 shape.
 
 ::: mambo_power.market.strategy
+
+
+## The best-response loop
+
+`solve_agents` is the fourth market mode, and the first whose *input* is an output of a decision.
+Each round hands every agent its own `Observation`, collects the `GeneratorCost` each one offers,
+and clears those offers through the general array-level path — `gen_cost_coeffs` +
+`load_bid_coeffs` + `dc_opf`, never a delegation to `solve_nodal`. The offers are an **overlay**:
+they reach the clearing as coefficients, and `Generator.cost` is never written to, which is the
+only reason the true cost and the offered cost remain two comparable things.
+
+Updates are simultaneous, in `NetworkArrays` generator order, and that is contract rather than
+implementation detail. Termination is classified by the **amplitude** of the oscillation the loop
+settles into, not by the mere fact of one: a fixed-step climber never comes to rest, it dithers by
+exactly two steps about its optimum, so `offer_tol >= 2 * step` is derived rather than tuned —
+and `MarketAgentsOptions` rejects a configuration that violates it rather than silently reporting
+a successful climb as a cycle. Settlement is computed once, on the final round's clearing, at the
+final round's prices; the intermediate rounds are the agents' search, not markets anybody was paid
+for.
+
+See the [agents manual page](../manual/agents.md) for the loop round by round, the two economic
+statements, and the limits of a local best response.
+
+::: mambo_power.market.agents

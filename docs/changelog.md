@@ -11,6 +11,43 @@ One section per wave, newest first. Nothing on this page has been released. Whic
 merged to `epic/01-foundation` and which are still on their own branch is tracked in [the home
 page's roadmap table](index.md), not restated here, so this page cannot go stale about it.
 
+### Added — wave M7 (agent-based bidding)
+
+- `market.solve_agents(scenario, options=None, *, strategies=None) -> MarketAgentsResult`: the
+  fourth market mode and the first whose input is the output of a decision. Each round every
+  generator's `Strategy` sees an `Observation` (its own true cost, bounds, and its own last two
+  rounds — price at its bus, cleared MW, the offer it made) and returns the linear cost it
+  offers; the market clears the **offered** curves with the ordinary nodal DC-OPF, and the loop
+  repeats until the offers settle. Updates are simultaneous. The observation is an own-node view
+  on purpose: no rival's offer, cost or dispatch ever reaches a strategy.
+- `market.strategy`: the `Strategy` protocol, `PriceTakerStrategy` (offers the true cost
+  verbatim — the same object, not a reconstruction) and `MarkupStrategy` (a two-point hill climb
+  on its own profit with a fixed `step`, never offering below its true cost). `StrategyConfig`
+  is the JSON-facing discriminated union and `build_strategy` turns it into an instance, so a
+  strategy crosses `jobs` as data and never as a callable.
+- `results.MarketAgentsResult`: the final round's nodal result plus per-agent `AgentOfferResult`
+  (true cost, final offer, profit) and a `termination_reason` that is one of three words —
+  `converged`, `iteration_cap`, `cycle` — rather than a flag that could be read as settled when
+  the loop merely stopped. Convergence is decided on the amplitude of the last cycle of offers
+  against `offer_tol`, with a tie rule so that a comparison exact in arithmetic is not decided
+  by float noise (found on both sides of the same boundary during the wave).
+- `jobs`: `kind="market.agents"`, the eighth kind; `MarketAgentsOptions` and its strategies
+  cross as JSON. Caller mistakes (an unknown generator id, `offer_tol` below `2 * step`, a
+  markup strategy on a non-linear cost, a bad iteration cap) map to `VALIDATION`, not
+  `INTERNAL`.
+- `opf.dc_opf` now raises when a generator appears in `pwl_costs` **and** has a nonzero
+  `cost_coeffs` row — the generator-side mirror of the load-side guard that has always existed.
+  Without it the unit's cost is charged twice (polynomial term plus epigraph rows) and the LP
+  solves happily: on case14 the doubly-charged form drove one generator from 223 MW to zero and
+  raised the objective by $2,409.70 with status still `Optimal`. Five waves never hit it because
+  `gen_cost_coeffs` zeroes the row by construction; M7 is the first to assemble coefficients per
+  round from strategy output. Disclosed as a behaviour change.
+- `MarketNodalResult.branches`: per-branch flows on the nodal result, derived from the PTDF
+  matrix and the phase-shift term, so the agents result can report congestion without a second
+  solve.
+- A manual page ([Agent-based bidding](manual/agents.md)) and
+  [`examples/12_agent_market.py`](examples/index.md#12-strategic-bidding).
+
 ### Added — wave M6 (zonal market and redispatch)
 
 - `market.solve_zonal(scenario, options=None) -> MarketZonalResult`: a market cleared at **zonal**

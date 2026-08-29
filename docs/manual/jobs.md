@@ -33,7 +33,7 @@ survive that boundary. `jobs` turns every outcome into data.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `kind` | `str` | One of the keys of `KINDS`: `"pf.ac"`, `"pf.dc"` in M2; `"opf.dc"`, `"n1"` in M3; `"market.nodal"` in M4; `"market.multiperiod"` in M5; `"market.zonal"` in M6; `"market.agents"` in a later wave. |
+| `kind` | `str` | One of the keys of `KINDS`: `"pf.ac"`, `"pf.dc"` in M2; `"opf.dc"`, `"n1"` in M3; `"market.nodal"` in M4; `"market.multiperiod"` in M5; `"market.zonal"` in M6; `"market.agents"` in M7. |
 | `network` | `Network \| None` | The network to solve (inline; the request is self-contained). Mutually exclusive with `scenario`. |
 | `scenario` | `Scenario \| None` | The scenario to solve — a network plus its `periods`. Mutually exclusive with `network`. |
 | `options` | `dict[str, Any]` | Kind-specific options, validated against the kind's options model (`AcOptions` for `pf.ac`; none for `pf.dc`). Unknown keys are a failure, not silently ignored. Default `{}`. |
@@ -73,7 +73,7 @@ an unbounded list in a network-facing model is an unbounded solve.
 | `kind` | `str` | Echo of the request kind (`""` when the request text could not be read at all). |
 | `job_id` | `str \| None` | Echo of the request `job_id`. |
 | `status` | `"ok" \| "failed"` | Outcome. |
-| `result` | kind's result model or `None` | The registered kind's own model — `AcPowerFlowResult` / `DcPowerFlowResult` for the power-flow kinds, `OpfDcResult`, `N1Result`, `MarketNodalResult`, `MarketMultiperiodResult`, `MarketZonalResult` for the rest. Present exactly when `status == "ok"`. |
+| `result` | kind's result model or `None` | The registered kind's own model — `AcPowerFlowResult` / `DcPowerFlowResult` for the power-flow kinds, `OpfDcResult`, `N1Result`, `MarketNodalResult`, `MarketMultiperiodResult`, `MarketZonalResult`, `MarketAgentsResult` for the rest. Present exactly when `status == "ok"`. |
 | `error` | `StructuredError \| None` | Present exactly when `status == "failed"`. |
 | `provenance` | `ResultProvenance \| None` | The solver's stamp on success; a minimal stamp on failure; `None` only when not even the kind was readable. |
 | `warnings` | `list[str]` | Every warning emitted during the solve, as `"Category: message"` strings. |
@@ -102,8 +102,8 @@ discriminator lives on the parent, not inside the result.
 | `VALIDATION` | The network failed validation — on mutation after construction, or in the request JSON (`run_json`); `issues` holds every code and path. |
 | `NO_SLACK_GENERATOR` | The slack bus has no in-service generator (`NoSlackGeneratorError` from `effective_roles`). |
 | `UNSOLVABLE_NETWORK` | A valid network the numerics it was handed to cannot solve, e.g. DC on a branch with `x == 0` (`UnsolvableNetworkError`) — user data, not a solver bug. |
-| `INFEASIBLE_LP` | An `opf.dc`, `market.nodal`, `market.multiperiod` or `market.zonal` LP/QP came back with a non-`"Optimal"`, non-`"Unbounded"` status: there is no feasible dispatch at all, so there is nothing to return. |
-| `UNBOUNDED_LP` | The same four kinds, status `"Unbounded"`. |
+| `INFEASIBLE_LP` | An `opf.dc`, `market.nodal`, `market.multiperiod`, `market.zonal` or `market.agents` LP/QP came back with a non-`"Optimal"`, non-`"Unbounded"` status: there is no feasible dispatch at all, so there is nothing to return. For `market.agents` this is the round the loop stopped in, whichever round that was. |
+| `UNBOUNDED_LP` | The same five kinds, status `"Unbounded"`. |
 | `BAD_REQUEST` | `run_json` only: the text is not valid JSON, not a `SolveRequest`, or carries neither/both of `network` and `scenario`. |
 | `INTERNAL` | Anything else the runner raised (singular matrix, a bug): `"ExceptionType: message"`. |
 
@@ -124,7 +124,7 @@ kinds() -> list[str]                  # sorted names
 ```
 
 The registry is the contract: the contract test asserts `KINDS` lists exactly the kinds the
-wave ships — seven as of M6 — and that every entry's models are importable and its runner
+wave ships — eight as of M7 — and that every entry's models are importable and its runner
 callable. Later waves `register` their kinds; nothing else in the package changes.
 
 Every runner has the one `(Scenario, options) -> result` shape (wave M5). A kind that only
@@ -202,7 +202,7 @@ for name, spec in jobs.KINDS.items():
 ```
 
 ```text
-['market.multiperiod', 'market.nodal', 'market.zonal', 'n1', 'opf.dc', 'pf.ac', 'pf.dc']
+['market.agents', 'market.multiperiod', 'market.nodal', 'market.zonal', 'n1', 'opf.dc', 'pf.ac', 'pf.dc']
 pf.ac AcOptions AcPowerFlowResult
 pf.dc None DcPowerFlowResult
 opf.dc OpfDcOptions OpfDcResult
@@ -210,9 +210,11 @@ n1 N1Options N1Result
 market.nodal MarketNodalOptions MarketNodalResult
 market.multiperiod MarketMultiperiodOptions MarketMultiperiodResult
 market.zonal MarketZonalOptions MarketZonalResult
+market.agents MarketAgentsOptions MarketAgentsResult
 ```
 
-JSON in, JSON out — what a handler or a queue worker does:
+JSON in, JSON out — what a handler or a queue worker does. The byte count below moves by a
+digit or two between runs: `provenance.elapsed_s` is part of the payload.
 
 ```python
 import json
@@ -226,7 +228,7 @@ print(payload["status"], payload["provenance"]["kind"], len(reply))
 
 ```text
 ['error', 'job_id', 'kind', 'provenance', 'result', 'status', 'warnings']
-ok pf.dc 6098
+ok pf.dc 6092
 ```
 
 Behind an HTTP handler there is no translation layer:
@@ -264,7 +266,7 @@ print(noslack.status, noslack.error.code, "|", noslack.error.message)
 ```
 
 ```text
-failed UNKNOWN_KIND | unknown kind "pf.telepathy"; registered kinds: market.multiperiod, market.nodal, market.zonal, n1, opf.dc, pf.ac, pf.dc
+failed UNKNOWN_KIND | unknown kind "pf.telepathy"; registered kinds: market.agents, market.multiperiod, market.nodal, market.zonal, n1, opf.dc, pf.ac, pf.dc
 failed BAD_OPTIONS | [{'type': 'float_parsing', 'loc': ['tol'], 'msg': 'Input should be a valid number, unable to parse string as a number'}]
 failed VALIDATION | ['DANGLING_REF at branches[0].to_bus: branch "branch-1": to_bus references missing bus "bus-999"']
 failed NO_SLACK_GENERATOR | slack bus "bus-1" (position 0) has no in-service generator; a power flow cannot close the balance
@@ -330,10 +332,45 @@ Its three-stage chain (zonal clearing, redispatch, nodal reference) reports whic
 failed to reach `Optimal` through the same `INFEASIBLE_LP` / `UNBOUNDED_LP` translation the other
 market kinds use.
 
+`market.agents`' `MarketAgentsOptions.strategies` is market design data in the same sense — which
+bidding rule each generator plays is a statement about the game being simulated, not a knob on the
+solver. It maps a generator id to a `StrategyConfig`, a discriminated union on `kind`
+(`price_taker` | `markup`), and it crosses JSON **as data**: `{"strategies": {"g1": {"kind":
+"markup", "step": 0.5}}}`. A callable never crosses this boundary. `solve_agents` also takes an
+in-process `strategies=` argument accepting any object conforming to the `Strategy` Protocol —
+that seam exists for a rule the config union cannot express, and `jobs` deliberately cannot reach
+it, so nothing a service can send changes which code runs.
+
+An empty `strategies` mapping is meaningful rather than missing: it is a market in which nobody
+bids strategically, and it clears exactly as `market.nodal` would.
+
+Every way of getting the agent set wrong is a **caller** error, and none of them arrives as
+`INTERNAL` — measured through `jobs.run`, not inferred:
+
+| The mistake | Code |
+| --- | --- |
+| An unknown `StrategyConfig` kind | `BAD_OPTIONS` |
+| A non-positive `max_iterations`, or a non-positive `offer_tol` | `BAD_OPTIONS` |
+| An `offer_tol` below `2 * step` for a markup agent | `BAD_OPTIONS` |
+| A strategy naming a generator the network does not have — or one it has but its arrays do not (out of service, or on a bus that is), or one with no `Generator.cost` to depart from | `VALIDATION`, with a `DANGLING_REF` issue whose `path` is `options.strategies` |
+
+The first three are decided by `MarketAgentsOptions` itself, so they come back with pydantic's own
+`details`. The fourth cannot be — an options model has no network to check against — so it is
+raised at resolution time, before any solve, as a network-validation issue.
+
+!!! warning "`status` is the LP's; `converged` is the loop's"
+    A `market.agents` job that comes back `status="ok"` has an `Optimal` **clearing**. Whether the
+    best-response iteration settled is a separate field on the result — `converged`, with
+    `termination_reason` naming which of `converged` / `iteration_cap` / `cycle` ended it. A run
+    can clear optimally in every round and still not converge. `jobs` does not fold one into the
+    other, and neither should a caller: a non-converged run is a successful job with an honest
+    result, not a failure.
+
 ## Relationship to the module-level functions
 
 `pf.solve_dc`, `pf.solve_ac`, `opf.solve_dc_opf`, `contingency.n1`, `market.solve_nodal`,
-`market.solve_multiperiod` and `market.solve_zonal` remain the notebook-friendly entry points.
+`market.solve_multiperiod`, `market.solve_zonal` and `market.agents.solve_agents` remain the
+notebook-friendly entry points.
 They take and return the same pydantic models, raise
 Python exceptions on failure, let warnings propagate, and are what `jobs.run` calls. Use them
 directly when you are writing Python; use `jobs` when the caller is a service, a queue, or

@@ -23,13 +23,17 @@ print(result.branches[0].p_from_mw)
     market](manual/market.md)) and wave **M5** (a whole horizon cleared as one coupled LP/QP
     with generator ramp coupling, storage state of charge and a cyclic end-of-horizon
     condition — `market.solve_multiperiod`, see [Manual › Multiperiod
-    market](manual/multiperiod.md)) are all merged. Wave **M6** (zonal clearing and
-    redispatch) is in progress on its own wave branch, with everything below shipped there: a
-    market cleared at zonal granularity, a minimum-cost redispatch that makes its schedule
-    deliverable on the real network, and the comparison against the nodal optimum that
-    measures what the zonal design costs (`market.solve_zonal`, see [Manual › Zonal
-    market](manual/zonal.md)), exposed through `jobs.run` as `kind="market.zonal"`, and a new
-    [runnable example](examples/index.md#11-zonal-redispatch). Nothing is on PyPI yet —
+    market](manual/multiperiod.md)) and wave **M6** (a market cleared at zonal granularity,
+    a minimum-cost redispatch onto the real network and the comparison against the nodal
+    optimum — `market.solve_zonal`, see [Manual › Zonal market](manual/zonal.md)) are all
+    merged. Wave **M7** (agent-based bidding) is in progress on its own wave branch, with
+    everything below shipped there: generators that *offer* through a `Strategy` rather than
+    reveal their true cost, the market clearing the offered curves round after round until they
+    settle, price-takers reproducing the competitive result bit-exactly and a pivotal supplier's
+    markup stopping where demand's own bid stops paying (`market.solve_agents`, see [Manual ›
+    Agent-based bidding](manual/agents.md)), exposed through `jobs.run` as
+    `kind="market.agents"`, and a new [runnable
+    example](examples/index.md#12-strategic-bidding). Nothing is on PyPI yet —
     install from source (see [Getting started](getting-started.md)).
 
 ## Three principles
@@ -114,8 +118,8 @@ flowchart LR
 | M3 | DC optimal power flow with duals on HiGHS, N-1 branch-contingency screening | merged |
 | M4 | Nodal market: elastic-demand DC-OPF, LMP clearing, settlement | merged |
 | M5 | Multiperiod market: 24-period horizon, ramp coupling, storage SoC, per-period settlement | merged |
-| M6 | Zonal market: zonal clearing, min-cost redispatch, nodal-vs-zonal comparison | in progress |
-| M7 | Markets: agent-based bidding | planned |
+| M6 | Zonal market: zonal clearing, min-cost redispatch, nodal-vs-zonal comparison | merged |
+| M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | in progress |
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | planned |
 | M9 | PyPI 0.1.0 with trusted publishing and semantic-release | planned |
 
