@@ -157,7 +157,7 @@ print(
     f"at true cost: price ${price(baseline):.2f}/MWh, "
     f"cleared {baseline.offers[0].cleared_mw:.2f} MW, markup ${baseline.offers[0].markup:,.2f}/h"
 )
-print(f"clearing price ${price(climbed):.2f}/MWh in {climbed.iterations} rounds")
+print(f"clearing price ${price(climbed):.2f}/MWh after {climbed.iterations} update rounds")
 
 # The overlay never touched the network.  Both halves matter: byte-identity alone would also hold
 # for a run in which nothing happened, and the markup above is what rules that out.
@@ -176,7 +176,7 @@ print()
 print("--- 3. the same agent with a rival at $22/MWh ---")
 print(
     f"offer ${rivalled.offer.coefficients[0]:.2f}/MWh, cleared {rivalled.cleared_mw:.2f} MW, "
-    f"markup ${rivalled.markup:,.2f}/h in {controlled.iterations} rounds"
+    f"markup ${rivalled.markup:,.2f}/h after {controlled.iterations} update rounds"
 )
 print(f"against the pivotal ${peak.markup:,.2f}/h -- {peak.markup / rivalled.markup:.1f}x smaller")
 

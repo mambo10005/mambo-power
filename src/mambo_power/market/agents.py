@@ -62,7 +62,7 @@ from mambo_power.market.strategy import (
     StrategyConfig,
     build_strategy,
 )
-from mambo_power.model import GeneratorCost, Network, Scenario
+from mambo_power.model import GeneratorCost, Network, PiecewiseCost, PolynomialCost, Scenario
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import pf_shift
 from mambo_power.opf import gen_cost_coeffs
@@ -138,7 +138,7 @@ class MarketAgentsOptions(BaseModel):
 
     @model_validator(mode="after")
     def _offer_tol_admits_every_stepped_strategy(self) -> MarketAgentsOptions:
-        """Reject an ``offer_tol`` below ``2 * step`` for any markup agent (spec A9).
+        """Reject an ``offer_tol`` below ``2 * step`` for any markup agent.
 
         Without this the run would be reported as a **cycle** the moment the climb arrived at its
         optimum and started dithering -- the settled two-step oscillation is what arrival *looks
@@ -154,7 +154,7 @@ class MarketAgentsOptions(BaseModel):
                     f"offer_tol={self.offer_tol} is below 2 * step for the markup strategy on "
                     f'generator "{gen_id}" (step={config.step}, so 2 * step='
                     f"{2.0 * config.step}). A fixed-step climber settles into an oscillation of "
-                    f"exactly two steps about its optimum (spec A9), so a narrower tolerance "
+                    f"exactly two steps about its optimum, so a narrower tolerance "
                     f"would report that arrival as a cycle. Raise offer_tol to at least "
                     f"{2.0 * config.step}, or lower the step."
                 )
@@ -266,7 +266,7 @@ def _resolve_agents(
             raise ValueError(
                 f"offer_tol={options.offer_tol} is below 2 * step for the MarkupStrategy on "
                 f'generator "{gen_id}" (step={strategy.step}) -- see MarketAgentsOptions.'
-                f"offer_tol; a fixed-step climber settles into a two-step oscillation (spec A9)"
+                f"offer_tol; a fixed-step climber settles into a two-step oscillation"
             )
     agents = []
     for gen_id in arr.gen_ids:
@@ -309,13 +309,32 @@ def _initial_offers(agents: list[_Agent]) -> dict[str, GeneratorCost]:
     offers: dict[str, GeneratorCost] = {}
     for agent in agents:
         try:
-            offers[agent.id] = agent.strategy.offer(_observation(agent, 0, []))
+            offers[agent.id] = _checked_offer(agent, _observation(agent, 0, []))
         except NotImplementedError as exc:
             raise ValueError(
                 f'the {agent.label} strategy on generator "{agent.id}" cannot bid on that '
                 f"generator's true cost: {exc}"
             ) from exc
     return offers
+
+
+def _checked_offer(agent: _Agent, observation: Observation) -> GeneratorCost:
+    """*agent*'s strategy's offer for *observation*, checked to be a
+    :class:`~mambo_power.model.GeneratorCost` **where it was returned**.
+
+    A strategy that returns ``None`` (a forgotten ``return``) or any other object used to fail
+    only after that round's clearing, as a pydantic error on the :class:`RoundRecord` the loop
+    builds from history -- the wrong layer, and a name the caller never wrote (walk finding, M7
+    S9). ``TypeError`` here names the generator and what came back, before any clearing.
+    """
+    offer = agent.strategy.offer(observation)
+    if not isinstance(offer, PolynomialCost | PiecewiseCost):
+        raise TypeError(
+            f'the {agent.label} strategy on generator "{agent.id}" returned {offer!r} for round '
+            f"{observation.round_index}; a Strategy.offer must return a GeneratorCost "
+            f"(PolynomialCost or PiecewiseCost)"
+        )
+    return offer
 
 
 def _observation(agent: _Agent, round_index: int, history: list[_Round]) -> Observation:
@@ -533,7 +552,10 @@ def solve_agents(
     and :class:`~mambo_power.opf.dc_opf.NonConvexCostError` /
     :class:`~mambo_power.opf.dc_opf.NonConcaveBidError` for a cost or bid the clearing cannot
     accept -- including an *offer* a strategy produced, which is checked on the offer, every
-    round, exactly as it would be on a true cost. A strategy that cannot bid on its generator's
+    round, exactly as it would be on a true cost -- and ``TypeError`` at the call site, before
+    that round's clearing, for a strategy whose ``offer`` returned something other than a
+    :class:`~mambo_power.model.GeneratorCost` (see :func:`_checked_offer`). A strategy that
+    cannot bid on its generator's
     true cost at all (:class:`~mambo_power.market.strategy.MarkupStrategy` on a non-linear cost,
     which raises ``NotImplementedError`` from its own ``offer``) is one of the up-front
     ``ValueError`` cases: :func:`_initial_offers` collects round 0's offers before the first
@@ -611,7 +633,7 @@ def solve_agents(
             break
         round_index += 1
         offers = {
-            agent.id: agent.strategy.offer(_observation(agent, round_index, history))
+            agent.id: _checked_offer(agent, _observation(agent, round_index, history))
             for agent in agents
         }
 

@@ -773,6 +773,31 @@ def test_a_markup_strategy_on_a_quadratic_cost_is_rejected_before_any_clearing(
     assert isinstance(info.value.__cause__, NotImplementedError)
 
 
+def test_a_strategy_returning_something_other_than_a_cost_is_rejected_at_the_call_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Walk finding (M7 S9): a strategy that returns ``None`` (a forgotten ``return``) or any
+    non-``GeneratorCost`` used to fail *after* the clearing, with a pydantic error naming
+    ``RoundRecord`` -- the wrong layer and the wrong name. The loop checks what a strategy
+    returned where it called it, before any clearing, and says which generator's strategy."""
+
+    def never(*args: object, **kwargs: object) -> object:
+        raise AssertionError("dc_opf was reached: the bad return was not caught at the call site")
+
+    monkeypatch.setattr(agents_module, "dc_opf", never)
+
+    class Forgetful:
+        def offer(self, observation: Observation) -> GeneratorCost:
+            return None  # type: ignore[return-value]
+
+    with pytest.raises(TypeError, match=r'"agent_a".*returned None'):
+        solve_agents(
+            Scenario(network=duopoly_network()),
+            MarketAgentsOptions(),
+            strategies={"agent_a": Forgetful()},
+        )
+
+
 def test_no_agents_at_all_is_a_market_in_which_nobody_bids() -> None:
     """An empty strategy map is meaningful, not a missing argument: the clearing is the ordinary
     true-cost one and the loop settles immediately with no offers to report."""

@@ -16,8 +16,8 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
 - `market.solve_agents(scenario, options=None, *, strategies=None) -> MarketAgentsResult`: the
   fourth market mode and the first whose input is the output of a decision. Each round every
   generator's `Strategy` sees an `Observation` (its own true cost, bounds, and its own last two
-  rounds — price at its bus, cleared MW, the offer it made) and returns the linear cost it
-  offers; the market clears the **offered** curves with the ordinary nodal DC-OPF, and the loop
+  rounds — price at its bus, cleared MW, the offer it made) and returns the cost curve it
+  offers (any `GeneratorCost`); the market clears the **offered** curves with the ordinary nodal DC-OPF, and the loop
   repeats until the offers settle. Updates are simultaneous. The observation is an own-node view
   on purpose: no rival's offer, cost or dispatch ever reaches a strategy.
 - `market.strategy`: the `Strategy` protocol, `PriceTakerStrategy` (offers the true cost

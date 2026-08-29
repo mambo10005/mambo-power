@@ -31,9 +31,13 @@ returns a `GeneratorCost`:
 
 1. **Observe.** The agent sees its own true cost curve and active limits, the round index, and
    its own **last two rounds** of `(offer, bus LMP, cleared MW)`. Nothing else — no rival's offer,
-   no other bus's price, no view of the clearing as a whole.
-2. **Offer.** The strategy returns a cost curve. It holds no state between calls; the loop
-   supplies the history, so a run is a pure function of `(network, strategies, tolerance)`.
+   no other bus's price, no view of the clearing as a whole. Concretely, `Observation` has the
+   fields `round_index, true_cost, p_min_mw, p_max_mw, previous_round, two_rounds_ago`, and each
+   of the last two is a `RoundRecord(round_index, offer, lmp, cleared_mw)` or `None`.
+2. **Offer.** The strategy returns a cost curve — any `GeneratorCost`; the loop checks that it
+   got one where it called the strategy, before the clearing. It holds no state between calls;
+   the loop supplies the history, so a run is a pure function of `(network, strategies,
+   tolerance)`.
 3. **Clear.** The offers become an overlay: `gen_cost_coeffs(net, arr, costs=offers)` maps the
    offered union to coefficients through the *same* function a true cost goes through, and
    `dc_opf` clears them alongside the loads' own bids.
@@ -45,7 +49,10 @@ documented contract, not an implementation detail — a different order need not
 point, and this mode claims nothing about the one it does not run.
 
 Settlement is computed **once**, on the final round's clearing, at the final round's prices. The
-intermediate rounds are the agents' search, not a sequence of markets anybody was paid for.
+intermediate rounds are the agents' search, not a sequence of markets anybody was paid for — and
+**only the final round is on the result**: `offers` is each agent's last offer, not its path. To
+see per-round offers, wrap a strategy in a recording object and pass it through the in-process
+`strategies=` seam (any object with an `offer` method), as the test suite's own recorder does.
 
 !!! note "The clearing is the general path, not a call to `solve_nodal`"
     Every round runs `gen_cost_coeffs` + `load_bid_coeffs` + `dc_opf` directly. A short-circuit
@@ -114,15 +121,22 @@ why the reason is a required enumerated field rather than something a caller inf
 
 This makes `offer_tol >= 2 * step` **derived** rather than tuned: the settled oscillation spans
 exactly two steps, so a tolerance narrower than that would report every successful climb as a
-cycle. `MarketAgentsOptions` rejects such a configuration up front rather than mis-diagnosing the
-run later:
+cycle. The default `offer_tol` is `1e-9` — it admits only an offer vector that has genuinely
+come to rest, which is what an all-price-taker run does — so any markup agent needs it set
+explicitly. `MarketAgentsOptions` rejects a violating configuration up front rather than
+mis-diagnosing the run later:
 
 ```text
 offer_tol=0.5 is below 2 * step for the markup strategy on generator "g1" (step=0.5, so
 2 * step=1.0). A fixed-step climber settles into an oscillation of exactly two steps about its
-optimum (spec A9), so a narrower tolerance would report that arrival as a cycle. Raise offer_tol
-to at least 1.0, or lower the step.
+optimum, so a narrower tolerance would report that arrival as a cycle. Raise offer_tol to at
+least 1.0, or lower the step.
 ```
+
+A repetition needs two rounds to be seen in, so `converged` requires at least **two update
+rounds**: `max_iterations=1` always ends `iteration_cap`, even for a market of price-takers whose
+offers never move. `iterations` counts update rounds after round 0, so a converged all-price-taker
+run reports `iterations 2` (three clearings).
 
 !!! warning "`status` is the LP's; `converged` is the loop's"
     `status` is HiGHS's model status for the final round's clearing. `converged` is whether the
@@ -145,7 +159,10 @@ every offer is the true cost object: True | markups: [0.0]
 
 Both comparisons are `array_equal`, not `allclose`: no tolerance enters this claim. And there is
 no short-circuit making it easy — this is an ordinary run of the loop, the overlay and the offer
-map, which is what makes it evidence that they are honest.
+map, which is what makes it evidence that they are honest. The claim is between the **two paths**
+— `solve_agents` with price-takers and `solve_nodal` — not against a hand-computed price: the
+LMPs carry the LP's own noise (a demand-set $30 comes back as `29.999974999999992`), and both
+paths carry the same noise, bit for bit.
 
 ### A pivotal supplier's markup stops where demand stops paying
 
@@ -292,11 +309,14 @@ before any solve, for a mistake in the agent set:
 | A strategy naming a generator with no `Generator.cost` to depart from | `ValueError` |
 | An injected `MarkupStrategy` whose step is too coarse for `offer_tol` | `ValueError` |
 | A strategy that cannot bid on its generator's true cost (a `MarkupStrategy` on a quadratic or piecewise cost) | `ValueError`, naming the generator, before the first clearing; the strategy's own `NotImplementedError` is chained as the cause |
+| A strategy whose `offer` returned something other than a `GeneratorCost` (`None`, say) | `TypeError`, naming the generator and what came back, at the call site before that round's clearing |
 | An offer a strategy produced that the clearing cannot accept | `NonConvexCostError` / `NonConcaveBidError` |
 
-The first six are raised up front, before any solve. The convexity guards are applied to the
-**offer**, every round, exactly as they would be to a true cost: a strategy does not get a laxer
-contract than the network does.
+The first six are raised up front, before any solve. The `offer_tol` rule is also enforced by
+`MarketAgentsOptions` itself, so through the config path that one arrives as pydantic's
+`ValidationError` (a `ValueError` subclass) at construction, not from `solve_agents`. The
+convexity guards are applied to the **offer**, every round, exactly as they would be to a true
+cost: a strategy does not get a laxer contract than the network does.
 
 ## Jobs API
 
