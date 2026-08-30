@@ -318,9 +318,12 @@ All impedances are per unit on `sn_mva` and the **from-bus** voltage; `Zb = vn_k
 | `pwl_cost.points = [[p0, p1, slope], ...]` | `PiecewiseCost.points` | breakpoints with the cost at `p0` taken as 0 — pandapower has no offset column |
 | `bus.vn_kv`, `min/max_vm_pu`, `zone`, `geo`, `in_service` | `base_kv`, `v_min/max_pu`, `zone`, `geo`, `in_service` | `Bus.area` travels as an extra `bus.area` column (pandapower keeps unknown columns through `to_json`, measured) |
 
-On export a nominal-tap transformer is written with `tap_pos = 0`; an off-nominal one with
-`tap_pos = ±1` and `tap_step_percent = |tap_ratio − 1|·100`, which is pandapower's own
-`from_ppc` encoding and re-imports to the same ratio. A transformer without `rating_mva` is
+On export a nominal-tap transformer (`tap_ratio` `None` or `1.0`) is written with no tap
+changer — `tap_side` `None`, `tap_neutral` / `tap_pos` / `tap_step_percent` `NaN`, the columns
+pandapower itself leaves empty on such a transformer (its `networks.case14()` stores two that
+way); an off-nominal one with `tap_side = "hv"`, `tap_neutral = 0`, `tap_pos = ±1` and
+`tap_step_percent = |tap_ratio − 1|·100`, which is pandapower's own `from_ppc` encoding.
+Both re-import to the same ratio. A transformer without `rating_mva` is
 written with `sn_mva = base_mva` and `FIELD_DEFAULTED`, because pandapower needs a rated power
 to compute its impedance — it re-imports as a rating.
 
