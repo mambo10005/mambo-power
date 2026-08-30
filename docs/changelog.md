@@ -84,6 +84,9 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   missing cost is legal model data that only the pricing kinds refuse. `pf.*` and `n1` are
   untouched; a cost-less generator that is out of service is not in the priced set and does
   not raise.
+[Design › Decisions](design/decisions.md) gains ADR-011: every format pivots through
+`Network`, and what a format cannot carry is a report entry, never a guess.
+
 
 ### Added — wave M7 (agent-based bidding)
 
