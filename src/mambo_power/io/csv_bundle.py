@@ -63,6 +63,8 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
+import shutil
 import types
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -319,10 +321,42 @@ def dump(net: Network, directory: str | PathLike[str]) -> None:
 
     Raises :class:`ValueError` if an optional string field holds ``""`` (see the module
     docstring's cell rules); nothing else about a valid :class:`Network` can fail to serialise.
+
+    All-or-nothing: every table is rendered before anything is written, the files go into a
+    temporary sibling directory (``.<name>.tmp-<pid>``) and are moved into ``directory`` only
+    once all of them and the manifest exist, so an exception — the ``""`` refusal, or a failed
+    write — leaves whatever bundle was there before untouched (M8 critic finding 7).
     """
     target = Path(directory)
+    rendered = _render(net)
+    manifest = {
+        "format": FORMAT,
+        "schema_version": net.schema_version,
+        "base_mva": net.base_mva,
+        "tables": {file: len(rendered[file][1]) for file in TABLES},
+    }
+    staging = target.parent / f".{target.name}.tmp-{os.getpid()}"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    try:
+        for file, (header, rows) in rendered.items():
+            _write_csv(staging / file, header, rows)
+        (staging / _MANIFEST).write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n"
+        )
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     target.mkdir(parents=True, exist_ok=True)
-    counts: dict[str, int] = {}
+    for file in (*TABLES, _MANIFEST):
+        os.replace(staging / file, target / file)
+    staging.rmdir()
+
+
+def _render(net: Network) -> dict[str, tuple[list[str], list[list[str]]]]:
+    """Every table file → ``(header, rows)`` as text cells; every ``_cell`` call happens here."""
+    out: dict[str, tuple[list[str], list[list[str]]]] = {}
     for table in _ENTITY_TABLES:
         rows: list[list[str]] = []
         side: list[list[str]] = []
@@ -339,20 +373,10 @@ def dump(net: Network, directory: str | PathLike[str]) -> None:
                         _cell(value, _SIDE_COLUMNS[2], owner),
                     ]
                 )
-        counts[table.file] = _write_csv(target / table.file, [c.name for c in table.columns], rows)
+        out[table.file] = ([c.name for c in table.columns], rows)
         if table.side is not None:
-            counts[table.side.file] = _write_csv(
-                target / table.side.file, [c.name for c in table.side.columns], side
-            )
-    manifest = {
-        "format": FORMAT,
-        "schema_version": net.schema_version,
-        "base_mva": net.base_mva,
-        "tables": {file: counts[file] for file in TABLES},
-    }
-    (target / _MANIFEST).write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+            out[table.side.file] = ([c.name for c in table.side.columns], side)
+    return out
 
 
 # --- reading --------------------------------------------------------------------------------

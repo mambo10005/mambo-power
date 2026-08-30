@@ -250,6 +250,43 @@ def test_dump_rejects_an_empty_optional_string(tmp_path: Path) -> None:
         csv_bundle.dump(net, tmp_path)
 
 
+def test_dump_that_fails_midway_leaves_the_old_bundle_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M8 critic finding 7: ``dump`` used to write table by table into the target, so a failure
+    after ``buses.csv`` left the old manifest beside a mix of new and old tables — a bundle
+    that still *loaded*. Now every table is rendered first and written into a temporary sibling
+    directory that is swapped in only on success: the original bundle survives unchanged, no
+    temporary directory is left behind, and the ``""`` refusal is all-or-nothing."""
+    original = full_network()
+    csv_bundle.dump(original, tmp_path)
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+
+    changed = full_network()
+    changed.buses[0].base_kv = 999.0
+    real_write = csv_bundle._write_csv
+
+    def failing_write(path: Path, header: list[str], rows: object) -> int:
+        if path.name == "loads.csv":
+            raise OSError("disk full")
+        return real_write(path, header, rows)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(csv_bundle, "_write_csv", failing_write)
+    with pytest.raises(OSError, match="disk full"):
+        csv_bundle.dump(changed, tmp_path)
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+    assert csv_bundle.load(tmp_path) == original
+    leftovers = [p.name for p in tmp_path.parent.iterdir() if ".tmp-" in p.name]
+    assert leftovers == []
+
+    # the rendering-time refusal is all-or-nothing too
+    monkeypatch.setattr(csv_bundle, "_write_csv", real_write)
+    changed.zones.append(Zone(id="empty-name", name=""))
+    with pytest.raises(ValueError, match="name"):
+        csv_bundle.dump(changed, tmp_path)
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+
 # --- malformed bundles -----------------------------------------------------------------------
 
 Rows = list[list[str]]

@@ -637,7 +637,7 @@ tooling; it is not a second schema.
 
 | Function | Does |
 | --- | --- |
-| `csv_bundle.dump(net, directory)` | Write the manifest and every table (the directory is created). |
+| `csv_bundle.dump(net, directory)` | Write the manifest and every table (the directory is created). All-or-nothing: the files are rendered first and written into a temporary sibling directory (`.<name>.tmp-<pid>`) that is moved in only once complete, so a failure — the `""` refusal below, a full disk — leaves the previous bundle untouched. |
 | `csv_bundle.load(directory) -> Network` | Read and validate a bundle. |
 | `csv_bundle.load_with_report(directory) -> (Network, ImportReport)` | Same; the report is always empty on success, because there is nothing a bundle can repair. |
 
