@@ -153,7 +153,7 @@ import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field
 
 from mambo_power.numerics.arrays import IntArray, NetworkArrays
-from mambo_power.numerics.bbus import pf_shift
+from mambo_power.numerics.bbus import p_shift, pf_shift
 from mambo_power.numerics.ptdf import ptdf as compute_ptdf
 
 FloatArray = npt.NDArray[np.float64]
@@ -925,12 +925,19 @@ def dc_opf(
 
     # --- flow-limit rows: flow_k = Σ_g PTDF[k, gen_bus[g]]·p_g − Σ_d PTDF[k, load_bus[d]]·p_d +
     # const_k, where const_k = pf_shift_mw_k − Σ_bus PTDF[k, bus]·(p_load_fixed_mw[bus] +
-    # g_shunt_mw[bus]) folds in every *fixed* contribution to branch k's flow (derivation: module
-    # docstring above). Row bounds: −rating_k − const_k <= row_expr_k <= rating_k − const_k.
+    # g_shunt_mw[bus] + p_shift_mw[bus]) folds in every *fixed* contribution to branch k's flow,
+    # including the phase-shifter bus injection p_shift (numerics.bbus.p_shift) that the *decision
+    # variables* (generator/demand dispatch) never carry -- this is the same
+    # flow = PTDF @ (injection − p_shift) + pf_shift identity numerics.bbus.flow_from_ptdf applies
+    # to a full injection vector (module docstring above; M8 finding F1 / A19), but const_k here
+    # is a constant added to a linear combination of decision variables rather than a product with
+    # one full injection vector, so it folds in p_shift by hand instead of calling that helper.
+    # Row bounds: −rating_k − const_k <= row_expr_k <= rating_k − const_k.
     ptdf_matrix = compute_ptdf(arr) if ptdf is None else ptdf
     pf_shift_mw = pf_shift(arr) * arr.base_mva
+    p_shift_mw = p_shift(arr) * arr.base_mva
     fixed_bus_mw = p_load_mw + g_shunt_mw
-    const = pf_shift_mw - ptdf_matrix @ fixed_bus_mw
+    const = pf_shift_mw - ptdf_matrix @ (fixed_bus_mw + p_shift_mw)
     rating_mw = arr.rating_pu * arr.base_mva  # inf where unrated -> row never binds
 
     # Each row family is built by its own helper (module docstring, "Row-family core") against
