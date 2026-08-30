@@ -160,6 +160,11 @@ v33 record layouts (the PSS/E manual is proprietary).
 - **`Branch.kind`** (`line | transformer`), defaulted from `tap_ratio`/`shift_deg` at construction.
   Invariant: `kind == "transformer"` whenever tap or shift is non-nominal; a nominal-tap transformer
   is representable only because the field is explicit (S1).
+  **Amended at Step 6 (critic B3, F7):** an explicit `"line"` with a non-nominal tap or shift is
+  **promoted** to `"transformer"` by the validator, not rejected — rejection made a mutated network
+  (`br.tap_ratio = 1.05` on a line) fail its own native round-trip, a pre-M8 regression. Exporters
+  route on `Branch.is_transformer` (`kind == "transformer"` or non-nominal tap/shift), so a stale
+  `kind` after mutation cannot drop a tap silently.
 - **`ExportReport`** mirrors `ImportReport`: a list of issues with code, element id, field,
   message; `warnings` for repairs; `errors` that `raise_on_error` raises. Invariant: an empty report
   means lossless.
@@ -196,7 +201,9 @@ Inference-only `Branch.kind` (neutral-tap transformer imports as a line); requir
 `Branch(...)` in the tree changes); cost approximation on export (moves the optimum by an unbounded
 amount, silently); refuse-on-lossy (contradicts D1); the wild IEEE-14 RAW (licence undetected);
 PyPSA import (time series, components with no home); RAW export; a human CSV dialect; `jobs` kinds
-for formats (M4: requests carry a `Network`); converting via pandapower's `from_ppc` (yields
+for formats (M4: requests carry a `Network`); reading or writing pandapower `res_bus` (an early landing
+did, against the Not-doing above — removed at Step 6, critic S10: the slack's state comes from
+`ext_grid`, and other buses' stored state is reported as dropped on export); converting via pandapower's `from_ppc` (yields
 `vn_kv = 0` on case14 and `to_ppc` raises `FloatingPointError` — measured).
 
 ### Assumptions
