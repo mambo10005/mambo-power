@@ -36,6 +36,14 @@ ImportIssueCode = Literal[
     "RAW_THREE_WINDING_IGNORED",
     "RAW_SWITCHED_SHUNT_IGNORED",
     "RAW_SECTION_IGNORED",
+    # wave M8 (io.pandapower_json and later format modules)
+    "EXTRA_EXT_GRID_DEMOTED",
+    "COLUMN_DROPPED",
+    "ELEMENT_DROPPED",
+    "FIELD_DEFAULTED",
+    "FIELD_DROPPED",
+    "COST_DROPPED",
+    "BID_DROPPED",
 ]
 """The closed set of importer/repair warning codes.
 
@@ -66,6 +74,16 @@ from bus.
 ``RAW_SWITCHED_SHUNT_IGNORED`` — a switched shunt record was skipped (``BINIT`` not folded).
 ``RAW_SECTION_IGNORED`` — a record of an unread section (owner, DC lines, FACTS, ...) was
 skipped; the message names the section and the record.
+Wave M8 interop codes (``io.pandapower_json`` first; later format modules reuse them):
+
+``EXTRA_EXT_GRID_DEMOTED`` — a second in-service ``ext_grid`` imported as a PV generator.
+``COLUMN_DROPPED`` — an imported column value the model has no field for (element and field named).
+``ELEMENT_DROPPED`` — a whole row (either direction) with no counterpart on the other side.
+``FIELD_DEFAULTED`` — a required field the source left empty (or the target format demands),
+filled with a stated default.
+``FIELD_DROPPED`` — an exported model field the target format has no column for.
+``COST_DROPPED`` — a generator cost the target format cannot express (never approximated).
+``BID_DROPPED`` — a load bid the target format cannot express.
 """
 
 
