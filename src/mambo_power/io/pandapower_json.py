@@ -100,7 +100,7 @@ CODES: tuple[str, ...] = (
 )
 """Every report code this module emits (import: the first seven; export: the last three plus
 ``ELEMENT_DROPPED`` for storage and ``FIELD_DEFAULTED`` for an unrated transformer's
-``sn_mva``). S6 registers them in :data:`mambo_power.io.report.LIMITATIONS`."""
+``sn_mva``). Registered in :data:`mambo_power.io.limitations.LIMITATIONS`."""
 
 DEFAULT_F_HZ = 50.0
 """``net.f_hz`` written by the exporter unless given; it only enters the ``b`` ↔ ``c_nf_per_km``

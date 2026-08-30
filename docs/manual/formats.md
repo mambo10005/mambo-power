@@ -7,8 +7,8 @@ format, the **MATPOWER `.m`** importer, **pandapower JSON** both ways, **PyPSA**
 **PSS/E RAW v33** importer and the **CSV bundle**. Every importer returns an `ImportReport` and
 every exporter an `ExportReport` (see [`io.report`](../api/io-report.md)) with one rule: an
 empty report means the conversion was lossless; anything dropped, approximated or repaired is an
-issue naming the element id and the field. `io.report.LIMITATIONS` maps each module to every
-code it can emit, and each code is documented on this page.
+issue naming the element id and the field. [`io.limitations.LIMITATIONS`](../api/io-limitations.md)
+maps each module to every code it can emit, and each code is documented on this page.
 
 ## Native JSON
 

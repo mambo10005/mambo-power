@@ -12,6 +12,9 @@ item D1): **an empty report means the conversion was lossless.** Anything droppe
 or repaired is an issue naming the element id (``bus_ids`` / ``element_ids``) and, in the
 message, the field concerned. Importers and exporters neither log nor print; the report is
 the only channel.
+
+This module is a leaf: it imports only :mod:`mambo_power.model`, and every format module
+imports it. The registry of codes per module is :data:`mambo_power.io.limitations.LIMITATIONS`.
 """
 
 from __future__ import annotations
@@ -72,21 +75,3 @@ class ExportReport(_Report):
     Mirrors :class:`ImportReport` exactly: same issue record, ``warnings``/``errors``, ``codes``,
     ``as_strings`` and ``raise_on_error``. An issue always names the element id and the field.
     """
-
-
-# The registry sits at the bottom because the format modules import the report classes above:
-# importing them here (after the classes exist) is safe, and `io/__init__` imports this module
-# first so the chain is always report -> formats, never the reverse. `CODES` are plain tuples
-# and every third-party library (pandapower, PyPSA) is imported lazily inside the format
-# modules' functions, so this costs no optional dependency.
-from mambo_power.io import csv_bundle, pandapower_json, psse_raw, pypsa  # noqa: E402
-
-LIMITATIONS: dict[str, tuple[str, ...]] = {
-    "io.matpower": ("BASE_KV_REPLACED", "GENCOST_REACTIVE_IGNORED", "ISLAND_DEACTIVATED"),
-    "io.pandapower_json": pandapower_json.CODES,
-    "io.pypsa": pypsa.CODES,
-    "io.psse_raw": psse_raw.CODES,
-    "io.csv_bundle": csv_bundle.CODES,
-}
-"""Registry: format module name → every report code it can emit (its documented limitations).
-`tests/unit/test_io_limitations.py` checks that `docs/manual/formats.md` names each code."""

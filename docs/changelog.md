@@ -55,7 +55,7 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
 - `io.report.ExportReport`, mirroring `ImportReport` (same issue record, `warnings` / `errors`,
   `codes`, `as_strings`, `raise_on_error`), returned by every exporter under one rule: an empty
   report means the conversion was lossless, and anything dropped, approximated or repaired is an
-  issue naming the element id and the field. `io.report.LIMITATIONS` registers every code the
+  issue naming the element id and the field. `io.limitations.LIMITATIONS` registers every code the
   four modules can emit; `tests/unit/test_io_limitations.py` fails on a code the manual does
   not name.
 - Docs: [File formats](manual/formats.md) gains a section per format (sections read, derived

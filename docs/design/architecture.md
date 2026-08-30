@@ -14,7 +14,7 @@ later waves add (their dependencies are already fixed by the epic design).
 flowchart TB
     subgraph present["Shipped (M1-M8)"]
         model["model<br/>Network, entities, validation errors,<br/>ImportIssue, repair_islands,<br/>Scenario, Period"]
-        io["io<br/>matpower, native,<br/>report (ImportReport, ExportReport,<br/>LIMITATIONS)"]
+        io["io<br/>matpower, native,<br/>report (ImportReport, ExportReport),<br/>limitations (LIMITATIONS)"]
         formats["io: pandapower_json, pypsa,<br/>psse_raw, csv_bundle<br/>(best effort + report; pandapower and<br/>PyPSA imported lazily)"]
         numerics["numerics<br/>NetworkArrays, ybus, bbus, ptdf, lodf,<br/>effective_roles"]
         pf["pf<br/>solve_dc, solve_ac, dc.solve"]
@@ -81,8 +81,8 @@ Rules the diagram encodes:
   conversion was lossless, and anything dropped, approximated or repaired is an issue naming
   the element id and the field. The format modules import pandapower and PyPSA lazily inside
   the functions that need them, so `import mambo_power` never needs either;
-  `io.report.LIMITATIONS` registers every code a module can emit, and a test pins that each is
-  documented.
+  `io.limitations.LIMITATIONS` registers every code a module can emit (it imports the format
+  modules; `io.report` is a leaf they all import), and a test pins that each is documented.
 - `numerics` is the **only** module that holds positional indices and the **single** site
   where physical units are divided by `base_mva`.
 - Solvers (`pf`, `opf`, `contingency`, `market`) consume `NetworkArrays`, never a `Network`
@@ -195,7 +195,7 @@ src/mambo_power/
   model/            entities.py (Bus, Branch, Generator, ...), network.py (Network, validate_network),
                     scenario.py (Scenario, Period), islands.py, warnings.py, errors.py
   io/               matpower.py (load, loads, *_with_warnings), native.py (load, loads, save, dumps),
-                    report.py (ImportReport, ExportReport, LIMITATIONS),
+                    report.py (ImportReport, ExportReport), limitations.py (LIMITATIONS),
                     pandapower_json.py (load*, dump*), pypsa.py (to_network*),
                     psse_raw.py (load*), csv_bundle.py (dump, load*)
   numerics/         arrays.py (NetworkArrays), ybus.py, bbus.py, ptdf.py, lodf.py, roles.py, errors.py
