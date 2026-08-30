@@ -12,7 +12,7 @@ pass can report every problem at once.
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 BusType = Literal["slack", "pv", "pq"]
 """Bus role in power flow. MATPOWER type 4 (isolated) maps to ``in_service=False`` instead."""
@@ -86,10 +86,16 @@ class Branch(_Entity):
         """What exporters route on: ``kind == "transformer"`` **or** an off-nominal tap/shift.
 
         ``kind`` is derived at validation and entities are mutable, so ``br.tap_ratio = 1.05``
-        on a line leaves ``kind == "line"`` until the next validation (a native dump/load
-        promotes it). Reading the fields here means an exporter never drops such a tap.
+        on a line leaves ``kind == "line"`` in memory until the next validation. Reading the
+        fields here means an exporter never drops such a tap, and every serialisation
+        (``model_dump``, the native and CSV dumps) writes this answer as ``kind`` so a file
+        never says ``line`` beside a tap (M8 critic nit 24).
         """
         return self.kind == "transformer" or not _is_nominal(self.tap_ratio, self.shift_deg)
+
+    @field_serializer("kind")
+    def _serialize_kind(self, kind: BranchKind) -> BranchKind:
+        return "transformer" if self.is_transformer else kind
 
     @model_validator(mode="before")
     @classmethod

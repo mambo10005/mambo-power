@@ -2,6 +2,8 @@
 ``line`` with a tap promoted; a tap assigned after construction survives the native round trip
 and is what exporters route on (M8 critic finding 3)."""
 
+import json
+
 import pytest
 
 from mambo_power.io import native
@@ -103,7 +105,11 @@ def test_tap_assigned_after_construction_round_trips_through_native(
     for field, value in mutation.items():
         setattr(net.branches[0], field, value)
     assert net.branches[0].kind == "line"
-    back = native.loads(native.dumps(net))
+    text = native.dumps(net)
+    # the file carries one truth (M8 critic nit 24): the dump writes the promoted kind
+    assert json.loads(text)["branches"][0]["kind"] == "transformer"
+    assert net.branches[0].kind == "line"  # serialising does not mutate the object
+    back = native.loads(text)
     fresh = _two_bus(_branch(**mutation))
     assert fresh.branches[0].kind == "transformer"
     assert back == fresh

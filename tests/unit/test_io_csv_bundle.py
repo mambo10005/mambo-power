@@ -244,6 +244,23 @@ def test_cells_are_repr_floats_empty_none_and_lowercase_bools(tmp_path: Path) ->
     assert [r["index"] for r in cost_rows] == ["0", "1", "2"]
 
 
+def test_a_tap_assigned_after_construction_is_written_as_a_transformer_row(tmp_path: Path) -> None:
+    """M8 critic nit 24: ``br.tap_ratio = 1.05`` on a line leaves ``kind == "line"`` in memory;
+    the CSV row must not say ``line`` beside a tap -- ``dump`` writes ``is_transformer``'s
+    answer, and the round trip equals the network built fresh with that tap."""
+    net = full_network()
+    line = next(b for b in net.branches if b.kind == "line")
+    line.tap_ratio = 1.05
+    csv_bundle.dump(net, tmp_path)
+    with (tmp_path / "branches.csv").open(newline="", encoding="utf-8") as handle:
+        row = next(r for r in csv.DictReader(handle) if r["id"] == line.id)
+    assert row["kind"] == "transformer" and row["tap_ratio"] == "1.05"
+    assert line.kind == "line"  # the object is not mutated by the dump
+    back = csv_bundle.load(tmp_path)
+    assert next(b for b in back.branches if b.id == line.id).kind == "transformer"
+    assert back == Network.model_validate(net.model_dump())
+
+
 def test_dump_rejects_an_empty_optional_string(tmp_path: Path) -> None:
     """``""`` and ``None`` share the empty cell; an optional string field cannot carry ``""``."""
     net = full_network()

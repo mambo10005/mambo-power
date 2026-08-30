@@ -296,6 +296,9 @@ def _flatten(entity: BaseModel, table: _Table) -> tuple[dict[str, object], list[
                 cells[scalar] = None if value is None else getattr(value, scalar.split("_", 1)[1])
             if value is not None:
                 side_rows = _side_rows(value)
+        elif name == "kind" and isinstance(entity, Branch):
+            # the promoted kind, as model_dump writes it: never "line" beside a tap (nit 24)
+            cells[name] = "transformer" if entity.is_transformer else value
         else:
             cells[name] = value
     return cells, side_rows
