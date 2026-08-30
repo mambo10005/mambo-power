@@ -402,7 +402,7 @@ objective on every bundled case (`tests/parity/test_pypsa_export_vs_pypsa.py`).
 | `Bus` | `Bus` | `v_nom = base_kv`, `v_mag_pu_min/max`, `control` (`Slack` / `PV` / `PQ`) from `type`, `x`/`y` from `geo` (lon, lat), `v_mag_pu_set` from the bus's generators' `v_set_pu`. `area`, `zone` and `in_service` ride along as **custom bus columns** (PyPSA buses have no `active` flag); every element at an out-of-service bus is exported `active = False`, which is what `numerics.NetworkArrays` does with them. |
 | `Branch` with `kind == "line"` | `Line` | Physical units on the from-bus base, `Zb = base_kv² / base_mva`: `r`, `x` in ohm (`× Zb`), `b` in siemens (`÷ Zb`). |
 | `Branch` with `kind == "transformer"` | `Transformer(model="pi")` | `r`, `x`, `b` per unit on the transformer's own `s_nom` (`× s_nom / base_mva`), `tap_ratio`, `tap_side = 0` (mambo's tap is on the from side), `phase_shift` in degrees. |
-| `rating_mva` | `s_nom` | An unrated branch gets `s_nom = 1e5` (`pypsa.UNRATED_S_NOM_MVA`): PyPSA's optimiser reads `s_nom == 0` as "carries nothing", not "unlimited". |
+| `rating_mva` | `s_nom` | An unrated branch gets `s_nom = 1e5` (`pypsa.UNRATED_S_NOM_MVA`): PyPSA's optimiser reads `s_nom == 0` as "carries nothing", not "unlimited". Reported per branch as `PYPSA_UNRATED_S_NOM_DEFAULTED`. |
 | `Generator` | `Generator` | `p_nom = max(abs(p_min_mw), abs(p_max_mw))`, `p_min_pu` / `p_max_pu` as fractions of it (so `p_nom == p_max_mw` in the ordinary case and a negative-only range survives), `marginal_cost = c1`, `marginal_cost_quadratic = c2`, `ramp_limit_up/down` as fractions of `p_nom`, `start_up_cost` / `shut_down_cost`, `control`, `active`. |
 | constant cost term `c0` | `marginal_cost_constant` | A **custom column** (`pypsa.COST_CONSTANT_COLUMN`): `n.objective` excludes constants, so the value is carried beside the objective, not in it. |
 | `Load` | `Load(p_set, q_set)` | |
@@ -413,7 +413,7 @@ objective on every bundled case (`tests/parity/test_pypsa_export_vs_pypsa.py`).
 **`p_set` is never written on a generator.** A non-NaN `p_set` pins the dispatch in
 `optimize()` — that was the root cause behind M3's first PyPSA parity mismatch.
 
-### Warnings (dropped, never approximated)
+### Warnings (dropped or defaulted, never silently)
 
 | Code | Dropped |
 | --- | --- |
@@ -424,6 +424,7 @@ objective on every bundled case (`tests/parity/test_pypsa_export_vs_pypsa.py`).
 | `PYPSA_GEN_Q_LIMITS_DROPPED` | `q_min_mvar` / `q_max_mvar` (PyPSA generators carry no reactive limits). |
 | `PYPSA_GEN_RAMP_DROPPED` | A ramp on a zero-capacity generator (cannot be a fraction of `p_nom = 0`). |
 | `PYPSA_GEN_VSET_CONFLICT` | Generators at one bus disagreeing on `v_set_pu`; PyPSA has one `v_mag_pu_set` per bus, the first generator's wins. |
+| `PYPSA_UNRATED_S_NOM_DEFAULTED` | A branch with `rating_mva = None`, written with `s_nom = 1e5` (`pypsa.UNRATED_S_NOM_MVA`); one entry per branch naming it and the sentinel. |
 
 Every issue names the element id and the field. The exporter raises nothing of its own: a
 `Network` is already valid, and PyPSA's constructors are given only values they accept.
@@ -459,7 +460,7 @@ print(n.generators[["p_nom", "marginal_cost", "marginal_cost_quadratic"]].head(2
 ```
 
 ```text
-['PYPSA_GEN_Q_LIMITS_DROPPED', 'PYPSA_ZONE_DROPPED'] 6
+['PYPSA_GEN_Q_LIMITS_DROPPED', 'PYPSA_UNRATED_S_NOM_DEFAULTED', 'PYPSA_ZONE_DROPPED'] 26
        p_nom  marginal_cost  marginal_cost_quadratic
 name
 gen-1  332.4           20.0                 0.043029

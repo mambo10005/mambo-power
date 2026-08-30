@@ -211,7 +211,11 @@ def test_loads_shunts_storage() -> None:
 def test_report_names_q_limits_and_zone_only_on_the_hand_network() -> None:
     _, report = io_pypsa.to_network_with_report(_hand_network())
     assert not report.has_errors
-    assert report.codes == {"PYPSA_GEN_Q_LIMITS_DROPPED", "PYPSA_ZONE_DROPPED"}
+    assert report.codes == {
+        "PYPSA_GEN_Q_LIMITS_DROPPED",
+        "PYPSA_ZONE_DROPPED",
+        "PYPSA_UNRATED_S_NOM_DEFAULTED",
+    }
     q_issues = [w for w in report.warnings if w.code == "PYPSA_GEN_Q_LIMITS_DROPPED"]
     assert sorted(i for w in q_issues for i in w.element_ids) == ["g1", "g2"]
     assert all("q_min_mvar" in w.message and "q_max_mvar" in w.message for w in q_issues)
@@ -220,11 +224,37 @@ def test_report_names_q_limits_and_zone_only_on_the_hand_network() -> None:
     assert "zones" in z.message
 
 
+def test_unrated_branches_are_reported_one_entry_each_naming_the_sentinel() -> None:
+    """M8 walk, surprise 4: ``s_nom = UNRATED_S_NOM_MVA`` is an approximation, and the page's one
+    rule is that an approximation is a report entry naming the element and the field (D1). One
+    ``PYPSA_UNRATED_S_NOM_DEFAULTED`` per unrated branch -- line or transformer -- with the
+    sentinel in the message; a rated branch gets none."""
+    net = _hand_network()
+    trafos = [br for br in net.branches if br.kind == "transformer"]
+    trafos[0] = trafos[0].model_copy(update={"rating_mva": None})
+    net = net.model_copy(
+        update={"branches": [br for br in net.branches if br.kind == "line"] + trafos}
+    )
+    n, report = io_pypsa.to_network_with_report(net)
+    issues = [w for w in report.warnings if w.code == "PYPSA_UNRATED_S_NOM_DEFAULTED"]
+    assert sorted(i for w in issues for i in w.element_ids) == ["l13", "t23"]
+    assert all(len(w.element_ids) == 1 for w in issues)
+    for w in issues:
+        assert "rating_mva" in w.message and "s_nom" in w.message
+        assert str(io_pypsa.UNRATED_S_NOM_MVA) in w.message
+        assert "UNRATED_S_NOM_MVA" in w.message
+    assert n.lines.loc["l13", "s_nom"] == io_pypsa.UNRATED_S_NOM_MVA
+    assert n.transformers.loc["t23", "s_nom"] == io_pypsa.UNRATED_S_NOM_MVA
+    assert n.lines.loc["l12", "s_nom"] == 50.0
+    assert not report.has_errors
+
+
 def test_empty_report_when_nothing_is_lost() -> None:
     net = Network(
         base_mva=100.0,
         buses=[Bus(id="b1", base_kv=1.0, type="slack"), Bus(id="b2", base_kv=1.0, type="pq")],
-        branches=[Branch(id="l", from_bus="b1", to_bus="b2", r=0.0, x=0.1, b=0.0)],
+        # rated: an unrated branch is an approximation the report names (M8 walk, surprise 4)
+        branches=[Branch(id="l", from_bus="b1", to_bus="b2", r=0.0, x=0.1, b=0.0, rating_mva=10.0)],
         generators=[
             _gen(
                 "g", "b1", PolynomialCost(coefficients=[10.0, 0.0]), q_min_mvar=0.0, q_max_mvar=0.0
