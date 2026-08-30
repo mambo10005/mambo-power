@@ -5,7 +5,8 @@
 :func:`mambo_power.pf.dc.solve`): derives ``cost_coeffs``/``pwl_costs`` from each generator's
 :class:`~mambo_power.model.PolynomialCost` or :class:`~mambo_power.model.PiecewiseCost` (raising
 :class:`~mambo_power.opf.dc_opf.NonConvexCostError` up front for a non-convex piecewise cost,
-spec design item 4 — re-exported here as :data:`NonConvexCostError`), calls ``dc_opf``,
+spec design item 4, and :class:`~mambo_power.opf.dc_opf.MissingCostError` for a generator with
+no cost — both re-exported here), calls ``dc_opf``,
 decomposes the duals into LMPs (:func:`mambo_power.opf.dc_opf.lmp_decomposition`) and builds a
 typed :class:`~mambo_power.results.OpfDcResult`.
 
@@ -30,7 +31,13 @@ import mambo_power
 from mambo_power.model import GeneratorCost, Network
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import pf_shift
-from mambo_power.opf.dc_opf import NonConvexCostError, OpfDcOptions, dc_opf, lmp_decomposition
+from mambo_power.opf.dc_opf import (
+    MissingCostError,
+    NonConvexCostError,
+    OpfDcOptions,
+    dc_opf,
+    lmp_decomposition,
+)
 from mambo_power.opf.multiperiod import (
     MultiperiodDuals,
     MultiperiodSolution,
@@ -49,6 +56,7 @@ from mambo_power.results import (
 )
 
 __all__ = [
+    "MissingCostError",
     "MultiperiodDuals",
     "MultiperiodSolution",
     "NonConvexCostError",
@@ -76,11 +84,15 @@ def gen_cost_coeffs(
     """Per-generator ``[c2, c1, c0]`` (``NetworkArrays`` generator order) plus any PWL costs,
     from ``Generator.cost`` or from an explicit *costs* source.
 
-    Returns ``(coeffs, pwl_costs)``: ``coeffs`` is ``(n_gen, 3)``; a generator with no cost
-    (``cost is None``) or a :class:`~mambo_power.model.PiecewiseCost` gets an all-zero row — free
-    in the first case, and in the second because its cost is captured entirely by the epigraph
-    rows :func:`~mambo_power.opf.dc_opf.dc_opf` builds from ``pwl_costs`` instead (spec design
-    item 4). ``pwl_costs`` maps generator index to that generator's raw
+    Returns ``(coeffs, pwl_costs)``: ``coeffs`` is ``(n_gen, 3)``; a generator with a
+    :class:`~mambo_power.model.PiecewiseCost` gets an all-zero row because its cost is captured
+    entirely by the epigraph rows :func:`~mambo_power.opf.dc_opf.dc_opf` builds from
+    ``pwl_costs`` instead (spec design item 4). A generator with **no** cost (``cost is None``
+    after the *costs* overlay below) raises :class:`~mambo_power.opf.dc_opf.MissingCostError`
+    (re-exported here as :data:`MissingCostError`) naming every such generator, before any
+    solve: it used to get an all-zero row too — "free" — which let a network with no economic
+    data at all (every RAW import) clear an OPF at zero cost with all load on one unit (M8 walk,
+    surprise 3). ``pwl_costs`` maps generator index to that generator's raw
     ``PiecewiseCost.points``; :func:`dc_opf` raises ``NonConvexCostError`` (re-exported as
     :data:`NonConvexCostError` on this module) if any entry's breakpoint slopes are not
     non-decreasing, before any solve is attempted.
@@ -125,10 +137,17 @@ def gen_cost_coeffs(
                 )
     coeffs = np.zeros((len(arr.gen_ids), 3))
     pwl_costs: PwlCosts = {}
+    missing = [
+        gen_id
+        for gen_id in arr.gen_ids
+        if (costs.get(gen_id, gens_by_id[gen_id].cost) if costs else gens_by_id[gen_id].cost)
+        is None
+    ]
+    if missing:
+        raise MissingCostError(missing)
     for i, gen_id in enumerate(arr.gen_ids):
         cost = costs.get(gen_id, gens_by_id[gen_id].cost) if costs else gens_by_id[gen_id].cost
-        if cost is None:
-            continue
+        assert cost is not None  # the MissingCostError check above
         if cost.kind == "piecewise":
             pwl_costs[i] = list(cost.points)
             continue
@@ -148,8 +167,9 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
     Never raises for an infeasible or unbounded LP/QP — reported through
     ``OpfDcResult.status``/``message``, mirroring :func:`mambo_power.pf.solve_ac`'s
     never-raise-on-non-convergence convention. Raises :class:`NonConvexCostError` up front for a
-    generator whose :class:`~mambo_power.model.PiecewiseCost` is not convex (see
-    :func:`_cost_coeffs`). The network is not modified. ``OpfDcResult.ac_check`` stays ``None``
+    generator whose :class:`~mambo_power.model.PiecewiseCost` is not convex, and
+    :class:`MissingCostError` for one with no cost at all (see :func:`gen_cost_coeffs`). The
+    network is not modified. ``OpfDcResult.ac_check`` stays ``None``
     unless ``options.ac_check`` is true and the LP/QP solved to ``"Optimal"``; when it fires
     (W6), a fresh deep copy of
     ``net`` has each in-service generator's ``p_mw`` overwritten from the dispatch (id-keyed),

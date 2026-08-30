@@ -52,6 +52,7 @@ from mambo_power.jobs.models import ResultModel, SolveRequest, SolveResult, Stru
 from mambo_power.jobs.registry import KINDS, InfeasibleLpError, UnboundedLpError
 from mambo_power.model import NetworkValidationError, ValidationIssue, validate_network
 from mambo_power.numerics import NoSlackGeneratorError, UnsolvableNetworkError
+from mambo_power.opf import MissingCostError
 from mambo_power.results import ResultProvenance
 
 NO_SOLVER = "none"
@@ -172,6 +173,12 @@ def run(request: SolveRequest) -> SolveResult:
             raw = spec.runner(scenario, options)
         except NetworkValidationError as exc:
             failure = ("VALIDATION", str(exc), exc.issues)
+        except MissingCostError as exc:
+            # a generator with no cost under a kind that prices dispatch: the caller's data, not
+            # an engine bug (M8 walk, surprise 3). No ValidationIssue: the closed ValidationCode
+            # set is the model's own invariants, and a missing cost is legal model data that only
+            # the pricing kinds refuse -- the message names every generator.
+            failure = ("VALIDATION", str(exc), None)
         except NoSlackGeneratorError as exc:
             failure = ("NO_SLACK_GENERATOR", str(exc), None)
         except UnsolvableNetworkError as exc:

@@ -430,6 +430,37 @@ def test_unrated_transformer_export_reports_the_invented_sn_mva() -> None:
     assert [w.element_ids for w in hits] == [["t"]] and "sn_mva" in hits[0].message
 
 
+@pytest.mark.parametrize("tap_ratio", [None, 1.0])
+def test_nominal_tap_transformer_exports_with_pandapowers_own_empty_tap_columns(
+    tap_ratio: float | None,
+) -> None:
+    """M8 walk, surprise 1: the manual said a nominal-tap transformer is written with
+    ``tap_pos = 0``; the file holds pandapower's own defaults for a transformer created without
+    a tap changer -- ``tap_side None`` and ``tap_neutral`` / ``tap_pos`` / ``tap_step_percent``
+    ``NaN`` -- which is also how ``pandapower.networks.case14()`` stores its two nominal-tap
+    transformers (the round trip of pandapower's own case in
+    ``tests/parity/test_pandapower_json_vs_pandapower.py`` carries those columns as-is; writing
+    ``from_ppc``'s ``hv / 0 / 0 / 0`` there reddens it). Either encoding re-imports as a
+    transformer at the nominal tap; this pins the one the file holds."""
+    import pandapower as pp
+
+    net = _net_with_everything()
+    net.branches[1].tap_ratio = tap_ratio
+    text = pj.dumps(net)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pn = pp.from_json_string(text)
+    (row,) = pn.trafo.to_dict("records")
+    assert row["tap_side"] is None
+    for column in ("tap_neutral", "tap_pos", "tap_step_percent"):
+        assert math.isnan(row[column]), (column, row[column])
+    back = pj.loads(text)
+    (trafo,) = [br for br in back.branches if br.id == "t"]
+    assert trafo.kind == "transformer"
+    assert trafo.tap_ratio is None  # the model's nominal tap
+    assert trafo.shift_deg == 10.0
+
+
 def test_codes_are_a_subset_of_the_closed_issue_code_set() -> None:
     from typing import get_args
 

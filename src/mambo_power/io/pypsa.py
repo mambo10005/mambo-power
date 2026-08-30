@@ -19,7 +19,8 @@ zero-optional-dependency import (design item R9; ``pypsa`` is a dev extra).
   unit on the transformer's own ``s_nom`` (``× s_nom / base_mva``), ``tap_ratio``, ``tap_side=0``
   (mambo's tap is on the from side) and ``phase_shift`` in degrees.
 * ``rating_mva`` → ``s_nom``; an unrated branch gets :data:`UNRATED_S_NOM_MVA` because PyPSA's
-  optimiser reads ``s_nom == 0`` as "carries nothing", not "unlimited".
+  optimiser reads ``s_nom == 0`` as "carries nothing", not "unlimited" -- an approximation, so
+  the report names each such branch (``PYPSA_UNRATED_S_NOM_DEFAULTED``, M8 walk surprise 4).
 * ``Generator`` → ``Generator``: ``p_nom = max(|p_min_mw|, |p_max_mw|)``, ``p_min_pu``/``p_max_pu``
   as fractions of it (so ``p_nom == p_max_mw`` in the ordinary case and a negative-only range
   survives too), ``marginal_cost = c1``, ``marginal_cost_quadratic = c2``, the constant ``c0`` in
@@ -60,6 +61,7 @@ CODES: tuple[str, ...] = (
     "PYPSA_GEN_Q_LIMITS_DROPPED",
     "PYPSA_GEN_RAMP_DROPPED",
     "PYPSA_GEN_VSET_CONFLICT",
+    "PYPSA_UNRATED_S_NOM_DEFAULTED",
 )
 """Every report code this exporter can emit (its documented limitations)."""
 
@@ -102,7 +104,7 @@ def to_network_with_report(net: Network) -> tuple[pypsa.Network, ExportReport]:
     base_kv = {bus.id: bus.base_kv for bus in net.buses}
     live = {bus.id for bus in net.buses if bus.in_service}
     _add_buses(n, net, warn)
-    _add_branches(n, net, base_kv, live)
+    _add_branches(n, net, base_kv, live, warn)
     _add_generators(n, net, live, warn)
     _add_loads(n, net, live, warn)
     _add_shunts(n, net, base_kv, live)
@@ -154,10 +156,21 @@ def _add_buses(n: pypsa.Network, net: Network, warn: Any) -> None:
 
 
 def _add_branches(
-    n: pypsa.Network, net: Network, base_kv: dict[str, float], live: set[str]
+    n: pypsa.Network, net: Network, base_kv: dict[str, float], live: set[str], warn: Any
 ) -> None:
     lines = [br for br in net.branches if br.kind == "line"]
     trafos = [br for br in net.branches if br.kind == "transformer"]
+    for br in net.branches:
+        if br.rating_mva is None:
+            warn(
+                ConversionIssue(
+                    code="PYPSA_UNRATED_S_NOM_DEFAULTED",
+                    message=f"branch {br.id!r}: rating_mva is None; wrote s_nom = "
+                    f"{UNRATED_S_NOM_MVA} (pypsa.UNRATED_S_NOM_MVA) because PyPSA's optimiser "
+                    f"reads s_nom == 0 as 'carries nothing', not 'unlimited'",
+                    element_ids=[br.id],
+                )
+            )
     if lines:
         zb = [base_kv[br.from_bus] ** 2 / net.base_mva for br in lines]
         n.add(

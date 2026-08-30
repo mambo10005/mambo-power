@@ -278,6 +278,10 @@ enters only the `c_nf_per_km` conversion below, and the importer reads the docum
 
 `bus`, `ext_grid`, `gen`, `sgen`, `load`, `shunt`, `line`, `trafo` (two-winding), `poly_cost`,
 `pwl_cost`, and `res_bus` when it is non-empty (a stored voltage state → `vm_pu` / `va_deg`).
+The slack bus is the exception to "no `res_bus`, no state": its `vm_pu` / `va_deg` come from the
+`ext_grid` row's `vm_pu` / `va_degree` (the setpoint the slack holds), so a network read without
+a `res_bus` has a state on that one bus and `None` on every other — the warm-start rule in
+[the model page](model.md) (every in-service bus carries both) does not apply to such a file.
 Every other non-empty table — `trafo3w`, `switch`, `impedance`, `ward`, `xward`, `dcline`,
 `storage`, `motor`, `asymmetric_*`, ... — is dropped **row by row** with `ELEMENT_DROPPED`, so
 the report says exactly what was left behind.
@@ -318,9 +322,12 @@ All impedances are per unit on `sn_mva` and the **from-bus** voltage; `Zb = vn_k
 | `pwl_cost.points = [[p0, p1, slope], ...]` | `PiecewiseCost.points` | breakpoints with the cost at `p0` taken as 0 — pandapower has no offset column |
 | `bus.vn_kv`, `min/max_vm_pu`, `zone`, `geo`, `in_service` | `base_kv`, `v_min/max_pu`, `zone`, `geo`, `in_service` | `Bus.area` travels as an extra `bus.area` column (pandapower keeps unknown columns through `to_json`, measured) |
 
-On export a nominal-tap transformer is written with `tap_pos = 0`; an off-nominal one with
-`tap_pos = ±1` and `tap_step_percent = |tap_ratio − 1|·100`, which is pandapower's own
-`from_ppc` encoding and re-imports to the same ratio. A transformer without `rating_mva` is
+On export a nominal-tap transformer (`tap_ratio` `None` or `1.0`) is written with no tap
+changer — `tap_side` `None`, `tap_neutral` / `tap_pos` / `tap_step_percent` `NaN`, the columns
+pandapower itself leaves empty on such a transformer (its `networks.case14()` stores two that
+way); an off-nominal one with `tap_side = "hv"`, `tap_neutral = 0`, `tap_pos = ±1` and
+`tap_step_percent = |tap_ratio − 1|·100`, which is pandapower's own `from_ppc` encoding.
+Both re-import to the same ratio. A transformer without `rating_mva` is
 written with `sn_mva = base_mva` and `FIELD_DEFAULTED`, because pandapower needs a rated power
 to compute its impedance — it re-imports as a rating.
 
@@ -351,9 +358,11 @@ for every format.
   **not** applied to `in_service`.
 - The tap changer is folded into `tap_ratio`; `tap_step_degree` (a phase-shifting tap) is
   dropped with `COLUMN_DROPPED`.
-- A network with a non-zero `shift_deg` gets wrong `opf` / `market` branch flows until the
-  phase-shifter fix lands (M8 finding F1, carried as A19): `opf.dc_opf`'s flow rows omit the
-  shifter's PTDF term. `pf.solve_dc` is right, and pandapower's `rundcpp` agrees with it.
+- A network with a non-zero `shift_deg` gets wrong or infeasible `opf` / `market` results
+  until the phase-shifter fix lands (M8 finding F1, carried as A19): `opf.dc_opf`'s flow rows
+  omit the shifter's PTDF term, so the flows are wrong when the LP solves and a generously
+  rated loop with one shifter can come back `Infeasible` with no flows at all. `pf.solve_dc`
+  is right, and pandapower's `rundcpp` agrees with it.
 - **Round trip, measured (F2):** `pp.toolbox.nets_equal(from_json(dumps(loads(to_json(pn)))),
   pn)` holds for `poly_cost` and `pwl_cost` only. `bus`, `ext_grid`, `gen`, `sgen`, `load`,
   `shunt`, `line` and `trafo` fail strict equality on `name` (`None` in pandapower vs our ids),
@@ -402,7 +411,7 @@ objective on every bundled case (`tests/parity/test_pypsa_export_vs_pypsa.py`).
 | `Bus` | `Bus` | `v_nom = base_kv`, `v_mag_pu_min/max`, `control` (`Slack` / `PV` / `PQ`) from `type`, `x`/`y` from `geo` (lon, lat), `v_mag_pu_set` from the bus's generators' `v_set_pu`. `area`, `zone` and `in_service` ride along as **custom bus columns** (PyPSA buses have no `active` flag); every element at an out-of-service bus is exported `active = False`, which is what `numerics.NetworkArrays` does with them. |
 | `Branch` with `kind == "line"` | `Line` | Physical units on the from-bus base, `Zb = base_kv² / base_mva`: `r`, `x` in ohm (`× Zb`), `b` in siemens (`÷ Zb`). |
 | `Branch` with `kind == "transformer"` | `Transformer(model="pi")` | `r`, `x`, `b` per unit on the transformer's own `s_nom` (`× s_nom / base_mva`), `tap_ratio`, `tap_side = 0` (mambo's tap is on the from side), `phase_shift` in degrees. |
-| `rating_mva` | `s_nom` | An unrated branch gets `s_nom = 1e5` (`pypsa.UNRATED_S_NOM_MVA`): PyPSA's optimiser reads `s_nom == 0` as "carries nothing", not "unlimited". |
+| `rating_mva` | `s_nom` | An unrated branch gets `s_nom = 1e5` (`pypsa.UNRATED_S_NOM_MVA`): PyPSA's optimiser reads `s_nom == 0` as "carries nothing", not "unlimited". Reported per branch as `PYPSA_UNRATED_S_NOM_DEFAULTED`. |
 | `Generator` | `Generator` | `p_nom = max(abs(p_min_mw), abs(p_max_mw))`, `p_min_pu` / `p_max_pu` as fractions of it (so `p_nom == p_max_mw` in the ordinary case and a negative-only range survives), `marginal_cost = c1`, `marginal_cost_quadratic = c2`, `ramp_limit_up/down` as fractions of `p_nom`, `start_up_cost` / `shut_down_cost`, `control`, `active`. |
 | constant cost term `c0` | `marginal_cost_constant` | A **custom column** (`pypsa.COST_CONSTANT_COLUMN`): `n.objective` excludes constants, so the value is carried beside the objective, not in it. |
 | `Load` | `Load(p_set, q_set)` | |
@@ -413,7 +422,7 @@ objective on every bundled case (`tests/parity/test_pypsa_export_vs_pypsa.py`).
 **`p_set` is never written on a generator.** A non-NaN `p_set` pins the dispatch in
 `optimize()` — that was the root cause behind M3's first PyPSA parity mismatch.
 
-### Warnings (dropped, never approximated)
+### Warnings (dropped or defaulted, never silently)
 
 | Code | Dropped |
 | --- | --- |
@@ -424,6 +433,7 @@ objective on every bundled case (`tests/parity/test_pypsa_export_vs_pypsa.py`).
 | `PYPSA_GEN_Q_LIMITS_DROPPED` | `q_min_mvar` / `q_max_mvar` (PyPSA generators carry no reactive limits). |
 | `PYPSA_GEN_RAMP_DROPPED` | A ramp on a zero-capacity generator (cannot be a fraction of `p_nom = 0`). |
 | `PYPSA_GEN_VSET_CONFLICT` | Generators at one bus disagreeing on `v_set_pu`; PyPSA has one `v_mag_pu_set` per bus, the first generator's wins. |
+| `PYPSA_UNRATED_S_NOM_DEFAULTED` | A branch with `rating_mva = None`, written with `s_nom = 1e5` (`pypsa.UNRATED_S_NOM_MVA`); one entry per branch naming it and the sentinel. |
 
 Every issue names the element id and the field. The exporter raises nothing of its own: a
 `Network` is already valid, and PyPSA's constructors are given only values they accept.
@@ -437,9 +447,11 @@ Every issue names the element id and the field. The exporter raises nothing of i
   exporter carries the shift faithfully (`n.lpf()` agrees with `pf.solve_dc` on a shifted
   loop, sign included), so it is not reported, but DC-OPF parity is a statement about
   shift-free networks.
-- On the mambo side, a network with a non-zero `shift_deg` gets wrong `opf` / `market` branch
-  flows until the phase-shifter fix lands (F1 / A19): `opf.dc_opf`'s flow rows omit the
-  shifter's PTDF term. `pf.solve_dc` is right and matches PyPSA's `lpf()`.
+- On the mambo side, a network with a non-zero `shift_deg` gets wrong or infeasible `opf` /
+  `market` results until the phase-shifter fix lands (F1 / A19): `opf.dc_opf`'s flow rows omit
+  the shifter's PTDF term, so the flows are wrong when the LP solves and a generously rated
+  loop with one shifter can come back `Infeasible` with no flows at all. `pf.solve_dc` is right
+  and matches PyPSA's `lpf()`.
 - Parity, measured (F3): the DC-OPF objective agrees to 1e-8 relative on case14, case30 and
   case118 (worst 1.3e-12) and the dispatch to 1e-4 MW on case14 and case30. On case118 one
   generator differs by 1.87e-3 MW — the oracle's residual, not the mapping's: both dispatches
@@ -459,7 +471,7 @@ print(n.generators[["p_nom", "marginal_cost", "marginal_cost_quadratic"]].head(2
 ```
 
 ```text
-['PYPSA_GEN_Q_LIMITS_DROPPED', 'PYPSA_ZONE_DROPPED'] 6
+['PYPSA_GEN_Q_LIMITS_DROPPED', 'PYPSA_UNRATED_S_NOM_DEFAULTED', 'PYPSA_ZONE_DROPPED'] 26
        p_nom  marginal_cost  marginal_cost_quadratic
 name
 gen-1  332.4           20.0                 0.043029
@@ -554,7 +566,7 @@ Anything wrong with the **file** raises `RawImportError` with a stable `code` an
 | `UNSUPPORTED_VERSION` | `REV` is not 33. |
 | `BAD_NUMBER` | A token that is not a finite number where one is required; `IDE` not in 1–4; `CZ` / `CW` not in 1–3; `CZ` 2 or 3 with `SBASE1-2 <= 0`; `CZ = 3` with `abs(Z) < R`. |
 | `BAD_RECORD` | A record with fewer fields than its layout needs, or a multi-line record the file ends inside. |
-| `UNTERMINATED_SECTION` | A section (through zone) without its `0` terminator. |
+| `UNTERMINATED_SECTION` | A section (through zone) without its `0` terminator. When the next `0` line's comment names a later section (`0 / END OF LOAD DATA` while buses are still being read), the message names the section that lacks its terminator and `line` is that `0` line; without such a comment it names the section the file ended in, at the line it ended, and says an earlier terminator is the likely defect. |
 | `UNKNOWN_BUS` | A load, shunt, generator, branch or transformer naming a bus number the bus section does not have. |
 
 Anything wrong with the **network** raises `NetworkValidationError`, as for every format.
@@ -563,16 +575,21 @@ Anything wrong with the **network** raises `NetworkValidationError`, as for ever
 
 - Version 33 only. Older layouts (v30–v32 differ in the bus and transformer records) and
   the v34+ layouts are refused with `UNSUPPORTED_VERSION`.
-- No costs: an imported RAW network flows (`pf`), and `opf` / `market` on it fails the
-  ordinary "no cost" validation — the importer never invents costs (A3).
+- No costs: an imported RAW network flows (`pf`); `opf.solve_dc_opf` and every `market`
+  clearing on it raise `mambo_power.opf.MissingCostError` (a `ValueError`) naming every
+  generator without a cost, before any solve — and `jobs.run` reports that as a `VALIDATION`
+  failure. The importer never invents costs; set `Generator.cost` on each generator (or pass
+  `costs=` to `opf.gen_cost_coeffs`) before pricing dispatch.
 - Three-winding transformers, switched shunts, DC lines, FACTS, impedance-correction tables
   and owners are skipped, not modelled. A switched shunt's `BINIT` is not folded, so a case
   whose voltage profile relies on it solves to a different voltage.
 - Transformers have `b = 0`; the magnetising branch is a bus shunt, not line charging.
 - Only `RATEA` becomes `rating_mva`; `RATEB` / `RATEC` are dropped.
-- A network with a non-zero `shift_deg` (any transformer with `ANG1 != 0`) gets wrong `opf` /
-  `market` branch flows until the phase-shifter fix lands (F1 / A19): `opf.dc_opf`'s flow
-  rows omit the shifter's PTDF term. `pf.solve_dc` is right.
+- A network with a non-zero `shift_deg` (any transformer with `ANG1 != 0`) gets wrong or
+  infeasible `opf` / `market` results until the phase-shifter fix lands (F1 / A19):
+  `opf.dc_opf`'s flow rows omit the shifter's PTDF term, so the flows are wrong when the LP
+  solves and a generously rated loop with one shifter can come back `Infeasible` with no flows
+  at all. `pf.solve_dc` is right.
 
 ### Example
 
@@ -645,7 +662,9 @@ cell and a breakpoint a row — the spreadsheet-friendly form.
   `nan` / `inf` are rejected on read, as the model rejects them.
 - Booleans are written `true` / `false`; `true / false / 1 / 0` are accepted on read in any case.
 - Empty tables are written header-only, so the manifest's table set never varies.
-- Row order is list order and is preserved.
+- Row order is list order and is preserved. A fully blank row is skipped (an editor's trailing
+  newline does not change the row count), and a UTF-8 BOM at the start of a table (Excel's
+  "CSV UTF-8" save) is ignored; the writer emits plain UTF-8 with no BOM.
 
 ### Errors
 
@@ -676,8 +695,9 @@ and raise `NetworkValidationError`, exactly as for the native format.
 - Spreadsheet applications that reformat floats on save (`0.1` → `0,1`, `1e-05` → `0.00001`)
   or coerce `01` to `1` break the bit-exact guarantee; the bundle detects the former as
   `CSV_BAD_VALUE` and cannot detect the latter.
-- A network with a non-zero `shift_deg` gets wrong `opf` / `market` branch flows until the
-  phase-shifter fix lands (F1 / A19), whichever format it was read from; `pf.solve_dc` is right.
+- A network with a non-zero `shift_deg` gets wrong or infeasible `opf` / `market` results
+  until the phase-shifter fix lands (F1 / A19), whichever format it was read from — wrong flows
+  when the LP solves, and possibly `Infeasible` with no flows at all; `pf.solve_dc` is right.
 
 ### Example
 

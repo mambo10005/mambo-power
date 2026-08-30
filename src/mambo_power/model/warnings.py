@@ -52,6 +52,7 @@ ImportIssueCode = Literal[
     "PYPSA_GEN_Q_LIMITS_DROPPED",
     "PYPSA_GEN_RAMP_DROPPED",
     "PYPSA_GEN_VSET_CONFLICT",
+    "PYPSA_UNRATED_S_NOM_DEFAULTED",
 ]
 """The closed set of importer/repair warning codes.
 
@@ -94,7 +95,8 @@ filled with a stated default.
 ``BID_DROPPED`` — a load bid the target format cannot express.
 ``PYPSA_*`` — fields :mod:`mambo_power.io.pypsa` dropped because PyPSA cannot carry them
 (piecewise or degree > 2 costs, load bids, zones, generator Q limits, a ramp on a zero-capacity
-generator) or collapsed (disagreeing voltage setpoints at one bus).
+generator), collapsed (disagreeing voltage setpoints at one bus) or approximated (an unrated
+branch written with the ``s_nom`` sentinel, ``PYPSA_UNRATED_S_NOM_DEFAULTED``).
 """
 
 

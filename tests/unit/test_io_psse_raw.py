@@ -419,6 +419,86 @@ def test_defects_raise(mutate, code):
     assert code in str(info.value)
 
 
+WALK_TINY = """\
+0, 100.00, 33, 0, 0, 60.00 / hand-written
+tiny 3 bus
+walk
+1, 'ONE', 110.0, 3, 1, 1, 1, 1.0, 0.0
+2, 'TWO', 110.0, 1, 1, 1, 1, 1.0, 0.0
+3, 'THR', 20.0, 1, 1, 1, 1, 1.0, 0.0
+0 / end of bus
+2, '1', 1, 1, 1, 30.0, 10.0, 0, 0, 0, 0
+3, '1', 1, 1, 1, 10.0, 2.0, 0, 0, 0, 0
+0 / end of load
+3, '1', 1, 0.0, 5.0
+0 / end of fixed shunt
+1, '1', 40.0, 0.0, 50.0, -50.0, 1.02, 0, 100.0, 0, 0, 0, 0, 1.0, 1, 100.0, 200.0, 0.0
+0 / end of generator
+1, 2, '1', 0.01, 0.1, 0.02, 100.0, 0, 0, 0, 0, 0, 0, 1
+0 / end of branch
+2, 3, 0, '1', 1, 1, 1, 0.0, 0.0, 2, '  ', 1
+0.005, 0.08, 100.0
+1.0, 0.0, 0.0, 40.0
+1.0, 0.0
+0 / end of transformer
+1, 1, 0.0, 'AREA1'
+0 / end of area
+0 / end of 2-terminal dc
+0 / end of vsc
+0 / end of impedance correction
+0 / end of multi-terminal
+0 / end of multi-section
+1, 'ZONE1'
+0 / end of zone
+Q
+"""
+"""The M8 walker's hand-written three-bus RAW (walk/w5_raw.py), lowercase abbreviated
+terminator comments and all."""
+
+
+def _without_line(text: str, line: int) -> str:
+    lines = text.splitlines(keepends=True)
+    del lines[line - 1]
+    return "".join(lines)
+
+
+def test_walk_tiny_loads() -> None:
+    net = psse_raw.loads(WALK_TINY)
+    assert len(net.buses) == 3 and len(net.branches) == 2 and len(net.loads) == 2
+
+
+def test_unterminated_section_names_the_section_and_the_line_the_parser_gave_up_at() -> None:
+    """M8 walk, surprise 5: with the bus section's ``0`` (line 7) deleted, the error named the
+    *vsc dc* section at line 31 -- five sections after the defect, in a 31-line file. The next
+    ``0`` line's comment (``end of load``) names a later section than the one being read, so
+    the parser can name the section whose terminator is missing and stop right there."""
+    text = _without_line(WALK_TINY, 7)
+    with pytest.raises(RawImportError) as info:
+        psse_raw.loads(text)
+    assert info.value.code == "UNTERMINATED_SECTION"
+    assert info.value.line == 9  # the '0 / end of load' line, one up from 10 after the deletion
+    message = str(info.value)
+    assert message.startswith("UNTERMINATED_SECTION: bus section is not terminated")
+    assert "line 9" in message and "load section" in message
+    assert "vsc" not in message
+
+
+def test_unterminated_section_without_comments_says_where_the_file_ended() -> None:
+    """Strip every terminator comment: nothing names the missing section, so the message says
+    which section the file ended in, at the line it ended, and that an earlier terminator is
+    the likely defect -- rather than asserting the *last* section is the unterminated one."""
+    bare = "\n".join(line.split(" / ")[0] for line in WALK_TINY.splitlines()) + "\n"
+    assert psse_raw.loads(bare) == psse_raw.loads(WALK_TINY)
+    text = _without_line(bare, 7)
+    with pytest.raises(RawImportError) as info:
+        psse_raw.loads(text)
+    assert info.value.code == "UNTERMINATED_SECTION"
+    assert info.value.line == 31  # the 'Q' line after the deletion
+    message = str(info.value)
+    assert "file ended inside the vsc dc section" in message
+    assert "an earlier section" in message and "line 31" in message
+
+
 def test_missing_bus_reference_raises():
     text = THREE_WINDING.replace("2,'1 ', 1, 1, 1, 10.0, 2.0", "9,'1 ', 1, 1, 1, 10.0, 2.0")
     with pytest.raises(RawImportError) as info:
