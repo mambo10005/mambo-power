@@ -28,6 +28,14 @@ ImportIssueCode = Literal[
     "CSV_DUPLICATE_ID",
     "CSV_BAD_VALUE",
     "CSV_ORPHAN_ROW",
+    # M8 W4 — io.psse_raw (PSS/E RAW v33 import)
+    "RAW_NO_COSTS",
+    "RAW_LOAD_ZIP_FOLDED",
+    "RAW_BRANCH_END_SHUNT_FOLDED",
+    "RAW_XFMR_MAGNETISING_FOLDED",
+    "RAW_THREE_WINDING_IGNORED",
+    "RAW_SWITCHED_SHUNT_IGNORED",
+    "RAW_SECTION_IGNORED",
 ]
 """The closed set of importer/repair warning codes.
 
@@ -44,6 +52,20 @@ The ``CSV_*`` codes are :mod:`mambo_power.io.csv_bundle` import errors (never wa
 ``CSV_BAD_VALUE`` — a cell does not parse as its column's type (``nan`` included), or an
 entity fails its own field validation;
 ``CSV_ORPHAN_ROW`` — a cost/bid side-table row whose owner is absent or carries no ``kind``.
+
+RAW v33 import (:mod:`mambo_power.io.psse_raw`, M8 W4):
+
+``RAW_NO_COSTS`` — RAW carries no economic data; every generator imports with ``cost=None``
+(once per file).
+``RAW_LOAD_ZIP_FOLDED`` — a load's constant-current/constant-admittance parts (``IP IQ YP YQ``)
+were folded into ``p_mw``/``q_mvar`` at the bus's ``VM`` (MATPOWER's rule).
+``RAW_BRANCH_END_SHUNT_FOLDED`` — a branch end shunt (``GI BI`` / ``GJ BJ``) became a ``Shunt``.
+``RAW_XFMR_MAGNETISING_FOLDED`` — a transformer's ``MAG1``/``MAG2`` became a ``Shunt`` at the
+from bus.
+``RAW_THREE_WINDING_IGNORED`` — a three-winding transformer record (``K != 0``) was skipped.
+``RAW_SWITCHED_SHUNT_IGNORED`` — a switched shunt record was skipped (``BINIT`` not folded).
+``RAW_SECTION_IGNORED`` — a record of an unread section (owner, DC lines, FACTS, ...) was
+skipped; the message names the section and the record.
 """
 
 
