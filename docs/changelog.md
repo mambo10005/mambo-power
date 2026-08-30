@@ -11,6 +11,24 @@ One section per wave, newest first. Nothing on this page has been released. Whic
 merged to `epic/01-foundation` and which are still on their own branch is tracked in [the home
 page's roadmap table](index.md), not restated here, so this page cannot go stale about it.
 
+### Fixed — the DC-OPF phase-shifter flow defect (M7 F1, M8 A19)
+
+- `opf.dc_opf`'s flow-limit row constant, `opf.solve_dc_opf`'s derived `branches[].p_from_mw`
+  and `market.solve_nodal` / `solve_agents`' derived branch flows all omitted the phase
+  shifter's `p_shift` bus injection from their PTDF product, so any network with a non-zero
+  `shift_deg` (from any importer) got wrong `opf` / `market` branch flows, and a generously
+  rated shifter loop could come back `Infeasible` with no flows at all — `pf.solve_dc` was
+  always right. Fixed at all three sites: `numerics.bbus.flow_from_ptdf(ptdf, injection_mw,
+  arr)` (the identity `flow = ptdf @ (injection_mw - p_shift·base_mva) + pf_shift·base_mva`,
+  matching `pf.solve_dc` exactly) is now called directly by `opf.solve_dc_opf` and
+  `market._clearing`; `opf.dc_opf`'s own flow-limit row constant folds in the same `p_shift`
+  term by hand, since its `const_k` is added to a linear combination of decision variables
+  rather than a full injection vector. Every existing fixture has `shift_deg == 0` everywhere,
+  so `p_shift(arr) == 0` identically and the fix is a byte-for-byte no-op on them; a new
+  generously-rated three-bus shifter loop (`tests/_shifter.py`) is the fix's own regression
+  fixture, checked against `pf.solve_dc` and PyPSA's `lpf()` at two asymmetric shift angles.
+  The [File formats](manual/formats.md) limitations sections no longer carry this caveat.
+
 ### Added — wave M8 (interop)
 
 - `io.pandapower_json`: `load` / `loads` / `load_with_report` read a `pp.to_json` document
@@ -67,7 +85,7 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   phase shifter's PTDF term, so a network with a non-zero `shift_deg` — from any format — gets
   wrong `opf` / `market` branch flows until the standalone fix lands; `pf.solve_dc` is right
   and agrees with pandapower's `rundcpp` and PyPSA's `lpf()`. Stated under every importer's
-  limitations in the manual.
+  limitations in the manual. **Fixed** — see "Fixed", above.
 
 ### Changed — wave M8 (interop)
 
