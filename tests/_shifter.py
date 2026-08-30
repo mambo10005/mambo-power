@@ -16,11 +16,18 @@ PyPSA's ``lpf()``) predicts. That loop-flow split is exactly what ``opf.dc_opf``
 and most tests built on it isolate the shift-formula bug from the rating logic entirely; pass
 ``t12_rating_mva`` to bind the shifter branch specifically (used by the test that confirms
 ``dc_opf``'s own flow-limit row keeps the LP's dispatch within the *true* physical limit).
+
+:func:`zoned_shifter_loop_network` (task-shifter-flow-fix.plan.md T8) wraps the same network with
+every bus in one zone, the minimum a ``market.solve_zonal`` clearing needs (``zone_partition``
+rejects any unzoned bus) -- one zone means no corridor is needed at all (a corridor-less,
+single-zone clearing is a legitimate copper-plate market design, ``solve_zonal``'s own
+docstring), so this is the smallest wrapper that exercises ``opf.redispatch``'s fix end-to-end
+through the public ``market.solve_zonal`` entry point.
 """
 
 from __future__ import annotations
 
-from mambo_power.model import Branch, Bus, Generator, Load, Network, PolynomialCost
+from mambo_power.model import Branch, Bus, Generator, Load, Network, PolynomialCost, Zone
 
 LOAD_P_MW = 100.0
 """The fixed load at b2 every test in this module dispatches against."""
@@ -82,6 +89,18 @@ def shifter_loop_network(shift_deg: float, *, t12_rating_mva: float | None = Non
         generators=[gen("g1", "b1", G1_C1), gen("g3", "b3", G3_C1)],
         loads=[Load(id="d2", bus="b2", p_mw=LOAD_P_MW, q_mvar=0.0)],
     )
+
+
+def zoned_shifter_loop_network(
+    shift_deg: float, *, t12_rating_mva: float | None = None
+) -> Network:
+    """:func:`shifter_loop_network` with every bus assigned to one zone ``"Z1"`` (module
+    docstring) -- the minimum ``market.solve_zonal`` needs to clear this fixture at all."""
+    net = shifter_loop_network(shift_deg, t12_rating_mva=t12_rating_mva)
+    net.zones = [Zone(id="Z1")]
+    for bus in net.buses:
+        bus.zone = "Z1"
+    return net
 
 
 def dispatched_network(net: Network, dispatch: dict[str, float]) -> Network:
