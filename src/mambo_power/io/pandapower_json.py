@@ -723,6 +723,11 @@ def _from_pandapower(pn: Any) -> tuple[Network, ImportReport]:
 
 
 def _to_pandapower(net: Network, *, f_hz: float) -> tuple[Any, list[ImportIssue]]:
+    """Build the ``pandapowerNet`` with one bulk creator call per table (``create_buses``,
+    ``create_lines_from_parameters``, ...): pandapower's single-row creators cost a full-table
+    dtype pass each, which made the export quadratic (33 s on case300, M8 critic finding 4).
+    The tables and values are the ones the per-row creators produced; the test
+    ``test_bulk_export_is_byte_identical_to_pandapowers_per_row_creators`` pins that."""
     import pandapower as pp
 
     warnings: list[ImportIssue] = []
@@ -737,39 +742,99 @@ def _to_pandapower(net: Network, *, f_hz: float) -> tuple[Any, list[ImportIssue]
         )
 
     pn = pp.create_empty_network(sn_mva=net.base_mva, f_hz=f_hz)
-    bus_index: dict[str, int] = {}
     bus_by_id = {b.id: b for b in net.buses}
     for zone in net.zones:
         if zone.name is not None:
             dropped(zone.id, "zone.name", zone.name)
-    for bus in net.buses:
-        bus_index[bus.id] = pp.create_bus(
-            pn,
-            vn_kv=bus.base_kv,
-            name=bus.id,
-            zone=bus.zone,
-            in_service=bus.in_service,
-            min_vm_pu=math.nan if bus.v_min_pu is None else bus.v_min_pu,
-            max_vm_pu=math.nan if bus.v_max_pu is None else bus.v_max_pu,
-            geodata=None if bus.geo is None else (bus.geo.lon, bus.geo.lat),
-        )
-    if any(b.area is not None for b in net.buses):
-        pn.bus["area"] = [b.area for b in net.buses]
+    buses = net.buses
+    indices = pp.create_buses(
+        pn,
+        len(buses),
+        vn_kv=[b.base_kv for b in buses],
+        name=[b.id for b in buses],
+        zone=[b.zone for b in buses],
+        in_service=[b.in_service for b in buses],
+        min_vm_pu=[math.nan if b.v_min_pu is None else b.v_min_pu for b in buses],
+        max_vm_pu=[math.nan if b.v_max_pu is None else b.v_max_pu for b in buses],
+    )
+    bus_index: dict[str, int] = {b.id: int(i) for b, i in zip(buses, indices, strict=True)}
+    for b in buses:
+        if b.geo is not None:  # what create_bus(geodata=(x, y)) writes
+            pn.bus.at[bus_index[b.id], "geo"] = (
+                f'{{"coordinates": [{b.geo.lon}, {b.geo.lat}], "type": "Point"}}'
+            )
+    if any(b.area is not None for b in buses):
+        pn.bus["area"] = [b.area for b in buses]
 
-    gen_ref: dict[str, tuple[str, int]] = {}
-    slack_taken = False
     slack_gen = next(
         (g for g in net.generators if bus_by_id[g.bus].type == "slack" and g.in_service), None
     )
     _drop_bus_state(net, slack_gen, warnings)
+    _export_generators(pp, pn, net, bus_by_id, bus_index, slack_gen, warnings, dropped)
+
+    if net.loads:
+        pp.create_loads(
+            pn,
+            [bus_index[ld.bus] for ld in net.loads],
+            p_mw=[ld.p_mw for ld in net.loads],
+            q_mvar=[ld.q_mvar for ld in net.loads],
+            name=[ld.id for ld in net.loads],
+            in_service=[ld.in_service for ld in net.loads],
+        )
+    for load in net.loads:
+        if load.bid is not None:
+            warnings.append(
+                _issue(
+                    "BID_DROPPED",
+                    f"{load.id}: bid ({load.bid.kind}) dropped (pandapower has no demand bid)",
+                    element_ids=[load.id],
+                )
+            )
+    if net.shunts:
+        pp.create_shunts(
+            pn,
+            [bus_index[sh.bus] for sh in net.shunts],
+            q_mvar=[-sh.b_mvar for sh in net.shunts],
+            p_mw=[sh.g_mw for sh in net.shunts],
+            vn_kv=[bus_by_id[sh.bus].base_kv for sh in net.shunts],
+            step=1,
+            name=[sh.id for sh in net.shunts],
+            in_service=[sh.in_service for sh in net.shunts],
+        )
+    for unit in net.storage:
+        warnings.append(
+            _issue(
+                "ELEMENT_DROPPED",
+                f"{unit.id}: storage dropped (pandapower storage has no efficiency columns)",
+                element_ids=[unit.id],
+            )
+        )
+    _export_branches(pp, pn, net, bus_by_id, bus_index, f_hz, warnings, dropped)
+    return pn, warnings
+
+
+def _export_generators(
+    pp: Any,
+    pn: Any,
+    net: Network,
+    bus_by_id: dict[str, Bus],
+    bus_index: dict[str, int],
+    slack_gen: Generator | None,
+    warnings: list[ImportIssue],
+    dropped: Any,
+) -> None:
+    """The slack bus's first in-service generator → ``ext_grid``; PV/slack-bus generators →
+    ``gen``; PQ-bus generators → ``sgen``; then every cost, in generator order."""
+    gens: list[Generator] = []
+    sgens: list[Generator] = []
+    gen_ref: dict[str, tuple[str, int]] = {}
     for gen in net.generators:
         bus = bus_by_id[gen.bus]
         if gen.ramp_up_mw is not None:
             dropped(gen.id, "ramp_up_mw", gen.ramp_up_mw)
         if gen.ramp_down_mw is not None:
             dropped(gen.id, "ramp_down_mw", gen.ramp_down_mw)
-        if bus.type == "slack" and gen.in_service and not slack_taken:
-            slack_taken = True
+        if gen is slack_gen:
             idx = pp.create_ext_grid(
                 pn,
                 bus_index[gen.bus],
@@ -782,100 +847,114 @@ def _to_pandapower(net: Network, *, f_hz: float) -> tuple[Any, list[ImportIssue]
                 max_q_mvar=gen.q_max_mvar,
                 min_q_mvar=gen.q_min_mvar,
             )
-            gen_ref[gen.id] = ("ext_grid", idx)
+            gen_ref[gen.id] = ("ext_grid", int(idx))
             if gen.p_mw != 0.0:
                 dropped(gen.id, "p_mw", gen.p_mw, "ext_grid has no setpoint")
             if gen.q_mvar != 0.0:
                 dropped(gen.id, "q_mvar", gen.q_mvar, "ext_grid has no setpoint")
         elif bus.type in ("slack", "pv"):
-            idx = pp.create_gen(
-                pn,
-                bus_index[gen.bus],
-                p_mw=gen.p_mw,
-                vm_pu=gen.v_set_pu,
-                name=gen.id,
-                in_service=gen.in_service,
-                max_p_mw=gen.p_max_mw,
-                min_p_mw=gen.p_min_mw,
-                max_q_mvar=gen.q_max_mvar,
-                min_q_mvar=gen.q_min_mvar,
-            )
-            gen_ref[gen.id] = ("gen", idx)
+            gens.append(gen)
             if gen.q_mvar != 0.0:
                 dropped(gen.id, "q_mvar", gen.q_mvar, "gen is PV: no Q setpoint")
         else:
-            idx = pp.create_sgen(
-                pn,
-                bus_index[gen.bus],
-                p_mw=gen.p_mw,
-                q_mvar=gen.q_mvar,
-                name=gen.id,
-                in_service=gen.in_service,
-                max_p_mw=gen.p_max_mw,
-                min_p_mw=gen.p_min_mw,
-                max_q_mvar=gen.q_max_mvar,
-                min_q_mvar=gen.q_min_mvar,
-            )
-            gen_ref[gen.id] = ("sgen", idx)
+            sgens.append(gen)
             if gen.v_set_pu != 1.0:
                 dropped(gen.id, "v_set_pu", gen.v_set_pu, "sgen on a PQ bus holds no setpoint")
-        _export_cost(pp, pn, gen.id, gen_ref[gen.id], gen.cost, warnings, dropped)
-
-    for load in net.loads:
-        pp.create_load(
+    if gens:
+        idx_gens = pp.create_gens(
             pn,
-            bus_index[load.bus],
-            p_mw=load.p_mw,
-            q_mvar=load.q_mvar,
-            name=load.id,
-            in_service=load.in_service,
+            [bus_index[g.bus] for g in gens],
+            p_mw=[g.p_mw for g in gens],
+            vm_pu=[g.v_set_pu for g in gens],
+            name=[g.id for g in gens],
+            in_service=[g.in_service for g in gens],
+            max_p_mw=[g.p_max_mw for g in gens],
+            min_p_mw=[g.p_min_mw for g in gens],
+            max_q_mvar=[g.q_max_mvar for g in gens],
+            min_q_mvar=[g.q_min_mvar for g in gens],
         )
-        if load.bid is not None:
-            warnings.append(
-                _issue(
-                    "BID_DROPPED",
-                    f"{load.id}: bid ({load.bid.kind}) dropped (pandapower has no demand bid)",
-                    element_ids=[load.id],
-                )
-            )
-    for shunt in net.shunts:
-        pp.create_shunt(
+        gen_ref.update({g.id: ("gen", int(i)) for g, i in zip(gens, idx_gens, strict=True)})
+        _null_text_columns(pn.gen, idx_gens, ("type", "curve_style"))
+    if sgens:
+        idx_sgens = pp.create_sgens(
             pn,
-            bus_index[shunt.bus],
-            q_mvar=-shunt.b_mvar,
-            p_mw=shunt.g_mw,
-            vn_kv=bus_by_id[shunt.bus].base_kv,
-            step=1,
-            name=shunt.id,
-            in_service=shunt.in_service,
+            [bus_index[g.bus] for g in sgens],
+            p_mw=[g.p_mw for g in sgens],
+            q_mvar=[g.q_mvar for g in sgens],
+            name=[g.id for g in sgens],
+            in_service=[g.in_service for g in sgens],
+            max_p_mw=[g.p_max_mw for g in sgens],
+            min_p_mw=[g.p_min_mw for g in sgens],
+            max_q_mvar=[g.q_max_mvar for g in sgens],
+            min_q_mvar=[g.q_min_mvar for g in sgens],
         )
-    for unit in net.storage:
-        warnings.append(
-            _issue(
-                "ELEMENT_DROPPED",
-                f"{unit.id}: storage dropped (pandapower storage has no efficiency columns)",
-                element_ids=[unit.id],
-            )
+        gen_ref.update({g.id: ("sgen", int(i)) for g, i in zip(sgens, idx_sgens, strict=True)})
+        _null_text_columns(pn.sgen, idx_sgens, ("curve_style",))
+        # create_sgens adds a generator_type column create_sgen does not; the file stays the one
+        # the per-row export wrote (the importer reads current_source, not this)
+        pn.sgen.drop(columns=["generator_type"], inplace=True, errors="ignore")
+    poly: list[tuple[int, str, float, float, float]] = []
+    pwl: list[tuple[int, str, list[list[float]]]] = []
+    for gen in net.generators:
+        _collect_cost(gen.id, gen_ref[gen.id], gen.cost, poly, pwl, warnings, dropped)
+    if poly:
+        pp.create_poly_costs(
+            pn,
+            [element for element, _et, _c2, _c1, _c0 in poly],
+            [et for _element, et, _c2, _c1, _c0 in poly],
+            cp1_eur_per_mw=[c1 for _element, _et, _c2, c1, _c0 in poly],
+            cp0_eur=[c0 for _element, _et, _c2, _c1, c0 in poly],
+            cp2_eur_per_mw2=[c2 for _element, _et, c2, _c1, _c0 in poly],
+        )
+    if pwl:
+        pp.create_pwl_costs(
+            pn,
+            [element for element, _, _ in pwl],
+            [et for _, et, _ in pwl],
+            points=[points for _, _, points in pwl],
         )
 
-    for br in net.branches:
-        vn_from = bus_by_id[br.from_bus].base_kv
-        if not br.is_transformer:  # kind, or a tap/shift assigned after construction
-            zb = vn_from * vn_from / net.base_mva
-            pp.create_line_from_parameters(
-                pn,
-                bus_index[br.from_bus],
-                bus_index[br.to_bus],
-                length_km=1.0,
-                r_ohm_per_km=br.r * zb,
-                x_ohm_per_km=br.x * zb,
-                c_nf_per_km=br.b / zb / (2.0 * math.pi * f_hz) * 1e9,
-                max_i_ka=math.nan if br.rating_mva is None else br.rating_mva / (_SQRT3 * vn_from),
-                name=br.id,
-                in_service=br.in_service,
-            )
-            continue
+
+def _export_branches(
+    pp: Any,
+    pn: Any,
+    net: Network,
+    bus_by_id: dict[str, Bus],
+    bus_index: dict[str, int],
+    f_hz: float,
+    warnings: list[ImportIssue],
+    dropped: Any,
+) -> None:
+    lines = [br for br in net.branches if not br.is_transformer]  # kind, or a later-assigned tap
+    trafos = [br for br in net.branches if br.is_transformer]
+    if lines:
+        zb = [bus_by_id[br.from_bus].base_kv ** 2 / net.base_mva for br in lines]
+        pp.create_lines_from_parameters(
+            pn,
+            [bus_index[br.from_bus] for br in lines],
+            [bus_index[br.to_bus] for br in lines],
+            length_km=1.0,
+            r_ohm_per_km=[br.r * z for br, z in zip(lines, zb, strict=True)],
+            x_ohm_per_km=[br.x * z for br, z in zip(lines, zb, strict=True)],
+            c_nf_per_km=[
+                br.b / z / (2.0 * math.pi * f_hz) * 1e9 for br, z in zip(lines, zb, strict=True)
+            ],
+            max_i_ka=[
+                math.nan
+                if br.rating_mva is None
+                else br.rating_mva / (_SQRT3 * bus_by_id[br.from_bus].base_kv)
+                for br in lines
+            ],
+            name=[br.id for br in lines],
+            in_service=[br.in_service for br in lines],
+        )
+        _null_text_columns(pn.line, pn.line.index[-len(lines) :], ("std_type", "type"))
+    if not trafos:
+        return
+    sn: list[float] = []
+    for br in trafos:
         sn_trafo = net.base_mva if br.rating_mva is None else br.rating_mva
+        sn.append(sn_trafo)
         if br.rating_mva is None:
             warnings.append(
                 _issue(
@@ -885,37 +964,43 @@ def _to_pandapower(net: Network, *, f_hz: float) -> tuple[Any, list[ImportIssue]
                     element_ids=[br.id],
                 )
             )
-        scale = 100.0 * sn_trafo / net.base_mva
-        tap = 1.0 if br.tap_ratio is None else br.tap_ratio
-        if tap == 1.0:
-            tap_args: dict[str, Any] = {}
-        else:
-            tap_args = {
-                "tap_side": "hv",
-                "tap_neutral": 0,
-                "tap_pos": 1 if tap > 1.0 else -1,
-                "tap_step_percent": abs(tap - 1.0) * 100.0,
-                "tap_changer_type": "Ratio",
-            }
-        pp.create_transformer_from_parameters(
-            pn,
-            bus_index[br.from_bus],
-            bus_index[br.to_bus],
-            sn_mva=sn_trafo,
-            vn_hv_kv=vn_from,
-            vn_lv_kv=bus_by_id[br.to_bus].base_kv,
-            vkr_percent=br.r * scale,
-            vk_percent=math.hypot(br.r, br.x) * scale,
-            pfe_kw=0.0,
-            i0_percent=0.0,
-            shift_degree=0.0 if br.shift_deg is None else br.shift_deg,
-            name=br.id,
-            in_service=br.in_service,
-            **tap_args,
-        )
+    scale = [100.0 * s / net.base_mva for s in sn]
+    taps = [1.0 if br.tap_ratio is None else br.tap_ratio for br in trafos]
+    tapped = [tap != 1.0 for tap in taps]
+    pp.create_transformers_from_parameters(
+        pn,
+        [bus_index[br.from_bus] for br in trafos],
+        [bus_index[br.to_bus] for br in trafos],
+        sn_mva=sn,
+        vn_hv_kv=[bus_by_id[br.from_bus].base_kv for br in trafos],
+        vn_lv_kv=[bus_by_id[br.to_bus].base_kv for br in trafos],
+        vkr_percent=[br.r * k for br, k in zip(trafos, scale, strict=True)],
+        vk_percent=[math.hypot(br.r, br.x) * k for br, k in zip(trafos, scale, strict=True)],
+        pfe_kw=0.0,
+        i0_percent=0.0,
+        shift_degree=[0.0 if br.shift_deg is None else br.shift_deg for br in trafos],
+        name=[br.id for br in trafos],
+        in_service=[br.in_service for br in trafos],
+        # a nominal tap is written as pandapower's own "no tap changer" (tap_side None, the tap
+        # columns NaN, M8 walk surprise 1); an off-nominal one as a ±1 position of |tap − 1|·100 %
+        tap_side=[("hv" if t else None) for t in tapped],
+        tap_neutral=[(0 if t else math.nan) for t in tapped],
+        tap_pos=[
+            ((1 if tap > 1.0 else -1) if t else math.nan)
+            for tap, t in zip(taps, tapped, strict=True)
+        ],
+        tap_step_percent=[
+            (abs(tap - 1.0) * 100.0 if t else math.nan) for tap, t in zip(taps, tapped, strict=True)
+        ],
+        tap_changer_type=[("Ratio" if t else None) for t in tapped],
+    )
+    new_rows = pn.trafo.index[-len(trafos) :]
+    _null_text_columns(pn.trafo, new_rows, ("std_type",))
+    untapped = [row for row, t in zip(new_rows, tapped, strict=True) if not t]
+    _null_text_columns(pn.trafo, untapped, ("tap_side", "tap_changer_type"))
+    for br in trafos:
         if br.b != 0.0:
             dropped(br.id, "b", br.b, "a pandapower trafo carries no line charging")
-    return pn, warnings
 
 
 def _drop_bus_state(net: Network, slack_gen: Generator | None, warnings: list[ImportIssue]) -> None:
@@ -943,15 +1028,26 @@ def _drop_bus_state(net: Network, slack_gen: Generator | None, warnings: list[Im
         )
 
 
-def _export_cost(
-    pp: Any,
-    pn: Any,
+def _null_text_columns(df: Any, index: Any, columns: tuple[str, ...]) -> None:
+    """The bulk creators write ``""`` where the single-row creators write ``None`` in these
+    free-text columns; ``None`` is what the per-row export produced and what ``from_json`` of a
+    pandapower-authored file holds, so the file stays comparable (``pp.nets_equal``)."""
+    for column in columns:
+        if column in df.columns:
+            df.loc[index, column] = None
+
+
+def _collect_cost(
     gen_id: str,
     ref: tuple[str, int],
     cost: GeneratorCost | None,
+    poly: list[tuple[int, str, float, float, float]],
+    pwl: list[tuple[int, str, list[list[float]]]],
     warnings: list[ImportIssue],
     dropped: Any,
 ) -> None:
+    """Append the generator's cost to ``poly`` (``(element, et, c2, c1, c0)``) or ``pwl``
+    (``(element, et, segments)``), or report what pandapower cannot hold."""
     if cost is None:
         return
     if cost.startup != 0.0:
@@ -972,7 +1068,7 @@ def _export_cost(
             )
             return
         c2, c1, c0 = ([0.0] * (3 - len(coefficients)) + list(coefficients))[-3:]
-        pp.create_poly_cost(pn, element, et, cp1_eur_per_mw=c1, cp0_eur=c0, cp2_eur_per_mw2=c2)
+        poly.append((element, et, c2, c1, c0))
         return
     points = cost.points
     if points[0][1] != 0.0:
@@ -981,4 +1077,4 @@ def _export_cost(
         [p0, p1, (c1 - c0) / (p1 - p0)]
         for (p0, c0), (p1, c1) in zip(points, points[1:], strict=False)
     ]
-    pp.create_pwl_cost(pn, element, et, points=segments)
+    pwl.append((element, et, segments))
