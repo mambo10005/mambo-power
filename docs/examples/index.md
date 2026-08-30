@@ -159,6 +159,10 @@ two-agent duopoly reporting `converged`, the same run under an iteration cap rep
 
 ## 13. Interop
 
+Unlike the other twelve, this script takes about a minute rather than a second: it imports
+pandapower and PyPSA (their cold imports alone are ~20 s) and runs their solvers as the oracles.
+
+
 One `Network` (IEEE case14) through every format of wave M8, each conversion returning the
 report that says what it could not carry: the pandapower JSON export loaded by `pp.from_json`
 and solved by pandapower's own `rundcpp`, agreeing with `pf.solve_dc` to 1e-14 degrees;
