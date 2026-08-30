@@ -652,7 +652,9 @@ cell and a breakpoint a row — the spreadsheet-friendly form.
   `nan` / `inf` are rejected on read, as the model rejects them.
 - Booleans are written `true` / `false`; `true / false / 1 / 0` are accepted on read in any case.
 - Empty tables are written header-only, so the manifest's table set never varies.
-- Row order is list order and is preserved.
+- Row order is list order and is preserved. A fully blank row is skipped (an editor's trailing
+  newline does not change the row count), and a UTF-8 BOM at the start of a table (Excel's
+  "CSV UTF-8" save) is ignored; the writer emits plain UTF-8 with no BOM.
 
 ### Errors
 

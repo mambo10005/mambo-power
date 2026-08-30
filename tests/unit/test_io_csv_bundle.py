@@ -137,6 +137,34 @@ def test_load_with_report_is_empty_on_a_clean_bundle(tmp_path: Path) -> None:
     assert report.warnings == [] and report.errors == []
 
 
+def test_trailing_blank_lines_are_not_rows(tmp_path: Path) -> None:
+    """M8 walk, surprise 6: an editor that appends a blank line on save made the bundle
+    unreadable (``manifest says 11 rows, file has 13``). A fully blank row is skipped."""
+    csv_bundle.dump(full_network(), tmp_path)
+    path = tmp_path / "loads.csv"
+    path.write_bytes(path.read_bytes() + b"\n\n")
+    net, report = csv_bundle.load_with_report(tmp_path)
+    assert report.warnings == [] and report.errors == []
+    assert net == full_network()
+    # a row of empty cells is not a blank line: it is still a row, and the manifest disagrees
+    path.write_bytes(path.read_bytes() + b",,,,,,,")
+    with pytest.raises(ReportError, match="CSV_MANIFEST_INVALID"):
+        csv_bundle.load(tmp_path)
+
+
+def test_a_utf8_bom_on_a_table_is_ignored(tmp_path: Path) -> None:
+    """M8 walk, surprise 7: Excel's "CSV UTF-8" prefixes a BOM, which made the first header
+    ``\\ufeffid`` (``CSV_UNKNOWN_COLUMN`` + ``CSV_MISSING_COLUMN``). Read with ``utf-8-sig``;
+    the writer still emits plain UTF-8 (no BOM)."""
+    csv_bundle.dump(full_network(), tmp_path)
+    path = tmp_path / "buses.csv"
+    assert not path.read_bytes().startswith(b"\xef\xbb\xbf")
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+    net, report = csv_bundle.load_with_report(tmp_path)
+    assert report.warnings == [] and report.errors == []
+    assert net == full_network()
+
+
 # --- bundle layout ---------------------------------------------------------------------------
 
 

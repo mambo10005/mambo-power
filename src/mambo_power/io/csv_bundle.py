@@ -42,7 +42,10 @@ Cell rules
 - Booleans are written ``true``/``false``; ``true/false/1/0`` are accepted on read in any
   case.
 - Empty tables are written header-only, so the manifest's table set never varies.
-- Row order is list order and is preserved.
+- Row order is list order and is preserved. A fully blank row is not a row (an editor's
+  trailing newline does not change the count the manifest states), and a table is read as
+  ``utf-8-sig`` so a UTF-8 BOM (Excel's "CSV UTF-8") does not become part of the first header;
+  the writer emits plain UTF-8 with no BOM and no blank rows.
 
 Reading
 -------
@@ -136,6 +139,11 @@ class _Column:
     name: str
     kind: _Kind
     optional: bool
+
+
+def _blank_line(row: list[str]) -> bool:
+    """A line with nothing on it -- not a row of empty cells (``,,,``), which is a bad row."""
+    return not row or (len(row) == 1 and not row[0].strip())
 
 
 class _BundleError(Exception):
@@ -450,8 +458,11 @@ class _Reader:
         if not path.is_file():
             self.error("CSV_MISSING_TABLE", f"{file} is missing")
             return None
-        with path.open(newline="", encoding="utf-8") as handle:
-            raw = list(csv.reader(handle))
+        # utf-8-sig: Excel's "CSV UTF-8" prefixes a BOM that would otherwise become part of the
+        # first header; a fully blank row (an editor's trailing newline) is not a row. Both from
+        # the M8 walk (surprises 6 and 7). The writer stays plain UTF-8 with no blank rows.
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            raw = [row for row in csv.reader(handle) if not _blank_line(row)]
         header = raw[0] if raw else []
         expected = [c.name for c in columns]
         ok = True
