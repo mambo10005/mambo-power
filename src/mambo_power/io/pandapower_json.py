@@ -8,9 +8,12 @@ the returned :class:`~mambo_power.io.report.ImportReport` /
 report means the conversion was lossless. Nothing is logged or printed.
 
 Tables read on import: ``bus``, ``ext_grid``, ``gen``, ``sgen``, ``load``, ``shunt``, ``line``,
-``trafo``, ``poly_cost``, ``pwl_cost`` (and ``res_bus`` for a stored voltage state). Every other
-non-empty table (``trafo3w``, ``switch``, ``impedance``, ``ward``, ``xward``, ``dcline``,
-``storage``, ...) is dropped row by row with ``ELEMENT_DROPPED``.
+``trafo``, ``poly_cost``, ``pwl_cost``. Results tables (``res_*``) are neither read nor written
+(the wave's "Not doing"; M8 critic finding 10): a bus's stored ``vm_pu``/``va_deg`` does not
+travel through this format except for the slack, whose state is the ``ext_grid`` setpoint; the
+export names every other bus that had one (``FIELD_DROPPED``). Every other non-empty table
+(``trafo3w``, ``switch``, ``impedance``, ``ward``, ``xward``, ``dcline``, ``storage``, ...) is
+dropped row by row with ``ELEMENT_DROPPED``.
 
 Unit conventions (measured on pandapower 3.3.0 against ``fixtures/matpower/case14.m``,
 ``record/m8-research.md`` §1; ``Zb = vn_kv(from)² / sn_mva``):
@@ -37,7 +40,7 @@ is ``pv``; everything else ``pq``. On export the rule runs backwards: the first 
 generator of the slack bus becomes ``ext_grid``, PV-bus generators ``gen``, PQ-bus generators
 ``sgen``. Ids: import takes ``name`` when it is present, else ``<table>-<index>``; export writes
 the id into ``name``. ``Bus.area`` travels as an extra ``bus.area`` column (pandapower keeps
-unknown columns through ``to_json``, measured); ``Bus.vm_pu``/``va_deg`` travel in ``res_bus``.
+unknown columns through ``to_json``, measured).
 """
 
 from __future__ import annotations
@@ -267,7 +270,6 @@ class _Importer:
 
     def buses(self) -> tuple[list[Bus], list[Zone]]:
         pn = self.pn
-        res = pn.res_bus if "res_bus" in pn and len(pn.res_bus) else None
         buses: list[Bus] = []
         zones: dict[str, Zone] = {}
         for idx in self.rows("bus"):
@@ -279,10 +281,6 @@ class _Importer:
             if zone is not None:
                 zones.setdefault(zone, Zone(id=zone))
             geo = _parse_geo(_column(pn.bus, "geo", idx))
-            vm = va = None
-            if res is not None and idx in res.index:
-                vm = _column(res, "vm_pu", idx)
-                va = _column(res, "va_degree", idx)
             area = _column(pn.bus, "area", idx)
             self.check_columns("bus", idx, bus_id, {"type": "b"})
             buses.append(
@@ -291,8 +289,6 @@ class _Importer:
                     base_kv=self.bus_kv[idx],
                     type="pq",
                     in_service=bool(pn.bus.at[idx, "in_service"]),
-                    vm_pu=None if vm is None else float(vm),
-                    va_deg=None if va is None else float(va),
                     v_min_pu=_float_or_none(_column(pn.bus, "min_vm_pu", idx)),
                     v_max_pu=_float_or_none(_column(pn.bus, "max_vm_pu", idx)),
                     area=None if area is None else str(area),
@@ -757,15 +753,15 @@ def _to_pandapower(net: Network, *, f_hz: float) -> tuple[Any, list[ImportIssue]
             max_vm_pu=math.nan if bus.v_max_pu is None else bus.v_max_pu,
             geodata=None if bus.geo is None else (bus.geo.lon, bus.geo.lat),
         )
-        if bus.vm_pu is not None:
-            pn.res_bus.at[bus_index[bus.id], "vm_pu"] = bus.vm_pu
-        if bus.va_deg is not None:
-            pn.res_bus.at[bus_index[bus.id], "va_degree"] = bus.va_deg
     if any(b.area is not None for b in net.buses):
         pn.bus["area"] = [b.area for b in net.buses]
 
     gen_ref: dict[str, tuple[str, int]] = {}
     slack_taken = False
+    slack_gen = next(
+        (g for g in net.generators if bus_by_id[g.bus].type == "slack" and g.in_service), None
+    )
+    _drop_bus_state(net, slack_gen, warnings)
     for gen in net.generators:
         bus = bus_by_id[gen.bus]
         if gen.ramp_up_mw is not None:
@@ -920,6 +916,31 @@ def _to_pandapower(net: Network, *, f_hz: float) -> tuple[Any, list[ImportIssue]
         if br.b != 0.0:
             dropped(br.id, "b", br.b, "a pandapower trafo carries no line charging")
     return pn, warnings
+
+
+def _drop_bus_state(net: Network, slack_gen: Generator | None, warnings: list[ImportIssue]) -> None:
+    """One ``FIELD_DROPPED`` naming every bus whose stored ``vm_pu``/``va_deg`` the file will not
+    hold: results tables are not written (module docstring). The slack's state is the exception --
+    ``ext_grid.vm_pu`` is its generator's ``v_set_pu`` and ``va_degree`` its ``va_deg`` -- so it
+    is named only when its ``vm_pu`` differs from that setpoint."""
+    lost: list[str] = []
+    for bus in net.buses:
+        if bus.vm_pu is None and bus.va_deg is None:
+            continue
+        if bus.type == "slack" and slack_gen is not None and slack_gen.bus == bus.id:
+            if bus.vm_pu is None or bus.vm_pu == slack_gen.v_set_pu:
+                continue
+        lost.append(bus.id)
+    if lost:
+        warnings.append(
+            _issue(
+                "FIELD_DROPPED",
+                f"vm_pu/va_deg dropped on {len(lost)} bus(es) {lost[:5]}"
+                f"{'...' if len(lost) > 5 else ''}: pandapower results tables (res_bus) are not "
+                "written; only the slack's state travels, as the ext_grid setpoint",
+                bus_ids=lost,
+            )
+        )
 
 
 def _export_cost(

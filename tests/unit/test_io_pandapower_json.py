@@ -617,3 +617,35 @@ def test_tap_assigned_to_a_line_after_construction_exports_as_a_trafo() -> None:
     assert theirs.kind == "transformer"
     assert theirs.tap_ratio == pytest.approx(1.05)
     assert line.id in pp.from_json_string(text).trafo.name.values
+
+
+# --- results tables are out of scope (M8 critic finding 10) -----------------------------------
+
+
+def test_solved_res_bus_is_not_read_only_the_slack_carries_a_state() -> None:
+    """The spec's "Not doing" excludes pandapower results tables: a solved ``res_bus`` in the
+    file leaves every non-slack bus without a state; the slack's comes from ``ext_grid``."""
+    net = _pp_two_bus()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pp.runpp(net, numba=False)
+    assert len(net.res_bus) == 2 and float(net.res_bus.vm_pu.iloc[1]) < 1.02
+    ours = pj.loads(pp.to_json(net))
+    slack = next(b for b in ours.buses if b.type == "slack")
+    other = next(b for b in ours.buses if b.type != "slack")
+    assert (slack.vm_pu, slack.va_deg) == (1.02, 0.0)  # the ext_grid setpoint, not res_bus
+    assert (other.vm_pu, other.va_deg) == (None, None)
+
+
+def test_stored_bus_state_is_not_written_and_is_named_once() -> None:
+    net = _net_with_everything()
+    net.buses[1].vm_pu, net.buses[1].va_deg = 1.01, -2.0
+    net.buses[2].vm_pu = 0.99
+    text, report = pj.dumps_with_report(net)
+    assert len(pp.from_json_string(text).res_bus) == 0
+    dropped = [w for w in report.warnings if w.code == "FIELD_DROPPED" and "vm_pu" in w.message]
+    assert len(dropped) == 1 and dropped[0].bus_ids == ["v", "q"]
+    # the slack's own state rides on ext_grid and is not reported
+    assert "s" not in dropped[0].bus_ids
+    back = pj.loads(text)
+    assert [b.vm_pu for b in back.buses] == [1.02, None, None]

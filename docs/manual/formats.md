@@ -277,11 +277,14 @@ enters only the `c_nf_per_km` conversion below, and the importer reads the docum
 ### Tables read
 
 `bus`, `ext_grid`, `gen`, `sgen`, `load`, `shunt`, `line`, `trafo` (two-winding), `poly_cost`,
-`pwl_cost`, and `res_bus` when it is non-empty (a stored voltage state → `vm_pu` / `va_deg`).
-The slack bus is the exception to "no `res_bus`, no state": its `vm_pu` / `va_deg` come from the
-`ext_grid` row's `vm_pu` / `va_degree` (the setpoint the slack holds), so a network read without
-a `res_bus` has a state on that one bus and `None` on every other — the warm-start rule in
-[the model page](model.md) (every in-service bus carries both) does not apply to such a file.
+`pwl_cost`. **Results tables (`res_bus`, `res_line`, ...) are neither read nor written** — the
+wave's scope excludes pandapower results, and a solved `res_bus` in the file is a result, not
+model data. The slack bus is the one bus with a state after import: its `vm_pu` / `va_deg` come
+from the `ext_grid` row's `vm_pu` / `va_degree` (the setpoint the slack holds), and every other
+bus has `None` — the warm-start rule in [the model page](model.md) (every in-service bus carries
+both) does not apply to an imported file. On export the same holds in reverse: a stored state on
+any other bus is not written and is named, once, in a `FIELD_DROPPED` issue whose `bus_ids` list
+them.
 Every other non-empty table — `trafo3w`, `switch`, `impedance`, `ward`, `xward`, `dcline`,
 `storage`, `motor`, `asymmetric_*`, ... — is dropped **row by row** with `ELEMENT_DROPPED`, so
 the report says exactly what was left behind.
@@ -341,7 +344,7 @@ to compute its impedance — it re-imports as a rating.
 | `ELEMENT_DROPPED` | both | Import: a row of a table that is not read (`trafo3w`, `switch`, `storage`, ...) or a `poly_cost` / `pwl_cost` row that is not a generator's active-power cost. Export: a `Storage` unit (pandapower's `storage` has no efficiency columns). |
 | `FIELD_DEFAULTED` | both | Import: a missing or `NaN` limit column (`min/max_p_mw`, `min/max_q_mvar` on `ext_grid` / `gen` / `sgen`) set to the element's setpoint, so the limits pin the setpoint rather than invent a range. Export: an unrated transformer's `sn_mva` set to `base_mva`. |
 | `ISLAND_DEACTIVATED` | import | As for MATPOWER: buses that cannot reach the slack are switched off with their elements ([islands](#islands)). |
-| `FIELD_DROPPED` | export | A model field with no pandapower column: `Zone.name`, generator `ramp_up_mw` / `ramp_down_mw`, the slack generator's `p_mw` / `q_mvar` (`ext_grid` has no setpoint), a PV generator's `q_mvar`, an `sgen`'s `v_set_pu`, a transformer's `b` (no line charging on a trafo), `cost.startup` / `cost.shutdown`, and a piecewise cost's offset `points[0][1]`. |
+| `FIELD_DROPPED` | export | A model field with no pandapower column: `Zone.name`, a stored `Bus.vm_pu` / `va_deg` on any bus but the slack (results tables are not written; one issue, `bus_ids` names them), generator `ramp_up_mw` / `ramp_down_mw`, the slack generator's `p_mw` / `q_mvar` (`ext_grid` has no setpoint), a PV generator's `q_mvar`, an `sgen`'s `v_set_pu`, a transformer's `b` (no line charging on a trafo), `cost.startup` / `cost.shutdown`, and a piecewise cost's offset `points[0][1]`. |
 | `COST_DROPPED` | export | A polynomial cost of degree > 2 (`poly_cost` holds `cp0..cp2`); dropped, never approximated. |
 | `BID_DROPPED` | export | A load's demand bid (pandapower has no elastic demand); the load is written as a fixed `p_mw`. |
 

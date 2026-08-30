@@ -15,7 +15,7 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
 
 - `io.pandapower_json`: `load` / `loads` / `load_with_report` read a `pp.to_json` document
   (`bus`, `ext_grid`, `gen`, `sgen`, `load`, `shunt`, `line`, two-winding `trafo`, `poly_cost`,
-  `pwl_cost`, `res_bus`) with the measured per-unit conversions — line `r/x/b` on
+  `pwl_cost`; no results table) with the measured per-unit conversions — line `r/x/b` on
   `vn_kv²/sn_mva`, trafo impedance from `vk_percent` on the system base, the tap changer folded
   into `tap_ratio`, the shunt sign flipped from consumption to injection; the first in-service
   `ext_grid` is the slack and any further one is demoted to a PV generator with a warning.
