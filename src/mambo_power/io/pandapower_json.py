@@ -20,9 +20,11 @@ Unit conventions (measured on pandapower 3.3.0 against ``fixtures/matpower/case1
   ``rating_mva = max_i_ka · df · parallel · √3 · vn_kv(from)``;
 * trafo: ``z = vk_percent/100 · sn_mva/sn_trafo · (vn_lv_kv/vn(lv bus))² / parallel``,
   ``r`` from ``vkr_percent`` the same way, ``x = √(z² − r²)``;
-  ``tap_ratio = (vn_hv_kv/vn(hv bus)) / (vn_lv_kv/vn(lv bus))`` after the tap changer
-  (``1 + (tap_pos − tap_neutral)·tap_step_percent/100``) has scaled the tapped winding;
-  ``from_bus = hv_bus`` (mambo's tap side), ``shift_deg = shift_degree``;
+  ``tap_ratio = (vn_hv_kv/vn(hv bus)) / (vn_lv_kv/vn(lv bus))`` after the tap changer has
+  scaled the tapped winding (``1 + (tap_pos − tap_neutral)·tap_step_percent/100`` for a
+  ``Ratio`` tap; pandapower 3.3's full rule, ``tap_changer_type`` ``None`` = no tap, is in
+  ``_Importer.tap_changer``); ``from_bus = hv_bus`` (mambo's tap side),
+  ``shift_deg = shift_degree`` plus what the changer adds;
 * shunt: pandapower's ``p_mw``/``q_mvar`` are *consumption*, mambo's ``b_mvar`` is *injection*:
   ``b_mvar = −q_mvar · step · (vn(bus)/vn_kv)²``, ``g_mw = p_mw · step · (vn(bus)/vn_kv)²``;
 * costs: ``poly_cost`` ``cp2/cp1/cp0`` ↔ ``PolynomialCost.coefficients == [c2, c1, c0]``;
@@ -84,11 +86,12 @@ CODES: tuple[str, ...] = (
     "ELEMENT_DROPPED",
     "FIELD_DEFAULTED",
     "ISLAND_DEACTIVATED",
+    "TAP_CHANGER_TYPE_UNSUPPORTED",
     "FIELD_DROPPED",
     "COST_DROPPED",
     "BID_DROPPED",
 )
-"""Every report code this module emits (import: the first five; export: the last three plus
+"""Every report code this module emits (import: the first six; export: the last three plus
 ``ELEMENT_DROPPED`` for storage and ``FIELD_DEFAULTED`` for an unrated transformer's
 ``sn_mva``). S6 registers them in :data:`mambo_power.io.report.LIMITATIONS`."""
 
@@ -508,16 +511,7 @@ class _Importer:
             hv_idx, lv_idx = pn.trafo.at[idx, "hv_bus"], pn.trafo.at[idx, "lv_bus"]
             vnh = float(pn.trafo.at[idx, "vn_hv_kv"])
             vnl = float(pn.trafo.at[idx, "vn_lv_kv"])
-            pos = _column(pn.trafo, "tap_pos", idx)
-            neutral = _column(pn.trafo, "tap_neutral", idx)
-            step = _column(pn.trafo, "tap_step_percent", idx)
-            if pos is not None and neutral is not None and step is not None:
-                factor = 1.0 + (float(pos) - float(neutral)) * float(step) / 100.0
-                side = _column(pn.trafo, "tap_side", idx)
-                if side == "hv":
-                    vnh *= factor
-                elif side == "lv":
-                    vnl *= factor
+            vnh, vnl, tap_shift = self.tap_changer(idx, bid, vnh, vnl)
             tap = (vnh / self.bus_kv[hv_idx]) / (vnl / self.bus_kv[lv_idx])
             parallel = float(_column(pn.trafo, "parallel", idx, 1))
             sn_trafo = float(pn.trafo.at[idx, "sn_mva"])
@@ -525,7 +519,7 @@ class _Importer:
             z = float(pn.trafo.at[idx, "vk_percent"]) / 100.0 * scale
             r = float(pn.trafo.at[idx, "vkr_percent"]) / 100.0 * scale
             x = math.sqrt(max(z * z - r * r, 0.0))
-            shift = float(_column(pn.trafo, "shift_degree", idx, 0.0))
+            shift = float(_column(pn.trafo, "shift_degree", idx, 0.0)) + tap_shift
             self.check_columns(
                 "trafo",
                 idx,
@@ -533,7 +527,6 @@ class _Importer:
                 {
                     "pfe_kw": 0.0,
                     "i0_percent": 0.0,
-                    "tap_step_degree": 0.0,
                     "max_loading_percent": 100.0,
                     "tap_dependency_table": False,
                 },
@@ -554,6 +547,84 @@ class _Importer:
                 )
             )
         return out
+
+    def tap_changer(
+        self, idx: Any, element: str, vnh: float, vnl: float
+    ) -> tuple[float, float, float]:
+        """``(vn_hv_kv, vn_lv_kv, extra shift_deg)`` after the tap changer, pandapower 3.3's
+        ``build_branch._calc_tap_from_dataframe`` rule (M8 critic finding 2):
+
+        * ``tap_changer_type`` ``None`` (``create_transformer_from_parameters``'s default): the
+          tap columns are inert -- pandapower solves the nominal tap, so does the import; a
+          non-neutral ``tap_pos`` is reported ``COLUMN_DROPPED`` because the file holds a value
+          that has no effect on either side;
+        * ``"Ratio"`` / ``"Symmetrical"``: the tapped winding's voltage becomes
+          ``|vn + du*e^(j*theta)|`` with ``du = vn * (tap_pos - tap_neutral) * tap_step_percent
+          / 100`` and ``theta = tap_step_degree`` (0 when absent -- the plain ratio tap), and the
+          shift grows by ``atan(+-du*sin(theta) / (vn + du*cos(theta)))``, ``+`` for
+          ``tap_side = "hv"``, ``-`` for ``"lv"``;
+        * ``"Ideal"``: a phase shift of ``+-(tap_pos - tap_neutral) * tap_step_degree`` when
+          ``tap_step_degree`` is set, else ``+-2*asin((tap_pos - tap_neutral) * tap_step_percent
+          / 200)``; both set is what ``runpp`` itself refuses;
+        * anything else (an unknown type, the refused ``Ideal`` case, or a ``tap_side`` that is
+          neither ``"hv"`` nor ``"lv"``): nominal tap with ``TAP_CHANGER_TYPE_UNSUPPORTED``.
+        """
+        df = self.pn.trafo
+        pos = float(_column(df, "tap_pos", idx, 0.0))
+        neutral = float(_column(df, "tap_neutral", idx, 0.0))
+        step = float(_column(df, "tap_step_percent", idx, 0.0))
+        degree = float(_column(df, "tap_step_degree", idx, 0.0))
+        side = _column(df, "tap_side", idx)
+        changer = _column(df, "tap_changer_type", idx)
+        diff = pos - neutral
+        if changer is None:
+            if diff != 0.0 and (step != 0.0 or degree != 0.0):
+                self.warnings.append(
+                    _issue(
+                        "COLUMN_DROPPED",
+                        f"trafo[{idx}] ({element}): tap_pos={pos:g} (tap_neutral={neutral:g}, "
+                        f"tap_step_percent={step:g}, tap_step_degree={degree:g}) with "
+                        "tap_changer_type=None: pandapower applies no tap without a changer "
+                        "type; imported at the nominal tap",
+                        element_ids=[element],
+                    )
+                )
+            return vnh, vnl, 0.0
+        direction = {"hv": 1.0, "lv": -1.0}.get(str(side))
+        if direction is None or changer not in ("Ratio", "Symmetrical", "Ideal"):
+            why = f"tap_side={side!r}" if direction is None else f"tap_changer_type={changer!r}"
+            return self.tap_unsupported(idx, element, vnh, vnl, why)
+        if changer == "Ideal":
+            if degree != 0.0 and step != 0.0:
+                why = (
+                    "tap_changer_type='Ideal' with both tap_step_percent and tap_step_degree "
+                    "set (pandapower's runpp refuses it too)"
+                )
+                return self.tap_unsupported(idx, element, vnh, vnl, why)
+            if degree != 0.0:
+                return vnh, vnl, direction * diff * degree
+            return vnh, vnl, direction * 2.0 * math.degrees(math.asin(diff * step / 200.0))
+        vn = vnh if side == "hv" else vnl
+        du = vn * step * diff / 100.0
+        theta = math.radians(degree)
+        vn_tapped = math.hypot(vn + du * math.cos(theta), du * math.sin(theta))
+        extra = math.degrees(
+            math.atan(direction * du * math.sin(theta) / (vn + du * math.cos(theta)))
+        )
+        return (vn_tapped, vnl, extra) if side == "hv" else (vnh, vn_tapped, extra)
+
+    def tap_unsupported(
+        self, idx: Any, element: str, vnh: float, vnl: float, why: str
+    ) -> tuple[float, float, float]:
+        self.warnings.append(
+            _issue(
+                "TAP_CHANGER_TYPE_UNSUPPORTED",
+                f"trafo[{idx}] ({element}): {why} cannot be expressed as a tap ratio and phase "
+                "shift; imported at the nominal tap with no shift from the changer",
+                element_ids=[element],
+            )
+        )
+        return vnh, vnl, 0.0
 
     def costs(self, gens: list[Generator]) -> None:
         pn = self.pn

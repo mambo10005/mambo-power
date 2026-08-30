@@ -466,3 +466,139 @@ def test_codes_are_a_subset_of_the_closed_issue_code_set() -> None:
 
     assert set(pj.CODES) <= set(get_args(ImportIssueCode))
     assert "ISLAND_DEACTIVATED" in pj.CODES
+
+
+# --- tap_changer_type (M8 critic finding 2) ----------------------------------------------------
+
+
+def _pp_trafo_net(**tap: Any) -> Any:
+    """110/20 kV, 40 MVA transformer feeding a 10 MW load; ``tap`` goes to the trafo row."""
+    net = pp.create_empty_network(sn_mva=100.0)
+    b1 = pp.create_bus(net, 110.0, name="hv")
+    b2 = pp.create_bus(net, 20.0, name="lv")
+    pp.create_ext_grid(net, b1, max_p_mw=100.0, min_p_mw=0.0, max_q_mvar=50.0, min_q_mvar=-50.0)
+    pp.create_load(net, b2, p_mw=10.0, q_mvar=2.0)
+    pp.create_transformer_from_parameters(
+        net, b1, b2, sn_mva=40.0, vn_hv_kv=110.0, vn_lv_kv=20.0, vkr_percent=0.5, vk_percent=10.0,
+        pfe_kw=0.0, i0_percent=0.0, name="t", **tap,
+    )  # fmt: skip
+    return net
+
+
+def _ppc_tap_shift(net: Any) -> tuple[float, float]:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pp.runpp(net, numba=False, trafo_model="pi", calculate_voltage_angles=True)
+    branch = net._ppc["branch"]
+    return float(branch[0, 8].real), float(branch[0, 9].real)
+
+
+_TAP = {"tap_pos": 2, "tap_neutral": 0, "tap_step_percent": 2.5}
+
+
+@pytest.mark.parametrize(
+    "tap",
+    [
+        pytest.param({**_TAP, "tap_side": "hv"}, id="none-ignored"),
+        pytest.param({**_TAP, "tap_side": "hv", "tap_changer_type": "Ratio"}, id="ratio-hv"),
+        pytest.param({**_TAP, "tap_side": "lv", "tap_changer_type": "Ratio"}, id="ratio-lv"),
+        pytest.param(
+            {**_TAP, "tap_side": "hv", "tap_step_degree": 5.0, "tap_changer_type": "Ratio"},
+            id="ratio-with-degree",
+        ),
+        pytest.param(
+            {**_TAP, "tap_side": "hv", "tap_step_degree": 5.0, "tap_changer_type": "Symmetrical"},
+            id="symmetrical-hv",
+        ),
+        pytest.param(
+            {**_TAP, "tap_side": "lv", "tap_step_degree": 5.0, "tap_changer_type": "Symmetrical"},
+            id="symmetrical-lv",
+        ),
+        pytest.param(
+            {
+                "tap_pos": 2,
+                "tap_neutral": 0,
+                "tap_step_percent": 0.0,
+                "tap_step_degree": 5.0,
+                "tap_side": "hv",
+                "tap_changer_type": "Ideal",
+            },
+            id="ideal-degree-hv",
+        ),  # fmt: skip
+        pytest.param(
+            {
+                "tap_pos": 2,
+                "tap_neutral": 0,
+                "tap_step_percent": 0.0,
+                "tap_step_degree": 5.0,
+                "tap_side": "lv",
+                "tap_changer_type": "Ideal",
+            },
+            id="ideal-degree-lv",
+        ),  # fmt: skip
+        pytest.param(
+            {
+                "tap_pos": -3,
+                "tap_neutral": 0,
+                "tap_step_percent": 2.0,
+                "tap_side": "hv",
+                "tap_changer_type": "Ideal",
+            },
+            id="ideal-percent",
+        ),  # fmt: skip
+        pytest.param({**_TAP, "tap_side": "hv", "shift_degree": 30.0}, id="none-with-shift"),
+    ],
+)
+def test_tap_changer_type_matches_pandapowers_ppc(tap: dict[str, Any]) -> None:
+    """pandapower >= 3.0 applies ``tap_pos`` only when ``tap_changer_type`` is set: ``None``
+    leaves the tap columns inert, ``Ratio``/``Symmetrical`` rotate the step by
+    ``tap_step_degree``, ``Ideal`` is a pure phase shift. The imported ``tap_ratio``/``shift_deg``
+    must equal pandapower's own ``ppc`` TAP/SHIFT, and ``pf.solve_ac`` its ``runpp``."""
+    net = _pp_trafo_net(**tap)
+    ours, report = pj.loads_with_report(pp.to_json(net))
+    tap_ppc, shift_ppc = _ppc_tap_shift(net)
+    t = next(b for b in ours.branches if b.id == "t")
+    assert (t.tap_ratio or 1.0) == pytest.approx(tap_ppc, abs=1e-9)
+    assert (t.shift_deg or 0.0) == pytest.approx(shift_ppc, abs=1e-9)
+    assert "TAP_CHANGER_TYPE_UNSUPPORTED" not in report.codes
+    from mambo_power import pf
+
+    vm = {b.id: b.vm_pu for b in pf.solve_ac(ours).buses}
+    assert vm["lv"] == pytest.approx(float(net.res_bus.vm_pu.iloc[1]), abs=1e-6)
+    assert vm["hv"] == pytest.approx(float(net.res_bus.vm_pu.iloc[0]), abs=1e-6)
+
+
+def test_tap_columns_without_a_changer_type_are_reported_dropped() -> None:
+    """A non-neutral ``tap_pos`` under ``tap_changer_type = None`` is a value pandapower ignores;
+    the import matches pandapower (nominal) and says so, once, naming the column."""
+    _, report = pj.loads_with_report(pp.to_json(_pp_trafo_net(**_TAP, tap_side="hv")))
+    dropped = [w for w in report.warnings if w.code == "COLUMN_DROPPED"]
+    assert len(dropped) == 1 and dropped[0].element_ids == ["t"]
+    assert "tap_pos=2" in dropped[0].message and "tap_changer_type" in dropped[0].message
+    # a neutral tap (pandapower's own from_ppc encoding) is not worth a report
+    _, quiet = pj.loads_with_report(
+        pp.to_json(_pp_trafo_net(tap_pos=0, tap_neutral=0, tap_step_percent=0.0, tap_side="hv"))
+    )
+    assert "COLUMN_DROPPED" not in quiet.codes
+
+
+@pytest.mark.parametrize(
+    "tap",
+    [
+        pytest.param({"tap_changer_type": "Tabular", "tap_side": "hv", **_TAP}, id="unknown"),
+        pytest.param(
+            {"tap_changer_type": "Ideal", "tap_side": "hv", "tap_step_degree": 5.0, **_TAP},
+            id="ideal-both-set",
+        ),
+    ],
+)
+def test_unsupported_tap_changer_imports_nominal_with_a_report(tap: dict[str, Any]) -> None:
+    """A ``tap_changer_type`` pandapower cannot apply either (an unknown name, or an ``Ideal``
+    shifter with both ``tap_step_percent`` and ``tap_step_degree`` set, which ``runpp`` refuses)
+    imports at the nominal tap with ``TAP_CHANGER_TYPE_UNSUPPORTED`` naming the transformer."""
+    ours, report = pj.loads_with_report(pp.to_json(_pp_trafo_net(**tap)))
+    t = next(b for b in ours.branches if b.id == "t")
+    assert t.tap_ratio is None and t.shift_deg is None
+    issues = [w for w in report.warnings if w.code == "TAP_CHANGER_TYPE_UNSUPPORTED"]
+    assert len(issues) == 1 and issues[0].element_ids == ["t"]
+    assert tap["tap_changer_type"] in issues[0].message

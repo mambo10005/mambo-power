@@ -315,7 +315,7 @@ All impedances are per unit on `sn_mva` and the **from-bus** voltage; `Zb = vn_k
 | `line.c_nf_per_km` | `b` | `2π·f_hz · c_nf_per_km·1e-9 · length · parallel · Zb` |
 | `line.max_i_ka`, `df` | `rating_mva` | `max_i_ka · df · parallel · √3 · vn_kv(from)` |
 | `trafo.vk_percent`, `vkr_percent`, `sn_mva`, `vn_lv_kv` | `x`, `r` | `z = vk/100 · sn_mva/sn_trafo · (vn_lv_kv / vn(lv bus))² / parallel`, `r` likewise from `vkr`, `x = √(z² − r²)` — on the **system** base |
-| `trafo.vn_hv_kv`, `vn_lv_kv`, `tap_*` | `tap_ratio` | `(vn_hv_kv/vn(hv bus)) / (vn_lv_kv/vn(lv bus))` after `1 + (tap_pos − tap_neutral)·tap_step_percent/100` has scaled the tapped winding; `from_bus = hv_bus` (mambo's tap side) |
+| `trafo.vn_hv_kv`, `vn_lv_kv`, `tap_*` | `tap_ratio`, `shift_deg` | `(vn_hv_kv/vn(hv bus)) / (vn_lv_kv/vn(lv bus))` after the tap changer has scaled the tapped winding, by pandapower 3.3's own rule (`build_branch._calc_tap_from_dataframe`): `tap_changer_type = None` applies **no** tap (the columns are inert in pandapower too; a non-neutral `tap_pos` is `COLUMN_DROPPED`); `"Ratio"` / `"Symmetrical"` scale the winding by `1 + (tap_pos − tap_neutral)·tap_step_percent/100`, rotated by `tap_step_degree` when it is set (which also adds to `shift_deg`); `"Ideal"` adds `±(tap_pos − tap_neutral)·tap_step_degree` (or the arcsin-of-percent form) to `shift_deg` and leaves the ratio alone. `from_bus = hv_bus` (mambo's tap side) |
 | `trafo.shift_degree`, `sn_mva` | `shift_deg`, `rating_mva` | as is |
 | `shunt.p_mw`, `q_mvar`, `step`, `vn_kv` | `g_mw`, `b_mvar` | pandapower's values are *consumption*, mambo's `b_mvar` is *injection*: `b_mvar = −q_mvar · step · (vn(bus)/vn_kv)²`, `g_mw = p_mw · step · (vn(bus)/vn_kv)²` |
 | `poly_cost.cp2/cp1/cp0` | `PolynomialCost.coefficients = [c2, c1, c0]` | both ways; the `cq*` columns are dropped |
@@ -336,7 +336,8 @@ to compute its impedance — it re-imports as a rating.
 | Code | Direction | Repair |
 | --- | --- | --- |
 | `EXTRA_EXT_GRID_DEMOTED` | import | A second in-service `ext_grid`; imported as a PV generator (one slack). `bus_ids` names the bus. |
-| `COLUMN_DROPPED` | import | A column the model has no place for held a non-inert value (`bus.type != "b"`, `gen.slack_weight`, `line.g_us_per_km`, `trafo.pfe_kw` / `i0_percent` / `tap_step_degree`, `load.const_z_*` / `const_i_*`, `*.max_loading_percent`, `*.controllable`, ...); the message names table, row, column and value. |
+| `COLUMN_DROPPED` | import | A column the model has no place for held a non-inert value (`bus.type != "b"`, `gen.slack_weight`, `line.g_us_per_km`, `trafo.pfe_kw` / `i0_percent`, a `trafo.tap_pos` off neutral under `tap_changer_type = None` (pandapower applies no tap either), `load.const_z_*` / `const_i_*`, `*.max_loading_percent`, `*.controllable`, ...); the message names table, row, column and value. |
+| `TAP_CHANGER_TYPE_UNSUPPORTED` | import | A `trafo` tap changer neither pandapower nor the model can express as a ratio and a shift: an unknown `tap_changer_type`, an `"Ideal"` shifter with both `tap_step_percent` and `tap_step_degree` set (`runpp` refuses it too), or a `tap_side` that is neither `hv` nor `lv`. Imported at the nominal tap; the message names the transformer. |
 | `ELEMENT_DROPPED` | both | Import: a row of a table that is not read (`trafo3w`, `switch`, `storage`, ...) or a `poly_cost` / `pwl_cost` row that is not a generator's active-power cost. Export: a `Storage` unit (pandapower's `storage` has no efficiency columns). |
 | `FIELD_DEFAULTED` | both | Import: a missing or `NaN` limit column (`min/max_p_mw`, `min/max_q_mvar` on `ext_grid` / `gen` / `sgen`) set to the element's setpoint, so the limits pin the setpoint rather than invent a range. Export: an unrated transformer's `sn_mva` set to `base_mva`. |
 | `ISLAND_DEACTIVATED` | import | As for MATPOWER: buses that cannot reach the slack are switched off with their elements ([islands](#islands)). |
@@ -356,8 +357,11 @@ for every format.
 - Three-winding transformers, switches, impedances, wards, DC lines, motors and every
   asymmetric table are dropped (and reported), not modelled; a `switch` that opens a line is
   **not** applied to `in_service`.
-- The tap changer is folded into `tap_ratio`; `tap_step_degree` (a phase-shifting tap) is
-  dropped with `COLUMN_DROPPED`.
+- The tap changer is folded into `tap_ratio` / `shift_deg` exactly as pandapower 3.3 applies it
+  (table above), so a `tap_pos` under `tap_changer_type = None` — pandapower's default from
+  `create_transformer_from_parameters` — is inert on both sides; the changer's position itself
+  (`tap_pos`, `tap_min`, `tap_max`) is not a model field and does not survive a round trip
+  (the export writes a `±1` position encoding the ratio).
 - A network with a non-zero `shift_deg` gets wrong or infeasible `opf` / `market` results
   until the phase-shifter fix lands (M8 finding F1, carried as A19): `opf.dc_opf`'s flow rows
   omit the shifter's PTDF term, so the flows are wrong when the LP solves and a generously
