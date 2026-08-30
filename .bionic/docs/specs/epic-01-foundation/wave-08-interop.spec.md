@@ -108,12 +108,19 @@ v33 record layouts (the PSS/E manual is proprietary).
   provenance: epic R11; user 2026-08-30 "Best effort + report"; `m8-research.md` §1
 - **AC-2** — pandapower JSON export: `pp.from_json(dumps(net))` succeeds for every bundled fixture;
   on case14/30/57, pandapower `rundcpp` matches `pf.solve_dc` bus angles and branch flows to
-  `1e-6`, and `runpp` matches `pf.solve_ac` voltages to `1e-6` pu; `pp.toolbox.nets_equal(from_json(dumps(loads(to_json(pn)))), pn)`
-  on the entity tables the model carries (A6); dropped costs appear in the `ExportReport`.
+  `1e-6`, and `runpp` matches `pf.solve_ac` voltages to `1e-6` pu; every **value** column the model carries survives
+  `loads(to_json(pn)) → dumps → from_json` to 1e-12 relative on pandapower's case14/case30, and the
+  set of tables on which strict `pp.toolbox.nets_equal` holds is **pinned** as measured (**amended at
+  Step 4, F2**: it holds on `poly_cost`/`pwl_cost` only — the other eight differ on `name`, dtype and
+  default-column set, never on a value — so A6 as literally stated is false and the criterion now
+  says what is true); dropped costs appear in the `ExportReport`.
   provenance: epic R11; user 2026-08-30 "Drop + report"; `m8-research.md` §1
 - **AC-3** — PyPSA export: on case14/30/118 with polynomial costs of degree ≤ 2, PyPSA `optimize()`
   on `to_network(net)` agrees with `opf.solve_dc_opf` on objective (`1e-8` relative) and dispatch
-  (`1e-4` MW), extending M3's parity tolerances; a piecewise-cost network exports with those units
+  (`1e-4` MW on case14/case30; **`2e-3` MW on case118 — amended at Step 4, F3**: the oracle's HiGHS
+  QP stops 1.87e-3 MW early on one unit, the identical residual M3 measured on its own ppc-built
+  oracle; mambo's point is 1.6e-7 $/h cheaper under the exact polynomial and no HiGHS tolerance or
+  algorithm moves it), extending M3's parity tolerances; a piecewise-cost network exports with those units
   at `marginal_cost` 0 and each named in the `ExportReport`; no generator carries `p_set`.
   provenance: epic R11; user 2026-08-30 "Drop + report"; `m8-research.md` §2; M3 spec AC-3
 - **AC-4** — PSS/E RAW v33 import: `io.psse_raw.load(fixtures/case14_v33.raw)` equals
@@ -202,8 +209,8 @@ for formats (M4: requests carry a `Network`); converting via pandapower's `from_
 - **A4** — PyPSA cannot express piecewise costs, degree > 2, demand bids, zones, generator Q limits
   (measured on 1.2.4).
 - **A5** — CSV is machine-facing; `repr` floats round-trip bit-exactly through Python's `float()`.
-- **A6** — `pp.toolbox.nets_equal` holds for our export re-imported on the tables the model
-  carries (true on pandapower's own cases; to be proved on ours — at risk).
+- **A6** — **measured false as stated (F2)**: strict `nets_equal` holds on `poly_cost`/`pwl_cost`
+  only; every carried value column survives to 1e-12. The set is pinned in S2's test so drift shows.
 - **A7** — a neutral-tap transformer exists in pandapower's case14 (tap 1.0 measured), so S1's
   default is exercised in both directions.
 - **A8** — HiGHS via linopy is available on all three CI runners for AC-3 (M3's parity already
