@@ -643,7 +643,7 @@ tooling; it is not a second schema.
 
 | Function | Does |
 | --- | --- |
-| `csv_bundle.dump(net, directory)` | Write the manifest and every table (the directory is created). All-or-nothing: the files are rendered first and written into a temporary sibling directory (`.<name>.tmp-<pid>`) that is moved in only once complete, so a failure — the `""` refusal below, a full disk — leaves the previous bundle untouched. |
+| `csv_bundle.dump(net, directory)` | Write the manifest and every table (the directory is created). All-or-nothing: the files are rendered first and written into a fresh temporary sibling directory (`.<name>.tmp-<random>`); a directory that already holds a bundle is then swapped *as a directory* (renamed aside, the new one renamed in, the old one removed, foreign files carried over), so a failure — the `""` refusal below, a full disk, a table another program holds open (Windows refuses the rename before anything moves) — leaves the previous bundle byte-for-byte untouched and nothing beside it. A directory without a bundle in it (the working directory, say) is filled in place; a `directory` that is a file is refused (`NotADirectoryError`) before anything is written. |
 | `csv_bundle.load(directory) -> Network` | Read and validate a bundle. |
 | `csv_bundle.load_with_report(directory) -> (Network, ImportReport)` | Same; the report is always empty on success, because there is nothing a bundle can repair. |
 

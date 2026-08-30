@@ -65,6 +65,8 @@ import json
 import math
 import os
 import shutil
+import stat
+import tempfile
 import types
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -323,11 +325,22 @@ def dump(net: Network, directory: str | PathLike[str]) -> None:
     docstring's cell rules); nothing else about a valid :class:`Network` can fail to serialise.
 
     All-or-nothing: every table is rendered before anything is written, the files go into a
-    temporary sibling directory (``.<name>.tmp-<pid>``) and are moved into ``directory`` only
-    once all of them and the manifest exist, so an exception — the ``""`` refusal, or a failed
-    write — leaves whatever bundle was there before untouched (M8 critic finding 7).
+    fresh temporary sibling directory (``.<name>.tmp-<random>``, so nothing pre-existing is
+    ever removed), and when ``directory`` already holds a bundle the two are swapped *as
+    directories* -- the old one is renamed aside, the new one renamed into place, the old one
+    then removed (foreign files in it -- a README, a notebook -- are carried over first). So an
+    exception anywhere -- the ``""`` refusal, a full disk, a table another program holds open
+    (Windows refuses the first rename before anything has moved) -- leaves whatever bundle was
+    there before byte-for-byte untouched, and nothing beside it (M8 critic findings 7, 20, 26).
+    A ``directory`` that exists without a bundle in it (the working directory, say, which
+    Windows cannot rename) is filled in place: there is nothing old to protect.
+
+    Raises :class:`NotADirectoryError`, before anything is written, when ``directory`` names a
+    file.
     """
-    target = Path(directory)
+    target = Path(directory).resolve()
+    if target.exists() and not target.is_dir():
+        raise NotADirectoryError(f"{directory!s} is a file, not a bundle directory")
     rendered = _render(net)
     manifest = {
         "format": FORMAT,
@@ -335,23 +348,42 @@ def dump(net: Network, directory: str | PathLike[str]) -> None:
         "base_mva": net.base_mva,
         "tables": {file: len(rendered[file][1]) for file in TABLES},
     }
-    staging = target.parent / f".{target.name}.tmp-{os.getpid()}"
-    if staging.exists():
-        shutil.rmtree(staging)
-    staging.mkdir(parents=True)
+    bundle_files = (*TABLES, _MANIFEST)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.tmp-", dir=target.parent))
     try:
         for file, (header, rows) in rendered.items():
             _write_csv(staging / file, header, rows)
         (staging / _MANIFEST).write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n"
         )
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    target.mkdir(parents=True, exist_ok=True)
-    for file in (*TABLES, _MANIFEST):
-        os.replace(staging / file, target / file)
-    staging.rmdir()
+        if not target.is_dir() or not any((target / file).exists() for file in bundle_files):
+            target.mkdir(exist_ok=True)
+            for file in bundle_files:
+                os.replace(staging / file, target / file)
+            return
+        old = staging.with_name(staging.name.replace(".tmp-", ".old-", 1))
+        os.rename(target, old)  # fails whole on Windows if a file inside is open
+        try:
+            os.rename(staging, target)
+        except BaseException:
+            os.rename(old, target)
+            raise
+        for entry in old.iterdir():  # foreign files survive; bundle files are replaced
+            if entry.name not in bundle_files:
+                os.rename(entry, target / entry.name)
+        _remove_tree(old)
+    finally:
+        if staging.exists():
+            _remove_tree(staging)
+
+
+def _remove_tree(path: Path) -> None:
+    """``shutil.rmtree`` that also removes read-only files (Windows refuses them by default)."""
+    for entry in path.rglob("*"):
+        if entry.is_file():
+            entry.chmod(stat.S_IWRITE | stat.S_IREAD)
+    shutil.rmtree(path)
 
 
 def _render(net: Network) -> dict[str, tuple[list[str], list[list[str]]]]:

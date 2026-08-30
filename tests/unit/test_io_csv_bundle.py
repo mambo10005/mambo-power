@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import get_args
@@ -276,8 +278,7 @@ def test_dump_that_fails_midway_leaves_the_old_bundle_intact(
         csv_bundle.dump(changed, tmp_path)
     assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
     assert csv_bundle.load(tmp_path) == original
-    leftovers = [p.name for p in tmp_path.parent.iterdir() if ".tmp-" in p.name]
-    assert leftovers == []
+    assert _leftovers(tmp_path) == []
 
     # the rendering-time refusal is all-or-nothing too
     monkeypatch.setattr(csv_bundle, "_write_csv", real_write)
@@ -285,6 +286,123 @@ def test_dump_that_fails_midway_leaves_the_old_bundle_intact(
     with pytest.raises(ValueError, match="name"):
         csv_bundle.dump(changed, tmp_path)
     assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+
+def _leftovers(target: Path) -> list[str]:
+    """Temporary or old-bundle directories left beside ``target``."""
+    return sorted(p.name for p in target.parent.iterdir() if ".tmp-" in p.name or ".old-" in p.name)
+
+
+def _changed_network() -> Network:
+    net = full_network()
+    net.buses[0].base_kv = 999.0
+    net.generators[0].p_max_mw = 12345.0
+    return net
+
+
+def test_dump_that_fails_in_the_swap_leaves_the_old_bundle_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M8 critic finding 20: the move phase was a per-table ``os.replace`` loop, so a failure on
+    the second table (a read-only file, a spreadsheet holding it open) left ``buses.csv`` new,
+    the rest old, and an orphan staging directory -- a mixed bundle that loads. The bundle is
+    now swapped in at the directory level; a failure at either rename leaves the old bundle
+    byte-identical and nothing beside it."""
+    original = full_network()
+    target = tmp_path / "bundle"
+    csv_bundle.dump(original, target)
+    before = {p.name: p.read_bytes() for p in target.iterdir()}
+    real_rename = os.rename
+
+    def failing_rename(src: str | Path, dst: str | Path, *args: object, **kw: object) -> None:
+        if ".tmp-" in Path(src).name:  # the second rename: staging -> target
+            raise PermissionError("held open")
+        real_rename(src, dst, *args, **kw)
+
+    monkeypatch.setattr(csv_bundle.os, "rename", failing_rename)
+    with pytest.raises(PermissionError, match="held open"):
+        csv_bundle.dump(_changed_network(), target)
+    assert {p.name: p.read_bytes() for p in target.iterdir()} == before
+    assert csv_bundle.load(target) == original
+    assert _leftovers(target) == []
+
+    def failing_first_rename(src: str | Path, dst: str | Path, *a: object, **kw: object) -> None:
+        if Path(src) == target:  # the first rename: target -> old
+            raise PermissionError("in use")
+        real_rename(src, dst, *a, **kw)
+
+    monkeypatch.setattr(csv_bundle.os, "rename", failing_first_rename)
+    with pytest.raises(PermissionError, match="in use"):
+        csv_bundle.dump(_changed_network(), target)
+    assert {p.name: p.read_bytes() for p in target.iterdir()} == before
+    assert _leftovers(target) == []
+
+
+def test_dump_over_a_bundle_with_a_file_held_open_is_all_or_nothing(tmp_path: Path) -> None:
+    """The critic's x3b: ``generators.csv`` open in another handle while a new bundle is
+    dumped. Windows refuses to rename a directory with an open file inside -- before anything
+    moves -- so the dump fails whole; POSIX allows it, so the dump succeeds whole. Either way
+    the directory is exactly one of the two bundles, and nothing is left beside it."""
+    original, changed = full_network(), _changed_network()
+    target = tmp_path / "bundle"
+    csv_bundle.dump(original, target)
+    with (target / "generators.csv").open(encoding="utf-8") as held:
+        try:
+            csv_bundle.dump(changed, target)
+        except PermissionError:
+            assert sys.platform == "win32"
+            assert csv_bundle.load(target) == original
+        else:
+            assert csv_bundle.load(target) == changed
+        held.read()
+    assert _leftovers(target) == []
+
+
+def test_dump_over_a_bundle_with_a_read_only_table_succeeds(tmp_path: Path) -> None:
+    """A read-only ``generators.csv`` (the critic's x3 case 2) used to fail the per-file
+    replace on Windows mid-loop. The directory swap moves it aside whole, and removing the old
+    bundle clears the read-only bit rather than leaving a ``.old-`` directory behind."""
+    target = tmp_path / "bundle"
+    csv_bundle.dump(full_network(), target)
+    (target / "generators.csv").chmod(0o444)
+    changed = _changed_network()
+    csv_bundle.dump(changed, target)
+    assert csv_bundle.load(target) == changed
+    assert _leftovers(target) == []
+
+
+def test_dump_keeps_foreign_files_in_the_target_directory(tmp_path: Path) -> None:
+    """A README or a notebook beside the bundle survives the directory swap; a stale extra
+    CSV is not a bundle file either and survives too (``load`` ignores it)."""
+    target = tmp_path / "bundle"
+    csv_bundle.dump(full_network(), target)
+    (target / "README.md").write_text("mine", encoding="utf-8")
+    (target / "notes").mkdir()
+    (target / "notes" / "a.txt").write_text("a", encoding="utf-8")
+    changed = _changed_network()
+    csv_bundle.dump(changed, target)
+    assert csv_bundle.load(target) == changed
+    assert (target / "README.md").read_text(encoding="utf-8") == "mine"
+    assert (target / "notes" / "a.txt").read_text(encoding="utf-8") == "a"
+    assert _leftovers(target) == []
+
+
+def test_dump_into_the_working_directory_and_onto_a_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``dump(net, ".")`` must keep working (Windows cannot rename the process's cwd, so a
+    bundle-free target is filled in place rather than swapped), and a target that is a file
+    is refused before anything is written -- no staging directory, the file untouched."""
+    monkeypatch.chdir(tmp_path)
+    csv_bundle.dump(full_network(), ".")
+    assert csv_bundle.load(".") == full_network()
+    assert _leftovers(tmp_path / "x") == []
+    clash = tmp_path / "file.txt"
+    clash.write_text("keep", encoding="utf-8")
+    with pytest.raises(NotADirectoryError, match="file.txt"):
+        csv_bundle.dump(full_network(), clash)
+    assert clash.read_text(encoding="utf-8") == "keep"
+    assert _leftovers(clash) == []
 
 
 # --- malformed bundles -----------------------------------------------------------------------
