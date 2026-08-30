@@ -247,9 +247,14 @@ def _scan(text: str) -> _Case:
         while True:
             if index >= len(lines) or lines[index].strip().upper() == "Q":
                 if _SECTIONS.index(section) <= _SECTIONS.index(_REQUIRED_THROUGH) or records:
+                    # Nothing left to name the defect: with one terminator missing, every later
+                    # section's '0' closes the one before it, and the file runs out here (M8
+                    # walk, surprise 5).
                     raise RawImportError(
                         "UNTERMINATED_SECTION",
-                        f"{section} section is not terminated by a '0' line",
+                        f"file ended inside the {section} section before its '0' terminator "
+                        f"(line {index + 1}); if every section is present, an earlier section "
+                        "is missing its '0' terminator",
                         index + 1,
                     )
                 break
@@ -258,6 +263,15 @@ def _scan(text: str) -> _Case:
             if not fields:
                 continue
             if fields[0] == "0":
+                named = _terminator_section(lines[index - 1])
+                if named is not None and _SECTIONS.index(named) > _SECTIONS.index(section):
+                    raise RawImportError(
+                        "UNTERMINATED_SECTION",
+                        f"{section} section is not terminated by a '0' line: the '0' at line "
+                        f"{index} ends the {named} section, so the records between were read "
+                        f"as {section} records",
+                        index,
+                    )
                 break
             span = _record_lines(section, fields, index)
             extra = [_split(lines[k]) for k in range(index, min(index + span - 1, len(lines)))]
@@ -271,6 +285,53 @@ def _scan(text: str) -> _Case:
             if _SECTIONS.index(section) >= _SECTIONS.index(_REQUIRED_THROUGH):
                 break
     return _Case(base_mva=base_mva, sections=sections)
+
+
+# Keywords a terminator's ``/`` comment may carry ("END OF LOAD DATA", "end of 2-terminal dc"),
+# most specific first so "fixed shunt" is not read as "switched shunt" or "inter-area" as "area".
+_TERMINATOR_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("FIXED SHUNT", "fixed shunt"),
+    ("SWITCHED SHUNT", "switched shunt"),
+    ("TWO-TERMINAL", "two-terminal dc"),
+    ("2-TERMINAL", "two-terminal dc"),
+    ("MULTI-TERMINAL", "multi-terminal dc"),
+    ("MULTI-SECTION", "multi-section line"),
+    ("INTER-AREA", "inter-area transfer"),
+    ("IMPEDANCE", "impedance correction"),
+    ("INDUCTION", "induction machine"),
+    ("VSC", "vsc dc"),
+    ("FACTS", "facts"),
+    ("GNE", "gne"),
+    ("OWNER", "owner"),
+    ("ZONE", "zone"),
+    ("AREA", "area"),
+    ("TRANSFORMER", "transformer"),
+    ("BRANCH", "branch"),
+    ("GENERATOR", "generator"),
+    ("LOAD", "load"),
+    ("BUS", "bus"),
+)
+
+
+def _terminator_section(line: str) -> str | None:
+    """The section a ``0`` terminator line's comment says it ends, or ``None``.
+
+    Reads only the text after ``END OF`` up to the first ``,`` / ``BEGIN`` (PSS/E writes
+    ``0 / END OF BUS DATA, BEGIN LOAD DATA``); the comment is optional, so a line without one
+    (or with one naming nothing known) is simply a terminator of the current section.
+    """
+    _, slash, comment = line.partition("/")
+    if not slash:
+        return None
+    upper = comment.upper()
+    _, marker, rest = upper.partition("END OF")
+    if not marker:
+        return None
+    rest = rest.split(",")[0].split("BEGIN")[0]
+    for keyword, section in _TERMINATOR_KEYWORDS:
+        if keyword in rest:
+            return section
+    return None
 
 
 def _record_lines(section: str, fields: list[str], line: int) -> int:

@@ -558,7 +558,7 @@ Anything wrong with the **file** raises `RawImportError` with a stable `code` an
 | `UNSUPPORTED_VERSION` | `REV` is not 33. |
 | `BAD_NUMBER` | A token that is not a finite number where one is required; `IDE` not in 1–4; `CZ` / `CW` not in 1–3; `CZ` 2 or 3 with `SBASE1-2 <= 0`; `CZ = 3` with `abs(Z) < R`. |
 | `BAD_RECORD` | A record with fewer fields than its layout needs, or a multi-line record the file ends inside. |
-| `UNTERMINATED_SECTION` | A section (through zone) without its `0` terminator. |
+| `UNTERMINATED_SECTION` | A section (through zone) without its `0` terminator. When the next `0` line's comment names a later section (`0 / END OF LOAD DATA` while buses are still being read), the message names the section that lacks its terminator and `line` is that `0` line; without such a comment it names the section the file ended in, at the line it ended, and says an earlier terminator is the likely defect. |
 | `UNKNOWN_BUS` | A load, shunt, generator, branch or transformer naming a bus number the bus section does not have. |
 
 Anything wrong with the **network** raises `NetworkValidationError`, as for every format.
