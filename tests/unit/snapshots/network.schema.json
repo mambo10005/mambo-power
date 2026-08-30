@@ -80,7 +80,7 @@
         },
         "kind": {
           "default": "line",
-          "description": "'line' or 'transformer'. Defaults to 'transformer' when tap_ratio is not None/1.0 or shift_deg is not None/0.0, else 'line'; an explicit 'transformer' at nominal tap is kept; an explicit 'line' with a tap or shift is rejected.",
+          "description": "'line' or 'transformer'. Defaults to 'transformer' when tap_ratio is not None/1.0 or shift_deg is not None/0.0, else 'line'; an explicit 'transformer' at nominal tap is kept; an explicit 'line' with a tap or shift is promoted to 'transformer' at validation. Assignment after construction does not re-run this rule: exporters route on is_transformer, which reads the fields.",
           "enum": [
             "line",
             "transformer"
