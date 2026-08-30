@@ -26,11 +26,9 @@ flowchart TB
         contingency["contingency<br/>n1, screen_n1, confirm_n1"]
         market["market<br/>solve_nodal (one period),<br/>solve_multiperiod (a horizon),<br/>solve_zonal (zonal + redispatch)"]
         marketstrategy["market.strategy<br/>Observation, Strategy,<br/>PriceTakerStrategy, MarkupStrategy,<br/>StrategyConfig, build_strategy"]
+        marketagents["market.agents<br/>solve_agents, AgentSetError<br/>(the fixed-point loop over offers)"]
         results["results<br/>BusResult, BranchResult, GenResult,<br/>ResultProvenance, from_arrays"]
         jobs["jobs<br/>SolveRequest, SolveResult, KINDS, run"]
-    end
-    subgraph later["Later waves"]
-        marketlater["market.agents<br/>solve_agents<br/>(the fixed-point loop, M7)"]
     end
 
     io --> model
@@ -71,8 +69,8 @@ flowchart TB
     jobs --> results
     jobs --> model
     jobs --> numerics
-    marketlater -.-> market
-    marketlater -.-> marketstrategy
+    marketagents --> market
+    marketagents --> marketstrategy
 ```
 
 Rules the diagram encodes:
