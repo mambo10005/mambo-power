@@ -396,6 +396,68 @@ cycle, which the own-node observation cannot compute anyway); a market-wide offe
 other three market modes lack); resizing the profit-tie band (no value separates noise from real
 change at every step — measured, and the reasoning independently accepted by the critic).
 
+## ADR-011 — Every format pivots through `Network`; what a format cannot carry is a report entry, never a guess
+
+**Status:** accepted with wave M8, 2026-08-30.
+
+**Context.** The interop wave was asked for pandapower JSON in both directions, PyPSA export, PSS/E
+RAW v33 import and a CSV bundle. Three of the four are lossy against the model, in different ways:
+PyPSA holds no piecewise cost, bid or zone; RAW holds no cost at all; pandapower caps costs at
+degree 2 and drops a piecewise offset. And two conventions in the ecosystem invite silent damage —
+pandapower's own `from_ppc` reads our BASE_KV=0 fixtures as `vn_kv = 0` and its `to_ppc` raises,
+and every external solver treats a generator setpoint as a dispatch pin rather than an input.
+
+**Decision.**
+
+1. **`Network` is the schema of record and the only pivot.** Each format is `import → Network →
+   export`; nothing converts format-to-format; no importer or exporter changes what the solvers
+   compute. The oracle for each direction is the external engine running the *converted* network
+   against mambo running the *original*: pandapower `rundcpp`/`runpp` against `pf.solve_dc`/`solve_ac`,
+   PyPSA `optimize` against `opf.solve_dc_opf`.
+2. **Best effort plus a report, never an approximation.** A field the target cannot hold is dropped
+   and named — element id and field — in an `ImportReport`/`ExportReport`; a piecewise or degree > 2
+   cost is *dropped*, not fitted, so the parity rows never compare two different problems. An empty
+   report means lossless. Nothing in `io` prints or logs.
+3. **One model widening: `Branch.kind`.** Explicit `line | transformer`, defaulted from tap and
+   shift at construction, so a neutral-tap transformer — pandapower's case14 has two — survives
+   the round-trip. An explicit `line` with a non-nominal tap is *promoted*, not rejected; exporters
+   route on `is_transformer` (`kind` or a non-nominal tap), so a `kind` that goes stale after
+   mutation cannot drop a tap.
+4. **A generator with no cost is a refusal, not a zero.** `gen_cost_coeffs` raises
+   `MissingCostError` naming the generators unless the caller supplies the costs; `jobs` maps it to
+   `VALIDATION`. A RAW import therefore flows and refuses to dispatch, as its documentation says.
+5. **Fixtures with declared provenance stand in for the oracle RAW lacks.** `case14_v33.raw` is
+   transcribed field by field from `case14.m`, and a synthetic file exercises CZ/CW/CM codes, a
+   neutral-tap transformer, parallel circuits and a ZIP load with hand-derived expected values.
+
+**Consequences.**
+
+1. **The limitations list is a registry, not prose.** `io.limitations.LIMITATIONS` references each
+   module's `CODES` tuple; a test demands every code be documented in `formats.md`; the registry
+   lives beside the formats, not inside `report.py`, because a leaf module importing its callers
+   works only by partially-initialised-module luck.
+2. **"Lossless" is measured per table, not assumed.** Strict `pp.toolbox.nets_equal` holds on our
+   export re-imported for `poly_cost`/`pwl_cost` only — the other tables differ on `name`, dtype
+   and default-column set, never on a value, all of which survive at 1e-12. The holding set is
+   pinned so drift shows; A6 as first written was false.
+3. **Cross-oracle tolerances are the oracle's, and they are recorded, not tuned.** PyPSA's HiGHS
+   QP stops 1.87e-3 MW early on one case118 unit — the identical residual M3 measured, mambo's point
+   cheaper under the exact polynomial — so that row's tolerance is 2e-3 MW on case118 only.
+4. **What the fixtures could not see, the reviews did.** Every bundled transformer has `b = 0`, so
+   a PyPSA admittance factor inverted for `b` survived the parity rows until the critic built a
+   2-bus case; no fixture has a shifter, so `opf.dc_opf`'s phase-shifter flow rows are wrong
+   (F1) and stay wrong until a dedicated bugfix task after this wave — every importer's limitations
+   say so.
+5. **The walk is the first review, not the last.** From the docs alone it found the cost-less RAW
+   network dispatching at zero, the unreported `s_nom` sentinel, a mis-located RAW error, and the
+   BOM and blank-line refusals — none reachable from the criteria.
+
+*Rejected:* inference-only `kind` (a neutral-tap transformer imports as a line); rejection of
+line-with-tap (a mutated network fails its own round-trip); cost approximation on export; refusing
+lossy conversions by default; the IEEE-14 RAW found in the wild (licence undetected); converting
+through pandapower's `from_ppc`; reading `res_bus` as an input (the spec's Not-doing — an early
+landing did, and was removed).
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

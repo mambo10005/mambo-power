@@ -21,6 +21,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES_DIR = REPO_ROOT / "examples"
 EXAMPLES = sorted(EXAMPLES_DIR.glob("*.py"))
 BUDGET_S = 60.0  # each script is ~1 s locally; the budget only guards against a hang
+# Scripts whose whole point is running an external engine pay that engine's cold import: example 13
+# imports pandapower (~13 s) and PyPSA (~6 s) and runs pp.rundcpp, pp.networks.case14() and a
+# PyPSA optimize -- ~50 s in-process on the Windows dev machine, more on a cold CI runner. The
+# budget is still a hang guard, sized for what the script actually does.
+BUDGETS_S: dict[str, float] = {"13_interop": 240.0}
 
 
 def test_examples_directory_is_populated() -> None:
@@ -38,18 +43,19 @@ def test_every_example_is_embedded_in_the_docs() -> None:
 
 @pytest.mark.parametrize("script", EXAMPLES, ids=[p.stem for p in EXAMPLES])
 def test_example_runs_to_completion(script: Path) -> None:
+    budget = BUDGETS_S.get(script.stem, BUDGET_S)
     started = time.perf_counter()
     proc = subprocess.run(
         [sys.executable, str(script)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        timeout=BUDGET_S,
+        timeout=budget,
         check=False,
     )
     elapsed = time.perf_counter() - started
     assert proc.returncode == 0, f"{script.name} exited {proc.returncode}\n{proc.stderr}"
     assert proc.stdout.strip(), f"{script.name} printed nothing"
     assert "Traceback" not in proc.stderr, proc.stderr
-    assert elapsed < BUDGET_S
+    assert elapsed < budget
     print(f"{script.name}: {elapsed:.2f} s, {len(proc.stdout.splitlines())} lines")

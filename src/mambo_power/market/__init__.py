@@ -19,7 +19,7 @@ from mambo_power.market.agents import AgentSetError, MarketAgentsOptions, solve_
 from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multiperiod
 from mambo_power.market.nodal import MarketNodalOptions, load_bid_coeffs, solve_nodal
 from mambo_power.market.zonal import CorridorLimit, MarketZonalOptions, solve_zonal, zone_partition
-from mambo_power.opf.dc_opf import NonConcaveBidError, NonConvexCostError
+from mambo_power.opf.dc_opf import MissingCostError, NonConcaveBidError, NonConvexCostError
 
 __all__ = [
     "AgentSetError",
@@ -28,6 +28,7 @@ __all__ = [
     "MarketMultiperiodOptions",
     "MarketNodalOptions",
     "MarketZonalOptions",
+    "MissingCostError",
     "NonConcaveBidError",
     "NonConvexCostError",
     "load_bid_coeffs",

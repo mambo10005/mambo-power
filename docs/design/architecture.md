@@ -12,9 +12,10 @@ later waves add (their dependencies are already fixed by the epic design).
 
 ```mermaid
 flowchart TB
-    subgraph present["Shipped (M1-M7)"]
+    subgraph present["Shipped (M1-M8)"]
         model["model<br/>Network, entities, validation errors,<br/>ImportIssue, repair_islands,<br/>Scenario, Period"]
-        io["io<br/>matpower, native, ImportReport"]
+        io["io<br/>matpower, native,<br/>report (ImportReport, ExportReport),<br/>limitations (LIMITATIONS)"]
+        formats["io: pandapower_json, pypsa,<br/>psse_raw, csv_bundle<br/>(best effort + report; pandapower and<br/>PyPSA imported lazily)"]
         numerics["numerics<br/>NetworkArrays, ybus, bbus, ptdf, lodf,<br/>effective_roles"]
         pf["pf<br/>solve_dc, solve_ac, dc.solve"]
         ac["pf.ac_newton<br/>AcOptions, newton"]
@@ -25,15 +26,14 @@ flowchart TB
         contingency["contingency<br/>n1, screen_n1, confirm_n1"]
         market["market<br/>solve_nodal (one period),<br/>solve_multiperiod (a horizon),<br/>solve_zonal (zonal + redispatch)"]
         marketstrategy["market.strategy<br/>Observation, Strategy,<br/>PriceTakerStrategy, MarkupStrategy,<br/>StrategyConfig, build_strategy"]
+        marketagents["market.agents<br/>solve_agents, AgentSetError<br/>(the fixed-point loop over offers)"]
         results["results<br/>BusResult, BranchResult, GenResult,<br/>ResultProvenance, from_arrays"]
         jobs["jobs<br/>SolveRequest, SolveResult, KINDS, run"]
     end
-    subgraph later["Later waves"]
-        marketlater["market.agents<br/>solve_agents<br/>(the fixed-point loop, M7)"]
-        formats["io: pandapower_json, pypsa,<br/>psse_raw, csv_bundle (M8)"]
-    end
 
     io --> model
+    formats --> model
+    formats --> io
     numerics --> model
     pf --> numerics
     pf --> results
@@ -69,15 +69,20 @@ flowchart TB
     jobs --> results
     jobs --> model
     jobs --> numerics
-    marketlater -.-> market
-    marketlater -.-> marketstrategy
-    formats -.-> model
+    marketagents --> market
+    marketagents --> marketstrategy
 ```
 
 Rules the diagram encodes:
 
-- `io` speaks only `model`. An importer produces a `Network`; it never touches arrays or
-  solvers.
+- `io` speaks only `model`. An importer produces a `Network`, an exporter consumes one; neither
+  touches arrays or solvers. Since M8 every importer returns an `ImportReport` and every
+  exporter an `ExportReport` (`io.report`) under one rule: an empty report means the
+  conversion was lossless, and anything dropped, approximated or repaired is an issue naming
+  the element id and the field. The format modules import pandapower and PyPSA lazily inside
+  the functions that need them, so `import mambo_power` never needs either;
+  `io.limitations.LIMITATIONS` registers every code a module can emit (it imports the format
+  modules; `io.report` is a leaf they all import), and a test pins that each is documented.
 - `numerics` is the **only** module that holds positional indices and the **single** site
   where physical units are divided by `base_mva`.
 - Solvers (`pf`, `opf`, `contingency`, `market`) consume `NetworkArrays`, never a `Network`
@@ -189,7 +194,10 @@ src/mambo_power/
   __init__.py       __version__ from package metadata
   model/            entities.py (Bus, Branch, Generator, ...), network.py (Network, validate_network),
                     scenario.py (Scenario, Period), islands.py, warnings.py, errors.py
-  io/               matpower.py (load, loads, *_with_warnings), native.py (load, loads, save, dumps), report.py
+  io/               matpower.py (load, loads, *_with_warnings), native.py (load, loads, save, dumps),
+                    report.py (ImportReport, ExportReport), limitations.py (LIMITATIONS),
+                    pandapower_json.py (load*, dump*), pypsa.py (to_network*),
+                    psse_raw.py (load*), csv_bundle.py (dump, load*)
   numerics/         arrays.py (NetworkArrays), ybus.py, bbus.py, ptdf.py, lodf.py, roles.py, errors.py
   pf/               __init__.py (solve_dc, solve_ac), dc.py (solve, DcSolution), ac_newton.py, _common.py
   opf/              __init__.py (solve_dc_opf, gen_cost_coeffs), dc_opf.py (dc_opf, lmp_decomposition),

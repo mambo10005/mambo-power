@@ -91,6 +91,38 @@ A line or a transformer between two buses. The tap is on the **from** side (MATP
 | `tap_ratio` | `float \| None` | — | `None` | Off-nominal tap magnitude; `None` means 1.0. Must be > 0 when given (`BAD_RANGE`). |
 | `shift_deg` | `float \| None` | degrees | `None` | Phase shift; `None` means 0. |
 | `in_service` | `bool` | — | `True` | |
+| `kind` | `"line" \| "transformer"` | — | derived | What the branch *is*, for exporters that route on it (see below). |
+
+### `Branch.kind`
+
+Importers and exporters need to know whether a branch is a line or a transformer — PyPSA has
+two components, pandapower two tables, a RAW file two record types — and the electrical fields
+alone do not say: a transformer at nominal tap looks exactly like a line. `kind` records it
+explicitly, with a default so that no existing file, fixture or hand-built `Branch` changes:
+
+- **Default rule.** When `kind` is not given, it is `"transformer"` iff `tap_ratio` is not
+  `None`/`1.0` or `shift_deg` is not `None`/`0.0`, else `"line"`. Every branch that was a
+  transformer by its data is still one; every other branch is a line.
+- **The neutral-tap case.** An explicit `kind="transformer"` with a nominal tap (`tap_ratio`
+  `None` or `1.0`, no shift) is kept — this is what an importer sets when the source says
+  "transformer" (a pandapower `trafo` row at `tap_pos == tap_neutral`, a RAW transformer record
+  with `WINDV1 == WINDV2`), so the element comes back out of an exporter as a transformer
+  rather than being demoted to a line by its numbers. pandapower's own case14 carries such a
+  transformer, so the rule is exercised in both directions.
+- **A line with a tap is promoted.** An explicit `kind="line"` together with a tap or a phase
+  shift validates as `kind="transformer"`: the data wins over the label. This is what keeps a
+  *mutated* network loadable — entities are not frozen, and `br.tap_ratio = 1.05` on a line
+  does not re-run validation, so the object keeps `kind == "line"` in memory. Serialising it
+  (`model_dump`, the native dump, a CSV row) writes `"kind": "transformer"` — the file carries
+  one truth, never `line` beside a tap — and loading it validates to the same. The same network
+  built fresh with that tap is equal to the reloaded one.
+- **Exporters route on `Branch.is_transformer`**, not on `kind` alone: it is true when
+  `kind == "transformer"` *or* the tap/shift is off-nominal, so a tap assigned after
+  construction is exported as a transformer (pandapower `trafo`, PyPSA `Transformer`) rather
+  than silently dropped from a line.
+
+Solvers never read `kind`; `numerics` builds the same π-model from `r`, `x`, `b`, `tap_ratio`
+and `shift_deg` whatever it says. The JSON schema snapshot moved once for the new field.
 
 ## `Generator`
 

@@ -37,7 +37,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 import mambo_power
 from mambo_power import jobs
 from mambo_power.contingency import N1Options
-from mambo_power.io import matpower
+from mambo_power.io import matpower, psse_raw
 from mambo_power.jobs import (
     KINDS,
     KindSpec,
@@ -1624,3 +1624,26 @@ def test_run_json_deep_nesting_is_bad_request_at_every_depth_not_internal(depth:
     out = SolveResult.model_validate_json(run_json(text))
     assert out.status == "failed" and out.error is not None
     assert out.error.code == "BAD_REQUEST", out.error
+
+
+# --- a cost-less generator under a pricing kind is VALIDATION, never a zero-cost "ok" -----------
+@pytest.mark.parametrize(
+    "kind", ["opf.dc", "market.nodal", "market.multiperiod", "market.zonal", "market.agents"]
+)
+def test_costless_generators_fail_as_validation_under_every_pricing_kind(kind: str) -> None:
+    """M8 walk, surprise 3: a RAW import carries ``cost=None`` on every generator, and every
+    pricing kind used to return ``status="ok"`` at ``objective_cost 0.0`` on it. The engine now
+    raises ``MissingCostError`` naming the generators; ``jobs.run`` maps it to ``VALIDATION``
+    (the caller's data, not an engine bug -- never ``INTERNAL``, the 5xx-and-pager verdict),
+    with no ``issues`` list because a missing cost is legal *model* data that only the pricing
+    kinds refuse. ``pf.dc`` on the same network still solves: the refusal is the OPF's."""
+    net = psse_raw.load(FIXTURES_DIR.parent / "case14_v33.raw")
+    assert all(g.cost is None for g in net.generators)
+    assert run(SolveRequest(kind="pf.dc", network=net)).status == "ok"
+
+    error = _assert_failed(run(SolveRequest(kind=kind, network=net)), "VALIDATION")
+    assert error.issues is None
+    for gen in net.generators:
+        assert f'"{gen.id}"' in error.message
+    assert "no cost" in error.message
+    assert "MissingCostError" not in error.message  # not INTERNAL's "Type: message" shape

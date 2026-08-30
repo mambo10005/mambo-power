@@ -1,7 +1,7 @@
 """``opf.solve_dc_opf``: the Network-facing wrapper around ``opf.dc_opf`` (spec design item 1).
 
 Cost extraction from ``Generator.cost``, ``OpfDcResult`` construction (id-keyed dispatch/LMP/
-flows + provenance), the PiecewiseCost seam, and the free-generator (no cost) convention.
+flows + provenance), the PiecewiseCost seam, and the cost-less generator refusal (M8 walk).
 """
 
 from __future__ import annotations
@@ -12,7 +12,8 @@ from typing import Any
 import pytest
 
 from mambo_power.model import Branch, Bus, Generator, Load, Network, PiecewiseCost, PolynomialCost
-from mambo_power.opf import solve_dc_opf
+from mambo_power.numerics.arrays import NetworkArrays
+from mambo_power.opf import MissingCostError, gen_cost_coeffs, solve_dc_opf
 from mambo_power.opf.dc_opf import OpfDcOptions
 from mambo_power.pf import solve_ac
 from mambo_power.results import OpfDcResult
@@ -84,12 +85,37 @@ def test_solve_dc_opf_wires_dispatch_lmp_flows_and_provenance() -> None:
     assert result.ac_check is None
 
 
-def test_solve_dc_opf_treats_a_costless_generator_as_free() -> None:
+def test_solve_dc_opf_refuses_a_costless_generator() -> None:
+    """M8 walk, surprise 3: a generator with ``cost=None`` used to be priced at zero, so a
+    network with no economic data at all cleared an OPF at ``objective_cost 0.0`` with every MW
+    on the free unit. It now raises ``MissingCostError`` naming the generator, before any solve
+    -- the same loud refusal ``NonConvexCostError`` gives a cost the LP cannot encode."""
     net = _net(None, PolynomialCost(coefficients=[20.0, 0.0]))
-    result = solve_dc_opf(net, OpfDcOptions())
-    assert result.status == "Optimal"
-    by_id = {g.id: g for g in result.generators}
-    assert by_id["g0"].p_mw == pytest.approx(40.0, abs=1e-6)  # free generator takes it all
+    with pytest.raises(MissingCostError, match=r'generator "g0" has no cost') as info:
+        solve_dc_opf(net, OpfDcOptions())
+    assert info.value.generator_ids == ["g0"]
+    assert isinstance(info.value, ValueError)
+    # the advice names a public path: no solve_* takes costs= (M8 critic nit 23)
+    assert "set Generator.cost" in str(info.value) and "costs=" not in str(info.value)
+
+
+def test_solve_dc_opf_names_every_costless_generator() -> None:
+    net = _net(None, None)
+    with pytest.raises(MissingCostError, match=r'generators "g0", "g1" have no cost') as info:
+        solve_dc_opf(net, OpfDcOptions())
+    assert info.value.generator_ids == ["g0", "g1"]
+
+
+def test_gen_cost_coeffs_accepts_a_costs_override_for_a_costless_generator() -> None:
+    """The ``costs=`` overlay (``market.agents``'s offer map) fills the gap: a generator with no
+    ``Generator.cost`` but an entry in ``costs`` is priced from the entry, not refused."""
+    net = _net(None, PolynomialCost(coefficients=[20.0, 0.0]))
+    arr = NetworkArrays.from_network(net)
+    coeffs, pwl = gen_cost_coeffs(net, arr, costs={"g0": PolynomialCost(coefficients=[5.0, 1.0])})
+    assert pwl == {}
+    assert coeffs[list(arr.gen_ids).index("g0")].tolist() == [0.0, 5.0, 1.0]
+    with pytest.raises(MissingCostError, match=r'"g0"'):
+        gen_cost_coeffs(net, arr, costs={"g1": PolynomialCost(coefficients=[5.0, 1.0])})
 
 
 def test_solve_dc_opf_solves_a_piecewise_cost_generator() -> None:

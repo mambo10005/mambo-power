@@ -25,16 +25,17 @@ print(result.branches[0].p_from_mw)
     condition — `market.solve_multiperiod`, see [Manual › Multiperiod
     market](manual/multiperiod.md)) and wave **M6** (a market cleared at zonal granularity,
     a minimum-cost redispatch onto the real network and the comparison against the nodal
-    optimum — `market.solve_zonal`, see [Manual › Zonal market](manual/zonal.md)) are all
-    merged. Wave **M7** (agent-based bidding) is in progress on its own wave branch, with
-    everything below shipped there: generators that *offer* through a `Strategy` rather than
-    reveal their true cost, the market clearing the offered curves round after round until they
-    settle, price-takers reproducing the competitive result bit-exactly and a pivotal supplier's
-    markup stopping where demand's own bid stops paying (`market.solve_agents`, see [Manual ›
-    Agent-based bidding](manual/agents.md)), exposed through `jobs.run` as
-    `kind="market.agents"`, and a new [runnable
-    example](examples/index.md#12-strategic-bidding). Nothing is on PyPI yet —
-    install from source (see [Getting started](getting-started.md)).
+    optimum — `market.solve_zonal`, see [Manual › Zonal market](manual/zonal.md)) and wave
+    **M7** (agent-based bidding: generators that *offer* through a `Strategy`, the market
+    clearing the offered curves round after round until they settle — `market.solve_agents`,
+    see [Manual › Agent-based bidding](manual/agents.md)) are all merged. Wave **M8**
+    (interchange) is in progress on its own wave branch, with everything below shipped there:
+    pandapower JSON in both directions, PyPSA export, a PSS/E RAW v33 importer and a bit-exact
+    CSV bundle, every conversion returning a report that names what it could not carry
+    (`io.pandapower_json`, `io.pypsa`, `io.psse_raw`, `io.csv_bundle`, see [Manual › File
+    formats](manual/formats.md)), `Branch.kind` telling a line from a transformer, and a new
+    [runnable example](examples/index.md#13-interop). Nothing is on PyPI yet — install from
+    source (see [Getting started](getting-started.md)).
 
 ## Three principles
 
@@ -43,8 +44,10 @@ print(result.branches[0].p_from_mw)
 `mambo_power.model` defines the network (a pydantic v2 model whose JSON **is** the native
 file format), and `pf`, `opf`, `contingency` and `market` implement their own formulations.
 pandapower and PyPSA are *development-only* dependencies: they serve as parity oracles in the
-test suite and are never imported by package code. The installed package depends on exactly
-`numpy`, `scipy`, `highspy` and `pydantic`.
+test suite, and the only package code that touches them — the `io.pandapower_json` and
+`io.pypsa` converters — imports them lazily inside the functions that need them, so
+`import mambo_power` never does. The installed package depends on exactly `numpy`, `scipy`,
+`highspy` and `pydantic`.
 
 ### 2. Free in both senses
 
@@ -68,6 +71,9 @@ flowchart LR
     subgraph inputs["Inputs"]
         MP["MATPOWER .m"]
         NJ["native JSON"]
+        PPJ["pandapower JSON"]
+        RAW["PSS/E RAW v33"]
+        CSV["CSV bundle"]
     end
     subgraph pkg["mambo-power (this package)"]
         IO["io"] --> MODEL["model: Network"]
@@ -82,6 +88,10 @@ flowchart LR
     end
     MP --> IO
     NJ --> IO
+    PPJ <--> IO
+    RAW --> IO
+    CSV <--> IO
+    IO --> PYPSA["PyPSA network (export)"]
     JOBS --> NB
     JOBS --> SAAS
     ORACLES["pandapower, PyPSA, MATPOWER solutions"]
@@ -94,7 +104,7 @@ flowchart LR
 | --- | --- |
 | Install and run a first power flow | [Getting started](getting-started.md) |
 | Understand the network model, its units and validation errors | [Manual › Network model](manual/model.md) |
-| Import a MATPOWER case or write native JSON | [Manual › File formats](manual/formats.md) |
+| Import a MATPOWER, pandapower or PSS/E RAW case; export to pandapower, PyPSA or a CSV bundle | [Manual › File formats](manual/formats.md) |
 | Build Ybus, Bbus, PTDF or LODF matrices | [Manual › Numerics](manual/numerics.md) |
 | Run a DC or AC power flow, understand Q-limits and effective roles | [Manual › Power flow](manual/power-flow.md) |
 | Solve DC-OPF for cost-minimising dispatch and LMPs | [Manual › DC-OPF](manual/opf.md) |
@@ -119,8 +129,8 @@ flowchart LR
 | M4 | Nodal market: elastic-demand DC-OPF, LMP clearing, settlement | merged |
 | M5 | Multiperiod market: 24-period horizon, ramp coupling, storage SoC, per-period settlement | merged |
 | M6 | Zonal market: zonal clearing, min-cost redispatch, nodal-vs-zonal comparison | merged |
-| M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | in progress |
-| M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | planned |
+| M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
+| M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | in progress |
 | M9 | PyPI 0.1.0 with trusted publishing and semantic-release | planned |
 
 mambo-power is MIT licensed. Source: [github.com/mambo10005/mambo-power](https://github.com/mambo10005/mambo-power).

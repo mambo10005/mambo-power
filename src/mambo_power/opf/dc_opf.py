@@ -271,6 +271,33 @@ class NonConvexCostError(ValueError):
     """
 
 
+class MissingCostError(ValueError):
+    """A generator has no cost (``Generator.cost is None``) and the caller supplied no override
+    for it, so there is nothing to price its dispatch with. The message names the public
+    remedies only -- ``Generator.cost``, or ``in_service = False`` -- since the ``costs=``
+    overlay is :func:`gen_cost_coeffs`'s own parameter, filled by ``market.agents`` from the
+    strategies, and not reachable from any ``solve_*`` (M8 critic nit 23).
+
+    Raised by :func:`mambo_power.opf.gen_cost_coeffs` before any solve is attempted (M8 walk,
+    surprise 3): a cost-less generator used to get an all-zero coefficient row, which priced it
+    at zero and let a network with *no* economic data at all -- every RAW import, a MATPOWER case
+    without ``gencost`` -- clear an OPF at ``objective_cost 0.0`` with all load on one free unit,
+    a wrong-but-optimal-looking dispatch of the same class :class:`NonConvexCostError` refuses.
+    The message names every offending generator id; ``generator_ids`` carries them.
+    """
+
+    def __init__(self, generator_ids: Sequence[str]) -> None:
+        self.generator_ids = list(generator_ids)
+        ids = ", ".join(f'"{gen_id}"' for gen_id in self.generator_ids)
+        noun = "generator" if len(self.generator_ids) == 1 else "generators"
+        super().__init__(
+            f"{noun} {ids} {'has' if len(self.generator_ids) == 1 else 'have'} no cost "
+            "(Generator.cost is None); a DC-OPF cannot price a cost-less generator -- set "
+            "Generator.cost, or take the generator out of service (only in-service generators "
+            "are priced)"
+        )
+
+
 class NonConcaveBidError(ValueError):
     """A demand bid is non-concave: either a piecewise-linear bid's breakpoint slopes are not
     non-increasing, or a quadratic (polynomial) bid has ``v2 > 0``.
