@@ -11,6 +11,32 @@ One section per wave, newest first. Nothing on this page has been released. Whic
 merged to `epic/01-foundation` and which are still on their own branch is tracked in [the home
 page's roadmap table](index.md), not restated here, so this page cannot go stale about it.
 
+### Fixed — the DC-OPF phase-shifter flow defect (M7 F1, M8 A19)
+
+- `opf.dc_opf`'s flow-limit row constant, `opf.solve_dc_opf`'s derived `branches[].p_from_mw`,
+  `market.solve_nodal` / `solve_agents`' derived branch flows, `opf.multiperiod_dc_opf`'s
+  per-period flow-limit row constant, and `opf.redispatch_dc_opf`'s flow-limit row constant
+  *and* its derived, reported `branch_flow_mw` all omitted the phase shifter's `p_shift` bus
+  injection from their PTDF product, so any network with a non-zero `shift_deg` (from any
+  importer) got wrong `opf` / `market` branch flows — including `market.solve_zonal`'s public
+  `branches[].p_from_mw` (sourced from `opf.redispatch_dc_opf`) and `market.solve_multiperiod`
+  (sourced from `opf.multiperiod_dc_opf`) — and a generously rated shifter loop could come back
+  `Infeasible` with no flows at all — `pf.solve_dc` was always right. Fixed at all five sites:
+  `numerics.bbus.flow_from_ptdf(ptdf, injection_mw, arr)` (the identity `flow = ptdf @
+  (injection_mw - p_shift·base_mva) + pf_shift·base_mva`, matching `pf.solve_dc` exactly) is now
+  called directly by `opf.solve_dc_opf`, `market._clearing` and `opf.redispatch_dc_opf`'s
+  reported `branch_flow_mw`; `opf.dc_opf`'s, `opf.multiperiod_dc_opf`'s and
+  `opf.redispatch_dc_opf`'s own flow-limit row constants each fold in the same `p_shift` term by
+  hand, since each `const`/`const_k` is added to a linear combination of decision variables
+  rather than a full injection vector. Every existing fixture has `shift_deg == 0` everywhere,
+  so `p_shift(arr) == 0` identically and the fix is a byte-for-byte no-op on them; a new
+  generously-rated three-bus shifter loop (`tests/_shifter.py`) is the fix's own regression
+  fixture, checked against `pf.solve_dc` and PyPSA's `lpf()` at two asymmetric shift angles,
+  extended to `opf.multiperiod_dc_opf`, `opf.redispatch_dc_opf`, `market.solve_zonal` and
+  `market.solve_multiperiod` once a Step-6 critic review found the latter two sites' own copies
+  of the same defect, untouched by the first pass. The [File formats](manual/formats.md)
+  limitations sections no longer carry this caveat.
+
 ### Added — wave M8 (interop)
 
 - `io.pandapower_json`: `load` / `loads` / `load_with_report` read a `pp.to_json` document
@@ -67,7 +93,7 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   phase shifter's PTDF term, so a network with a non-zero `shift_deg` — from any format — gets
   wrong `opf` / `market` branch flows until the standalone fix lands; `pf.solve_dc` is right
   and agrees with pandapower's `rundcpp` and PyPSA's `lpf()`. Stated under every importer's
-  limitations in the manual.
+  limitations in the manual. **Fixed** — see "Fixed", above.
 
 ### Changed — wave M8 (interop)
 

@@ -107,7 +107,7 @@ import highspy
 import numpy as np
 
 from mambo_power.numerics.arrays import NetworkArrays
-from mambo_power.numerics.bbus import pf_shift
+from mambo_power.numerics.bbus import p_shift, pf_shift
 from mambo_power.numerics.ptdf import ptdf as compute_ptdf
 from mambo_power.opf.dc_opf import (
     ColArray,
@@ -458,9 +458,14 @@ def multiperiod_dc_opf(
     # dc_opf's own arithmetic, evaluated once per period: the bus-aggregate fixed load minus each
     # elastic load's own contribution at its own bus (the double-counting contract). With
     # period_load_mw=None the expressions below are literally dc_opf's, which is what makes the
-    # T=1 reduction exact rather than merely close.
+    # T=1 reduction exact rather than merely close. p_shift_mw (numerics.bbus.p_shift) is the
+    # phase-shifter bus injection dc_opf's own const_k folds in by hand (dc_opf.py's flow-limit
+    # row comment; M8 finding F1 / A19, task-shifter-flow-fix.plan.md T6) -- it is
+    # period-invariant (a function of topology, not dispatch), so it is computed once here rather
+    # than inside the per-period loop below.
     ptdf_matrix = compute_ptdf(arr)
     pf_shift_mw = pf_shift(arr) * arr.base_mva
+    p_shift_mw = p_shift(arr) * arr.base_mva
     g_shunt_mw = arr.g_shunt_pu * arr.base_mva
     rating_mw = arr.rating_pu * arr.base_mva
     elastic_bus = arr.load_bus[elastic_idx_arr]
@@ -482,7 +487,7 @@ def multiperiod_dc_opf(
                 elastic_bus, weights=elastic_own_mw, minlength=arr.n_bus
             )
         total_fixed.append(float(np.sum(p_load_mw) + np.sum(g_shunt_mw)))
-        const.append(pf_shift_mw - ptdf_matrix @ (p_load_mw + g_shunt_mw))
+        const.append(pf_shift_mw - ptdf_matrix @ (p_load_mw + g_shunt_mw + p_shift_mw))
 
     # --- rows, in the order the module docstring's table declares -------------------------------
     # tier 1: nodal balance, one row per period. Storage discharges into the balance and charges

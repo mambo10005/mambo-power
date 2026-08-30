@@ -98,7 +98,7 @@ import highspy
 import numpy as np
 
 from mambo_power.numerics.arrays import NetworkArrays
-from mambo_power.numerics.bbus import pf_shift
+from mambo_power.numerics.bbus import flow_from_ptdf, p_shift, pf_shift
 from mambo_power.numerics.ptdf import ptdf as compute_ptdf
 from mambo_power.opf.dc_opf import (
     ColArray,
@@ -421,8 +421,18 @@ def redispatch_dc_opf(
 
     ptdf_matrix = compute_ptdf(arr)
     pf_shift_mw = pf_shift(arr) * arr.base_mva
-    const = pf_shift_mw - ptdf_matrix @ (p_load_mw + g_shunt_mw)
-    # ...plus the zonal point's own (fixed) contribution to every branch's flow.
+    # p_shift_mw (numerics.bbus.p_shift) is the phase-shifter bus injection dc_opf's own const_k
+    # folds in by hand (dc_opf.py's flow-limit row comment; M8 finding F1 / A19,
+    # task-shifter-flow-fix.plan.md T7) -- a property of topology, not of p0/d0, so it belongs in
+    # this first fold, not the zonal-point term below.
+    p_shift_mw = p_shift(arr) * arr.base_mva
+    const = pf_shift_mw - ptdf_matrix @ (p_load_mw + g_shunt_mw + p_shift_mw)
+    # ...plus the zonal point's own (fixed) contribution to every branch's flow. p0/d0 are a
+    # *decision-independent* injection like p_load_mw/g_shunt_mw above, not a phase shift, so no
+    # further p_shift correction applies here -- confirmed by re-deriving the flow identity by
+    # hand: flow_k = PTDF[k,:] @ (injection - p_shift) + pf_shift_k, and (p0_by_bus - d0_by_bus)
+    # is exactly one more additive term of "injection", already covered by the single p_shift
+    # subtraction above.
     p0_by_bus = np.bincount(arr.gen_bus, weights=p0, minlength=arr.n_bus)
     d0_by_bus = np.bincount(elastic_bus, weights=d0, minlength=arr.n_bus)
     const = const + ptdf_matrix @ (p0_by_bus - d0_by_bus)
@@ -543,11 +553,13 @@ def redispatch_dc_opf(
     poly_demand_value = float(np.sum(v2 * demand_dispatch_mw**2 + v1 * demand_dispatch_mw + v0))
     pwl_demand_value = float(sum(col_value[dem_val_col_of[i]] for i in problem.demand_pwl_idxs))
 
-    # Branch flows at the final point — the same construction solve_dc_opf uses (module docstring).
+    # Branch flows at the final point: flow_from_ptdf(ptdf, injection, arr) -- the same
+    # PTDF-minus-shift identity solve_dc_opf and market._clearing use (module docstring;
+    # M8 finding F1 / A19, task-shifter-flow-fix.plan.md T7).
     gen_by_bus = np.bincount(arr.gen_bus, weights=dispatch_mw, minlength=arr.n_bus)
     demand_by_bus = np.bincount(elastic_bus, weights=demand_dispatch_mw, minlength=arr.n_bus)
     injection_mw = gen_by_bus - demand_by_bus - p_load_mw - g_shunt_mw
-    branch_flow_mw = ptdf_matrix @ injection_mw + pf_shift_mw
+    branch_flow_mw = flow_from_ptdf(ptdf_matrix, injection_mw, arr)
 
     return RedispatchSolution(
         status=status,
