@@ -16,7 +16,8 @@ zero-optional-dependency import (design item R9; ``pypsa`` is a dev extra).
 * ``Branch`` with ``kind == "line"`` → ``Line`` in physical units on the from-bus base:
   ``Zb = base_kv² / base_mva``; ``r, x`` in ohm (``× Zb``), ``b`` in siemens (``÷ Zb``).
 * ``Branch`` with ``kind == "transformer"`` → ``Transformer(model="pi")`` with ``r, x, b`` per
-  unit on the transformer's own ``s_nom`` (``× s_nom / base_mva``), ``tap_ratio``, ``tap_side=0``
+  unit on the transformer's own ``s_nom`` (impedances ``r, x`` ``× s_nom / base_mva``; the
+  admittance ``b`` ``× base_mva / s_nom``), ``tap_ratio``, ``tap_side=0``
   (mambo's tap is on the from side) and ``phase_shift`` in degrees.
 * ``rating_mva`` → ``s_nom``; an unrated branch gets :data:`UNRATED_S_NOM_MVA` because PyPSA's
   optimiser reads ``s_nom == 0`` as "carries nothing", not "unlimited" -- an approximation, so
@@ -195,7 +196,7 @@ def _add_branches(
             model="pi",
             r=[br.r * k for br, k in zip(trafos, scale, strict=True)],
             x=[br.x * k for br, k in zip(trafos, scale, strict=True)],
-            b=[br.b * k for br, k in zip(trafos, scale, strict=True)],
+            b=[br.b / k for br, k in zip(trafos, scale, strict=True)],  # admittance: / scale
             s_nom=s_nom,
             tap_ratio=[br.tap_ratio if br.tap_ratio is not None else 1.0 for br in trafos],
             tap_side=0,

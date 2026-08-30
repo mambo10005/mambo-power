@@ -244,3 +244,61 @@ def test_piecewise_costs_export_at_zero_and_are_named() -> None:
     # report names. This is a witness that the drop is not silent, not a parity claim.
     assert n.generators_t.p.iloc[0][pwl_ids].sum() > 0.0
     assert np.isfinite(n.objective)
+
+
+def _charged_transformer_net(b: float) -> Network:
+    """Two buses joined by a 40 MVA transformer with charging ``b`` (pu on 100 MVA)."""
+    return Network(
+        base_mva=100.0,
+        buses=[Bus(id="a", base_kv=110.0, type="slack"), Bus(id="b", base_kv=20.0, type="pq")],
+        branches=[
+            Branch(
+                id="t",
+                from_bus="a",
+                to_bus="b",
+                r=0.01,
+                x=0.2,
+                b=b,
+                rating_mva=40.0,
+                tap_ratio=1.02,
+                kind="transformer",
+            )
+        ],
+        generators=[
+            Generator(
+                id="g",
+                bus="a",
+                p_mw=0.0,
+                q_mvar=0.0,
+                p_min_mw=0.0,
+                p_max_mw=100.0,
+                q_min_mvar=-50.0,
+                q_max_mvar=50.0,
+                v_set_pu=1.0,
+            )
+        ],
+        loads=[Load(id="l", bus="b", p_mw=10.0, q_mvar=2.0)],
+    )
+
+
+@pytest.mark.parametrize("b", [0.3, -0.05])
+def test_transformer_charging_b_matches_pypsa_ac_pf(b: float) -> None:
+    """M8 critic finding 1: a transformer's ``b`` goes to PyPSA's ``s_nom`` base as an
+    admittance (``× base_mva / s_nom``), not as an impedance. Every bundled fixture has ``b = 0``
+    on its transformers, so this hand network with a charged transformer is the witness:
+    PyPSA's own AC ``pf()`` must reproduce ``pf.solve_ac`` to 1e-6 pu."""
+    net = _charged_transformer_net(b)
+    n = io_pypsa.to_network(net)
+    assert float(n.transformers.loc["t", "b"]) == pytest.approx(b * net.base_mva / 40.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        n.pf()
+    ours = {bus.id: bus.vm_pu for bus in pf.solve_ac(net).buses}
+    theirs = n.buses_t.v_mag_pu.iloc[0].to_dict()
+    assert theirs["b"] == pytest.approx(ours["b"], abs=1e-6)
+    # and the charged answer differs from the uncharged one, so the map is exercised
+    n0 = io_pypsa.to_network(_charged_transformer_net(0.0))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        n0.pf()
+    assert abs(n0.buses_t.v_mag_pu.iloc[0]["b"] - theirs["b"]) > 1e-4
