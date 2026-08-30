@@ -130,6 +130,11 @@ P = B_\text{bus}\,\theta + P_\text{shift} .
 | `bbus.branch_susceptance(arr)` | Per-branch \(b_k\). |
 | `bbus.incidence(arr)` | \(C_{ft}\). |
 
+The first three rows are reachable as `numerics.bbus`/`bf`/`p_shift`; a `bbus.`-prefixed name is
+not a runtime path — it names the function and the module (`numerics/bbus.py`) that implements it,
+internal to this page's derivation and not part of the public surface (`numerics.bbus` is itself
+the `bbus(arr)` function, not the submodule, so `numerics.bbus.pf_shift` raises `AttributeError`).
+
 A branch with `x == 0` has undefined DC susceptance and raises
 [`UnsolvableNetworkError`](../api/numerics.md) — a valid network the DC numerics cannot solve,
 distinct from the malformed-input `ValueError`s elsewhere on this page.
