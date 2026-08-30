@@ -10,12 +10,20 @@ Cross-entity invariants (slack count, connectivity, references, ranges) are chec
 pass can report every problem at once.
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 BusType = Literal["slack", "pv", "pq"]
 """Bus role in power flow. MATPOWER type 4 (isolated) maps to ``in_service=False`` instead."""
+
+BranchKind = Literal["line", "transformer"]
+"""What a :class:`Branch` is. Exporters route on it (a pandapower ``trafo`` row, a PyPSA
+``Transformer``, a RAW transformer record); the solvers do not read it."""
+
+
+def _is_nominal(tap_ratio: object, shift_deg: object) -> bool:
+    return tap_ratio in (None, 1.0) and shift_deg in (None, 0.0)
 
 
 class _Entity(BaseModel):
@@ -48,6 +56,10 @@ class Bus(_Entity):
 class Branch(_Entity):
     """Line or transformer between two buses. Tap is on the ``from`` side (MATPOWER model)."""
 
+    # ``kind`` (wave M8, W6) is defaulted by ``_default_kind`` below: "transformer" iff the tap
+    # or shift is off-nominal, else "line"; an explicit "transformer" at nominal tap is kept (a
+    # neutral-tap transformer is still a transformer); an explicit "line" with a tap is rejected.
+
     id: str = Field(description="Unique within branches.")
     from_bus: str = Field(description="Bus id of the from (tap) side.")
     to_bus: str = Field(description="Bus id of the to side.")
@@ -58,6 +70,27 @@ class Branch(_Entity):
     tap_ratio: float | None = Field(default=None, description="Off-nominal tap; None = 1.0.")
     shift_deg: float | None = Field(default=None, description="Phase shift, degrees; None = 0.")
     in_service: bool = True
+    kind: BranchKind = Field(
+        default="line",
+        description="'line' or 'transformer'. Defaults to 'transformer' when tap_ratio is not "
+        "None/1.0 or shift_deg is not None/0.0, else 'line'; an explicit 'transformer' at "
+        "nominal tap is kept; an explicit 'line' with a tap or shift is rejected.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_kind(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        nominal = _is_nominal(data.get("tap_ratio"), data.get("shift_deg"))
+        if "kind" not in data:
+            return {**data, "kind": "line" if nominal else "transformer"}
+        if data["kind"] == "line" and not nominal:
+            raise ValueError(
+                f"branch {data.get('id')!r}: kind='line' but tap_ratio={data.get('tap_ratio')!r} "
+                f"shift_deg={data.get('shift_deg')!r}; a line cannot have a tap or phase shift"
+            )
+        return data
 
 
 class PolynomialCost(_Entity):

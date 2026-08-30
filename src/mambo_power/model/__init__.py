@@ -3,6 +3,7 @@ import warnings, and the island repair every importer applies before validation.
 
 from mambo_power.model.entities import (
     Branch,
+    BranchKind,
     Bus,
     BusType,
     Generator,
@@ -27,6 +28,7 @@ from mambo_power.model.warnings import ImportIssue, ImportIssueCode
 __all__ = [
     "Branch",
     "Bus",
+    "BranchKind",
     "BusType",
     "Generator",
     "GeneratorCost",
