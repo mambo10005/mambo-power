@@ -1,6 +1,6 @@
 # Examples
 
-Twelve runnable scripts live under `examples/` in the repository. Each one is self-contained,
+Thirteen runnable scripts live under `examples/` in the repository. Each one is self-contained,
 reads only files under `fixtures/`, prints a short deterministic summary and exits 0 in about a
 second. They are executed on every push — by `tests/unit/test_examples_run.py` inside the test
 matrix and by the dedicated `examples` CI job — and this page embeds them with
@@ -26,6 +26,7 @@ uv run python examples/02_ac_power_flow.py
 | [`10_multiperiod_market.py`](#10-multiperiod-market) | `market.solve_multiperiod` over a 24-period `Scenario`: ramp coupling, storage SoC with efficiency, the cyclic horizon, per-period LMPs and settlement | [Multiperiod market](../manual/multiperiod.md) |
 | [`11_zonal_redispatch.py`](#11-zonal-redispatch) | `market.solve_zonal`: zonal clearing, min-cost redispatch, the nodal reference, corridor duals, the three gap figures and the settlement identity | [Zonal market](../manual/zonal.md) |
 | [`12_agent_market.py`](#12-strategic-bidding) | `market.solve_agents`: generators offering through a `Strategy`, price-takers reproducing `solve_nodal` bit-exactly, a pivotal markup stopping at demand's own bid, the duopoly, `termination_reason`, `StrategyConfig` crossing `jobs` as JSON | [Agent-based bidding](../manual/agents.md) |
+| [`13_interop.py`](#13-interop) | pandapower JSON export solved by `pp.rundcpp`, pandapower's case14 imported losslessly, PyPSA export optimised by PyPSA against `solve_dc_opf`, PSS/E RAW import with `RAW_NO_COSTS`, a bit-exact CSV bundle round trip, and one deliberately lossy conversion with its `ExportReport` | [File formats](../manual/formats.md) |
 
 ## 1. Load and validate
 
@@ -154,6 +155,23 @@ two-agent duopoly reporting `converged`, the same run under an iteration cap rep
 
 ``` { .python }
 --8<-- "examples/12_agent_market.py"
+```
+
+## 13. Interop
+
+One `Network` (IEEE case14) through every format of wave M8, each conversion returning the
+report that says what it could not carry: the pandapower JSON export loaded by `pp.from_json`
+and solved by pandapower's own `rundcpp`, agreeing with `pf.solve_dc` to 1e-14 degrees;
+`pp.networks.case14()` imported with an **empty** report and its neutral-tap transformers kept
+as transformers because the source table says so; the PyPSA export optimised by PyPSA, its
+objective agreeing with `opf.solve_dc_opf` to 1e-13 relative (the constant cost term travels
+in the `marginal_cost_constant` column); `fixtures/case14_v33.raw` imported with
+`RAW_NO_COSTS` rather than invented costs; the CSV bundle round trip `load(dump(net)) == net`
+with no tolerance; and a piecewise-cost generator pushed into PyPSA, which has no piecewise
+cost, with the `ExportReport` naming the generator and what was written instead.
+
+``` { .python }
+--8<-- "examples/13_interop.py"
 ```
 
 ## Conventions for examples
