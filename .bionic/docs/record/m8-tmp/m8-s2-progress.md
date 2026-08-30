@@ -1,0 +1,7 @@
+- 2026-08-30T04:04:16Z commit bd05df7 feat(m8/s2): io.pandapower_json + 7 codes + unit tests (20 unit tests green)
+- 2026-08-30T04:04:16Z commit bb539c3 test(m8/s2): parity file (24 parity tests green); gates ruff/format/mypy green
+- 2026-08-30T04:04:16Z sabotage 1/3 starting: shunt sign flip on import
+- 2026-08-30T04:05:22Z sabotage 1 RED (b_mvar sign on case14/case30 + hand-built shunt), restored
+- 2026-08-30T04:07:11Z sabotages 2a/2b/3 run, restored
+- 2026-08-30T04:08:01Z commit cf9652e fix: numpy scalar repr in messages
+- 2026-08-30T04:13:30Z unit tier + parity file: 994 passed, 1 deselected (S6 docs test); report sent to team-lead; record written

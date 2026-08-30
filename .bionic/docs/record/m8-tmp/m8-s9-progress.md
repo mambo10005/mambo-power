@@ -1,0 +1,7 @@
+- a676800 fix 17 tap_neutral NaN: red 5 -> green 49 (test_io_pandapower_json), sabotage (rule disabled) 3 failed
+- ce3a9df fix 18 legacy tap_phase_shifter: red 3 -> green 53, sabotage (mapped to None) 3 failed; x1b_legacy mambo 1.05 = pp 1.05
+- 4cb74f2 fix 19 tap2: red (1.05 vs 1.1023) -> green 58, sabotage (prefix loop cut) 5 failed
+- 6e61756 fix 20 csv dir swap: red 4 -> green 65 (test_io_csv_bundle), sabotage (per-file loop restored) 2 failed; x3b == a True, no orphans
+- 618aed0 fix 21 dead assertion: renamed, green 2, sabotage (gen text undo removed) 2 failed
+- 39b1f9f nit 24 kind serializer: red 2 -> green 92, sabotage serializer 1 failed / csv 1 failed
+- 5baa223 22/23 changelog Changed + message: red 1 -> green (opf/jobs/agents tests), mkdocs strict ok

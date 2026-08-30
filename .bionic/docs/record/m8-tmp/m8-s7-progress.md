@@ -1,0 +1,8 @@
+- dcbeb5e fix 1 (MissingCostError) committed; unit 1144 green, 6 parity files 113 green, sabotage 8 red
+- dcbeb5e fix 2 (PYPSA_UNRATED_S_NOM_DEFAULTED) committed; pypsa unit+limitations+parity green, sabotage 2 red
+- c46c063 fix 2 (PYPSA_UNRATED_S_NOM_DEFAULTED) committed; pypsa unit+limitations+parity 108 green, sabotage 2 red
+- 591f458 fix 3 (nominal tap: doc fixed, NaN encoding kept — from_ppc encoding reddens pandapower parity round trip); unit+parity 46 green, sabotage 2 red
+- d3ca8d4 fix 4 (UNTERMINATED_SECTION) committed; raw+jobs unit green, sabotage 1 red
+- 044b8a9 fix 5 (CSV blank lines + BOM) committed; csv unit 132 green, sabotage A/B each 1 red
+- 172eb68 fix 6 (docs) committed
+- b56e9aa fix 7 (audit hygiene) committed; 7a sabotage red, 7b sabotage red
