@@ -273,7 +273,10 @@ class NonConvexCostError(ValueError):
 
 class MissingCostError(ValueError):
     """A generator has no cost (``Generator.cost is None``) and the caller supplied no override
-    for it, so there is nothing to price its dispatch with.
+    for it, so there is nothing to price its dispatch with. The message names the public
+    remedies only -- ``Generator.cost``, or ``in_service = False`` -- since the ``costs=``
+    overlay is :func:`gen_cost_coeffs`'s own parameter, filled by ``market.agents`` from the
+    strategies, and not reachable from any ``solve_*`` (M8 critic nit 23).
 
     Raised by :func:`mambo_power.opf.gen_cost_coeffs` before any solve is attempted (M8 walk,
     surprise 3): a cost-less generator used to get an all-zero coefficient row, which priced it
@@ -289,8 +292,9 @@ class MissingCostError(ValueError):
         noun = "generator" if len(self.generator_ids) == 1 else "generators"
         super().__init__(
             f"{noun} {ids} {'has' if len(self.generator_ids) == 1 else 'have'} no cost "
-            "(Generator.cost is None) and no override was supplied; a DC-OPF cannot price a "
-            "cost-less generator -- set Generator.cost or pass costs="
+            "(Generator.cost is None); a DC-OPF cannot price a cost-less generator -- set "
+            "Generator.cost, or take the generator out of service (only in-service generators "
+            "are priced)"
         )
 
 

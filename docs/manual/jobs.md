@@ -100,6 +100,7 @@ discriminator lives on the parent, not inside the result.
 | `UNKNOWN_KIND` | `kind` is not in `KINDS`; the message lists the registered kinds. |
 | `BAD_OPTIONS` | `options` did not validate against the kind's options model (wrong type, unknown key, any key for a kind without options). |
 | `VALIDATION` | The network failed validation — on mutation after construction, or in the request JSON (`run_json`); `issues` holds every code and path. |
+| `VALIDATION` (no `issues`) | An `opf.dc` or `market.*` kind was given an in-service generator with no `Generator.cost` (`opf.MissingCostError`, wave M8): the message names every such generator; `issues` is `None` because a missing cost is legal model data, not one of the model's own `ValidationCode`s. Set `Generator.cost` or take the generator out of service. |
 | `NO_SLACK_GENERATOR` | The slack bus has no in-service generator (`NoSlackGeneratorError` from `effective_roles`). |
 | `UNSOLVABLE_NETWORK` | A valid network the numerics it was handed to cannot solve, e.g. DC on a branch with `x == 0` (`UnsolvableNetworkError`) — user data, not a solver bug. |
 | `INFEASIBLE_LP` | An `opf.dc`, `market.nodal`, `market.multiperiod`, `market.zonal` or `market.agents` LP/QP came back with a non-`"Optimal"`, non-`"Unbounded"` status: there is no feasible dispatch at all, so there is nothing to return. For `market.agents` this is the round the loop stopped in, whichever round that was. |

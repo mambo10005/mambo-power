@@ -69,6 +69,22 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   and agrees with pandapower's `rundcpp` and PyPSA's `lpf()`. Stated under every importer's
   limitations in the manual.
 
+### Changed — wave M8 (interop)
+
+- **`opf` / `market` / `jobs` refuse a cost-less generator.** `opf.solve_dc_opf`,
+  `market.solve_nodal` / `solve_multiperiod` / `solve_zonal` / `solve_agents` and the `opf.dc`,
+  `market.*` job kinds now raise `opf.MissingCostError` (a `ValueError`, naming every in-service
+  generator whose `Generator.cost is None`) before any solve. Until M8 such a generator got an
+  all-zero coefficient row — priced free — so a network with no economic data at all (every RAW
+  import, a MATPOWER case without `gencost`) cleared at `objective_cost 0.0` with all load on
+  one unit. Fix the data: set `Generator.cost`, or take the generator out of service (only
+  in-service generators are priced). `jobs.run` maps it to a `failed` result with
+  `error.code == "VALIDATION"` and `error.issues is None` — the ids are in the message, not in
+  `issues`, because `ValidationCode` is the closed set of the model's own invariants and a
+  missing cost is legal model data that only the pricing kinds refuse. `pf.*` and `n1` are
+  untouched; a cost-less generator that is out of service is not in the priced set and does
+  not raise.
+
 ### Added — wave M7 (agent-based bidding)
 
 - `market.solve_agents(scenario, options=None, *, strategies=None) -> MarketAgentsResult`: the

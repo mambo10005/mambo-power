@@ -599,8 +599,9 @@ Anything wrong with the **network** raises `NetworkValidationError`, as for ever
 - No costs: an imported RAW network flows (`pf`); `opf.solve_dc_opf` and every `market`
   clearing on it raise `mambo_power.opf.MissingCostError` (a `ValueError`) naming every
   generator without a cost, before any solve — and `jobs.run` reports that as a `VALIDATION`
-  failure. The importer never invents costs; set `Generator.cost` on each generator (or pass
-  `costs=` to `opf.gen_cost_coeffs`) before pricing dispatch.
+  failure. The importer never invents costs; set `Generator.cost` on each generator, or take
+  it out of service, before pricing dispatch (`costs=` is `opf.gen_cost_coeffs`'s own overlay,
+  which `market.solve_agents` fills from the strategies; no `solve_*` takes it).
 - Three-winding transformers, switched shunts, DC lines, FACTS, impedance-correction tables
   and owners are skipped, not modelled. A switched shunt's `BINIT` is not folded, so a case
   whose voltage profile relies on it solves to a different voltage.

@@ -95,6 +95,8 @@ def test_solve_dc_opf_refuses_a_costless_generator() -> None:
         solve_dc_opf(net, OpfDcOptions())
     assert info.value.generator_ids == ["g0"]
     assert isinstance(info.value, ValueError)
+    # the advice names a public path: no solve_* takes costs= (M8 critic nit 23)
+    assert "set Generator.cost" in str(info.value) and "costs=" not in str(info.value)
 
 
 def test_solve_dc_opf_names_every_costless_generator() -> None:
