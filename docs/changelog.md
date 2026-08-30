@@ -11,6 +11,61 @@ One section per wave, newest first. Nothing on this page has been released. Whic
 merged to `epic/01-foundation` and which are still on their own branch is tracked in [the home
 page's roadmap table](index.md), not restated here, so this page cannot go stale about it.
 
+### Added — wave M8 (interop)
+
+- `io.pandapower_json`: `load` / `loads` / `load_with_report` read a `pp.to_json` document
+  (`bus`, `ext_grid`, `gen`, `sgen`, `load`, `shunt`, `line`, two-winding `trafo`, `poly_cost`,
+  `pwl_cost`, `res_bus`) with the measured per-unit conversions — line `r/x/b` on
+  `vn_kv²/sn_mva`, trafo impedance from `vk_percent` on the system base, the tap changer folded
+  into `tap_ratio`, the shunt sign flipped from consumption to injection; the first in-service
+  `ext_grid` is the slack and any further one is demoted to a PV generator with a warning.
+  `dumps` / `dump` / `dumps_with_report` write a document `pp.from_json` loads and on which
+  pandapower's own `rundcpp` / `runpp` agree with `pf.solve_dc` / `pf.solve_ac` to 1e-13° and
+  1e-15 pu. Strict `nets_equal` on the round trip holds for the cost tables only; every carried
+  value survives at 1e-12 and the set is pinned in the test rather than papered over (F2).
+- `io.pypsa`: `to_network` / `to_network_with_report` build a `pypsa.Network` — lines in
+  ohm/siemens, transformers as `model="pi"` on their own `s_nom` with `tap_ratio` and
+  `phase_shift`, generators with `p_nom`, `p_min_pu`, `marginal_cost` (+ `marginal_cost_quadratic`),
+  the constant term in a `marginal_cost_constant` column, unrated branches at `s_nom = 1e5`,
+  and **never** a generator `p_set` (it pins dispatch). PyPSA `optimize()` reproduces
+  `opf.solve_dc_opf`'s objective to 1e-8 on case14 / case30 / case118; the one 1.87e-3 MW
+  dispatch residual on case118 is HiGHS's, measured and pinned (F3). Piecewise costs,
+  degree > 2, load bids, zones and generator Q limits are dropped and reported, never
+  approximated. PyPSA 1.2.4's `optimize()` ignores `phase_shift`, so DC-OPF parity is for
+  shift-free networks.
+- `io.psse_raw`: `load` / `loads` / `load_with_report` read PSS/E RAW **v33** — case
+  identification, bus, load, fixed shunt, generator, branch, two-winding transformer (four-line
+  records; `CZ` / `CW` / `CM` converted as MATPOWER's `psse_convert_xfmr` does), area, zone;
+  ZIP loads, branch end shunts and magnetising admittances are folded and reported; three-winding
+  transformers, switched shunts, owners and every later section are skipped with one report
+  entry per record. RAW carries no costs, and the importer says so (`RAW_NO_COSTS`) rather
+  than inventing any. Fixtures `case14_v33.raw` and `synthetic_quirks_v33.raw` with provenance.
+- `io.csv_bundle`: `dump(net, dir)` / `load(dir)` — `manifest.json` plus one CSV per entity
+  table headed by the model's field names, costs and bids as long-format side tables, empty cell
+  = `None`, ids as text, floats via `repr`. `load(dump(net)) == net` **bit-exactly** on every
+  bundled fixture; a bundle that is not exact is refused with every problem listed
+  (`CSV_*` codes), and an optional string field holding `""` is refused on write because the
+  bundle could not read it back.
+- `model.Branch.kind: "line" | "transformer"`, defaulted at construction — `"transformer"` iff
+  the tap is off-nominal or the shift non-zero — so no existing file changes; importers set it
+  from the source table (a neutral-tap transformer stays one), exporters route on it, and an
+  explicit `"line"` with a tap is rejected. The JSON schema snapshot moved once.
+- `io.report.ExportReport`, mirroring `ImportReport` (same issue record, `warnings` / `errors`,
+  `codes`, `as_strings`, `raise_on_error`), returned by every exporter under one rule: an empty
+  report means the conversion was lossless, and anything dropped, approximated or repaired is an
+  issue naming the element id and the field. `io.report.LIMITATIONS` registers every code the
+  four modules can emit; `tests/unit/test_io_limitations.py` fails on a code the manual does
+  not name.
+- Docs: [File formats](manual/formats.md) gains a section per format (sections read, derived
+  ids, column / record maps, warnings, errors, limitations, example); API pages for the four
+  modules; [`examples/13_interop.py`](examples/index.md#13-interop) runs every format on
+  case14 with its report.
+- Known limitation carried out of the wave (F1 / A19): `opf.dc_opf`'s flow rows omit the
+  phase shifter's PTDF term, so a network with a non-zero `shift_deg` — from any format — gets
+  wrong `opf` / `market` branch flows until the standalone fix lands; `pf.solve_dc` is right
+  and agrees with pandapower's `rundcpp` and PyPSA's `lpf()`. Stated under every importer's
+  limitations in the manual.
+
 ### Added — wave M7 (agent-based bidding)
 
 - `market.solve_agents(scenario, options=None, *, strategies=None) -> MarketAgentsResult`: the
