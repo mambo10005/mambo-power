@@ -20,12 +20,23 @@ ImportIssueCode = Literal[
     "ISLAND_DEACTIVATED",
     "BASE_KV_REPLACED",
     "GENCOST_REACTIVE_IGNORED",
+    # io.pypsa (wave M8, W3) — see ``mambo_power.io.pypsa.CODES``
+    "PYPSA_PWL_COST_DROPPED",
+    "PYPSA_COST_DEGREE_DROPPED",
+    "PYPSA_LOAD_BID_DROPPED",
+    "PYPSA_ZONE_DROPPED",
+    "PYPSA_GEN_Q_LIMITS_DROPPED",
+    "PYPSA_GEN_RAMP_DROPPED",
+    "PYPSA_GEN_VSET_CONFLICT",
 ]
 """The closed set of importer/repair warning codes.
 
 ``ISLAND_DEACTIVATED`` — :func:`mambo_power.model.repair_islands` switched an island off.
 ``BASE_KV_REPLACED`` — MATPOWER ``BASE_KV <= 0`` replaced by the importer default.
 ``GENCOST_REACTIVE_IGNORED`` — a ``2 * ngen``-row ``gencost`` had its reactive half dropped.
+``PYPSA_*`` — fields :mod:`mambo_power.io.pypsa` dropped because PyPSA cannot carry them
+(piecewise or degree > 2 costs, load bids, zones, generator Q limits, a ramp on a zero-capacity
+generator) or collapsed (disagreeing voltage setpoints at one bus).
 """
 
 
