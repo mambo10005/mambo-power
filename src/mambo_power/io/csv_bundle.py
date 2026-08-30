@@ -485,8 +485,12 @@ class _Reader:
         # utf-8-sig: Excel's "CSV UTF-8" prefixes a BOM that would otherwise become part of the
         # first header; a fully blank row (an editor's trailing newline) is not a row. Both from
         # the M8 walk (surprises 6 and 7). The writer stays plain UTF-8 with no blank rows.
-        with path.open(newline="", encoding="utf-8-sig") as handle:
-            raw = [row for row in csv.reader(handle) if not _blank_line(row)]
+        try:
+            with path.open(newline="", encoding="utf-8-sig") as handle:
+                raw = [row for row in csv.reader(handle) if not _blank_line(row)]
+        except csv.Error as exc:  # a cell over csv.field_size_limit() (131 072 chars), ...
+            self.error("CSV_BAD_VALUE", f"{file}: {exc}")
+            return None
         header = raw[0] if raw else []
         expected = [c.name for c in columns]
         ok = True

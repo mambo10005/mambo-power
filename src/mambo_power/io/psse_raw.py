@@ -1,9 +1,10 @@
 """PSS/E RAW version 33 importer (wave M8, W4).
 
 A record parser for the v33 layout only (``REV`` must be 33). It reads the case identification
-(``SBASE``), bus, load, fixed shunt, generator, non-transformer branch, two-winding transformer,
-area and zone sections and ignores every other record — three-winding transformers, switched
-shunts, owners, DC lines, FACTS, ... — with **one report entry per ignored record**. Fields are
+(``SBASE``), bus, load, fixed shunt, generator, non-transformer branch, two-winding transformer
+and zone sections and ignores every other record — area records (only the bus ``AREA`` labels
+survive, as ``Bus.area``), three-winding transformers, switched shunts, owners, DC lines,
+FACTS, ... — with **one report entry per ignored record**. Fields are
 comma-separated; single-quoted strings may contain commas and slashes; ``/`` outside quotes
 starts a comment; blank lines are skipped; each section ends with a line whose first field is
 ``0``; ``Q`` (or the end of the text) after the zone section ends the file. Field order and
@@ -130,6 +131,12 @@ _SECTIONS = (
     "induction machine",
 )
 _REQUIRED_THROUGH = "zone"
+# Sections a reader consumes; every other section's records are reported RAW_SECTION_IGNORED
+# (the area section is *not* read: bus AREA labels are enough for Bus.area, and an area
+# record's ISW/PDES/PTOL/ARNAME have no model field -- M8 critic finding 13).
+_READ_SECTIONS = frozenset(
+    {"bus", "load", "fixed shunt", "generator", "branch", "transformer", "zone"}
+)
 # Lines per record in the sections that are ignored (multi-terminal DC is computed per record).
 _IGNORED_RECORD_LINES = {
     "two-terminal dc": 3,
@@ -709,16 +716,7 @@ class _Builder:
 
     def read_ignored(self) -> None:
         for section in _SECTIONS:
-            if section in (
-                "bus",
-                "load",
-                "fixed shunt",
-                "generator",
-                "branch",
-                "transformer",
-                "area",
-                "zone",
-            ):
+            if section in _READ_SECTIONS:
                 continue
             for rec in self.case.sections[section]:
                 f, line = rec.fields, rec.line

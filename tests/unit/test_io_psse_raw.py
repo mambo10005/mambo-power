@@ -120,7 +120,10 @@ def test_case14_report_is_only_base_kv_and_costs(case14_pair):
     assert not report.errors
     codes = [w.code for w in report.warnings]
     assert codes.count("BASE_KV_REPLACED") == 14  # BASKV 0 kept from case14.m
-    assert set(codes) == {"BASE_KV_REPLACED", "RAW_NO_COSTS"}
+    assert set(codes) == {"BASE_KV_REPLACED", "RAW_NO_COSTS", "RAW_SECTION_IGNORED"}
+    # the file's one area record ("IEEE14"): not read, so reported (M8 critic finding 13)
+    areas = [w for w in report.warnings if w.code == "RAW_SECTION_IGNORED"]
+    assert len(areas) == 1 and areas[0].message.startswith("area section is not read")
 
 
 def test_case14_ids_follow_the_id_scheme(case14_pair):
@@ -287,9 +290,12 @@ def test_quirks_neutral_tap_transformer_keeps_kind(quirks):
 def test_quirks_ignored_records_one_entry_each(quirks):
     _, report = quirks
     assert not report.errors
-    owner = [w for w in report.warnings if w.code == "RAW_SECTION_IGNORED"]
+    ignored = [w for w in report.warnings if w.code == "RAW_SECTION_IGNORED"]
+    owner = [w for w in ignored if w.message.startswith("owner")]
     assert len(owner) == 1
     assert "owner" in owner[0].message and "1" in owner[0].message
+    areas = [w for w in ignored if w.message.startswith("area")]
+    assert len(areas) == 2 and len(ignored) == 3  # every area record, one entry each
     sw = [w for w in report.warnings if w.code == "RAW_SWITCHED_SHUNT_IGNORED"]
     assert len(sw) == 1
     assert sw[0].bus_ids == ["bus-4"]

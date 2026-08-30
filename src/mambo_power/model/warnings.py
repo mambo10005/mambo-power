@@ -55,6 +55,7 @@ ImportIssueCode = Literal[
     "PYPSA_GEN_RAMP_DROPPED",
     "PYPSA_GEN_VSET_CONFLICT",
     "PYPSA_UNRATED_S_NOM_DEFAULTED",
+    "PYPSA_COST_NONCONVEX",
 ]
 """The closed set of importer/repair warning codes.
 
@@ -103,7 +104,9 @@ filled with a stated default.
 ``PYPSA_*`` — fields :mod:`mambo_power.io.pypsa` dropped because PyPSA cannot carry them
 (piecewise or degree > 2 costs, load bids, zones, generator Q limits, a ramp on a zero-capacity
 generator), collapsed (disagreeing voltage setpoints at one bus) or approximated (an unrated
-branch written with the ``s_nom`` sentinel, ``PYPSA_UNRATED_S_NOM_DEFAULTED``).
+branch written with the ``s_nom`` sentinel, ``PYPSA_UNRATED_S_NOM_DEFAULTED``), plus
+``PYPSA_COST_NONCONVEX`` for a concave quadratic cost (``c2 < 0``) exported unchanged that
+PyPSA's solver will refuse.
 """
 
 

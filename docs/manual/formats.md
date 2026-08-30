@@ -423,7 +423,7 @@ objective on every bundled case (`tests/parity/test_pypsa_export_vs_pypsa.py`).
 
 | Model | PyPSA | Notes |
 | --- | --- | --- |
-| `Bus` | `Bus` | `v_nom = base_kv`, `v_mag_pu_min/max`, `control` (`Slack` / `PV` / `PQ`) from `type`, `x`/`y` from `geo` (lon, lat), `v_mag_pu_set` from the bus's generators' `v_set_pu`. `area`, `zone` and `in_service` ride along as **custom bus columns** (PyPSA buses have no `active` flag); every element at an out-of-service bus is exported `active = False`, which is what `numerics.NetworkArrays` does with them. |
+| `Bus` | `Bus` | `v_nom = base_kv`, `v_mag_pu_min/max`, `control` (`Slack` / `PV` / `PQ`) from `type`, `x`/`y` from `geo` (lon, lat), `v_mag_pu_set` from the bus's **in-service** generators' `v_set_pu`. `area`, `zone` and `in_service` ride along as **custom bus columns** (PyPSA buses have no `active` flag); every element at an out-of-service bus is exported `active = False`, which is what `numerics.NetworkArrays` does with them. |
 | `Branch` with `is_transformer` false (a line at nominal tap) | `Line` | Physical units on the from-bus base, `Zb = base_kv² / base_mva`: `r`, `x` in ohm (`× Zb`), `b` in siemens (`÷ Zb`). |
 | `Branch` with `is_transformer` (`kind == "transformer"` or an off-nominal tap/shift) | `Transformer(model="pi")` | `r`, `x`, `b` per unit on the transformer's own `s_nom` (impedances `r`, `x` `× s_nom / base_mva`; the admittance `b` `× base_mva / s_nom`), `tap_ratio`, `tap_side = 0` (mambo's tap is on the from side), `phase_shift` in degrees. |
 | `rating_mva` | `s_nom` | An unrated branch gets `s_nom = 1e5` (`pypsa.UNRATED_S_NOM_MVA`): PyPSA's optimiser reads `s_nom == 0` as "carries nothing", not "unlimited". Reported per branch as `PYPSA_UNRATED_S_NOM_DEFAULTED`. |
@@ -447,7 +447,8 @@ objective on every bundled case (`tests/parity/test_pypsa_export_vs_pypsa.py`).
 | `PYPSA_ZONE_DROPPED` | The `zones` list (PyPSA has no zone component); the bus `zone` column still names them. |
 | `PYPSA_GEN_Q_LIMITS_DROPPED` | `q_min_mvar` / `q_max_mvar` (PyPSA generators carry no reactive limits). |
 | `PYPSA_GEN_RAMP_DROPPED` | A ramp on a zero-capacity generator (cannot be a fraction of `p_nom = 0`). |
-| `PYPSA_GEN_VSET_CONFLICT` | Generators at one bus disagreeing on `v_set_pu`; PyPSA has one `v_mag_pu_set` per bus, the first generator's wins. |
+| `PYPSA_GEN_VSET_CONFLICT` | In-service generators at one bus disagreeing on `v_set_pu`; PyPSA has one `v_mag_pu_set` per bus, the first in-service generator's wins (out-of-service units do not take part). |
+| `PYPSA_COST_NONCONVEX` | A quadratic cost with `c2 < 0` (concave). Exported unchanged as `marginal_cost_quadratic` — nothing is dropped — but PyPSA's solver will reject the non-convex objective with its own error, so the report names the generator up front. |
 | `PYPSA_UNRATED_S_NOM_DEFAULTED` | A branch with `rating_mva = None`, written with `s_nom = 1e5` (`pypsa.UNRATED_S_NOM_MVA`); one entry per branch naming it and the sentinel. |
 
 Every issue names the element id and the field. The exporter raises nothing of its own: a
@@ -540,7 +541,7 @@ way. Sections through zone must be present and terminated.
 | generator | `I, ID, PG, QG, QT, QB, VS, ..., STAT, ..., PT, PB` | `p_mw`, `q_mvar`, `q_max_mvar`, `q_min_mvar`, `v_set_pu`, `in_service`, `p_max_mw`, `p_min_mw`; `cost = None` (`RAW_NO_COSTS`); `IREG`, `MBASE`, `ZR/ZX`, `RT/XT`, `GTAP`, `RMPCT`, owners and `WMOD/WPF` dropped |
 | branch | `I, J, CKT, R, X, B, RATEA, ..., GI, BI, GJ, BJ, ST` | `r`, `x`, `b` (pu on `SBASE`), `rating_mva` (`RATEA`, `0` → `None`), `in_service`, `kind = "line"`; end shunts become `Shunt` entries (`RAW_BRANCH_END_SHUNT_FOLDED`); `RATEB/C`, `LEN`, owners dropped |
 | transformer (4 lines) | line 1 `I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, ..., STAT`; line 2 `R1-2, X1-2, SBASE1-2`; line 3 `WINDV1, NOMV1, ANG1, RATA1`; line 4 `WINDV2, NOMV2` | `r`, `x`, `tap_ratio`, `shift_deg = ANG1`, `rating_mva = RATA1`, `b = 0`, `kind = "transformer"` (set from the record, not inferred from the tap); magnetising admittance becomes a `Shunt` at the from bus (`RAW_XFMR_MAGNETISING_FOLDED`) |
-| area, zone | `I, ..., ARNAME` / `I, ZONAME` | zone names → `Zone.name`; areas are referenced from buses only |
+| zone | `I, ZONAME` | zone names → `Zone.name`. The **area** section is not read — only the bus `AREA` labels survive, as `Bus.area` — so each area record (`I, ISW, PDES, PTOL, ARNAME`) is reported `RAW_SECTION_IGNORED` |
 
 ### The CZ / CW / CM conversions
 
@@ -568,12 +569,17 @@ way. Sections through zone must be present and terminated.
 | `RAW_XFMR_MAGNETISING_FOLDED` | A transformer's `MAG1/MAG2` became a `Shunt` at the from bus. |
 | `RAW_THREE_WINDING_IGNORED` | A three-winding transformer record was skipped (one issue per record). |
 | `RAW_SWITCHED_SHUNT_IGNORED` | A switched shunt was skipped; its `BINIT` is **not** folded into a fixed shunt (`bus_ids` names the bus). |
-| `RAW_SECTION_IGNORED` | A record of a section that is not read (owners, DC lines, FACTS, ...) was skipped; one issue per record naming the section and the key. |
+| `RAW_SECTION_IGNORED` | A record of a section that is not read (areas, owners, DC lines, FACTS, ...) was skipped; one issue per record naming the section and the key. |
 
 ### Errors
 
 Anything wrong with the **file** raises `RawImportError` with a stable `code` and a 1-based
-`line` when known:
+`line` when known. This is the one importer with its own exception: a RAW file is read
+record by record and the first structural fault (a missing terminator, a bad `REV`) makes
+everything after it unreadable, so it stops there with the line number; the CSV bundle, whose
+tables are independent, collects every problem into an `ImportReport` and raises `ReportError`
+instead (its Errors section below). Both are `ValueError`s. `RawImportError` codes are the
+`RawImportCode` literal, not `ImportIssueCode`:
 
 | Code | Cause |
 | --- | --- |
@@ -618,7 +624,7 @@ print(next(str(w) for w in report.warnings if w.code == "RAW_NO_COSTS"))
 ```
 
 ```text
-14 20 ['BASE_KV_REPLACED', 'RAW_NO_COSTS'] 15
+14 20 ['BASE_KV_REPLACED', 'RAW_NO_COSTS', 'RAW_SECTION_IGNORED'] 16
 ['branch-4-7-1', 'branch-4-9-1', 'branch-5-6-1']
 RAW_NO_COSTS: RAW carries no cost data; all 5 generators imported with cost=None
 ```
@@ -685,7 +691,10 @@ cell and a breakpoint a row — the spreadsheet-friendly form.
 
 A bundle is either exact or refused. `load_with_report` validates the whole directory and
 collects **every** problem before giving up; the issues are raised as `ReportError`, whose
-`.report.errors` carry them (all as errors — nothing here is a repair):
+`.report.errors` carry them (all as errors — nothing here is a repair). This is the other
+error surface of the wave: the RAW importer raises `RawImportError` at the first structural
+fault because nothing after it can be read, while a bundle's tables are independent, so every
+fault can be listed at once. Both are `ValueError`s; only the CSV codes are `ImportIssueCode`s:
 
 | Code | Cause |
 | --- | --- |
@@ -695,7 +704,7 @@ collects **every** problem before giving up; the issues are raised as `ReportErr
 | `CSV_UNKNOWN_COLUMN` | A header the model does not have. |
 | `CSV_MISSING_COLUMN` | A model field without a column. |
 | `CSV_DUPLICATE_ID` | The same `id` twice in one table. |
-| `CSV_BAD_VALUE` | A required cell empty, a cell that is not a float / boolean / finite, a row with the wrong number of cells, or a per-entity validation failure (`p_mw` must be increasing, ...). |
+| `CSV_BAD_VALUE` | A required cell empty, a cell that is not a float / boolean / finite, a row with the wrong number of cells, a cell longer than Python's `csv` field limit (131 072 characters — the whole table is then unreadable and reported once), or a per-entity validation failure (`p_mw` must be increasing, ...). |
 | `CSV_ORPHAN_ROW` | A `generator_costs.csv` / `load_bids.csv` row whose owner id is absent from its table. |
 
 Cross-entity invariants (dangling references, slack count, connectivity) are the model's own

@@ -457,3 +457,14 @@ def test_every_code_is_registered_on_the_closed_set() -> None:
     assert csv_bundle.CODES
     assert set(csv_bundle.CODES) <= set(get_args(ImportIssueCode))
     assert all(code.startswith("CSV_") for code in csv_bundle.CODES)
+
+
+def test_a_cell_over_the_csv_field_limit_is_a_report_error(tmp_path: Path) -> None:
+    """M8 critic finding 14: ``csv.field_size_limit()`` (131 072 chars) used to surface as an
+    uncaught ``_csv.Error``; the report is the only channel."""
+    csv_bundle.dump(full_network(), tmp_path)
+    (tmp_path / "zones.csv").write_text("id,name\n" + "x" * 200_000 + ",\n", encoding="utf-8")
+    with pytest.raises(ReportError) as info:
+        csv_bundle.load(tmp_path)
+    codes = [(e.code, e.message.split(":")[0]) for e in info.value.report.errors]
+    assert ("CSV_BAD_VALUE", "zones.csv") in codes

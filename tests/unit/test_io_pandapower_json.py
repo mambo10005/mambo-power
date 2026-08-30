@@ -826,3 +826,12 @@ def test_no_live_ext_grid_and_no_slack_gen_is_the_models_no_slack_error() -> Non
     net.gen.at[0, "slack"] = False
     with pytest.raises(NetworkValidationError, match="NO_SLACK"):
         pj.loads(pp.to_json(net))
+
+
+def test_an_infinite_label_is_the_id_inf_not_a_traceback() -> None:
+    """M8 critic finding 14: ``_label(float("inf"))`` raised ``OverflowError`` (``int(inf)``).
+    pandapower's JSON turns ``inf`` into ``null`` on the way, so the cell is only reachable from
+    an in-memory net; the helper must still not raise."""
+    assert pj._label(float("inf")) == "inf"
+    assert pj._label(float("-inf")) == "-inf"
+    assert pj._label(2.0) == "2"

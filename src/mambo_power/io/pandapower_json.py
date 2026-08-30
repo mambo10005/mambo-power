@@ -170,8 +170,9 @@ def _is_missing(value: object) -> bool:
 
 
 def _label(value: object) -> str:
-    """A pandapower ``name``/``zone`` cell as an id: ``1.0`` -> ``"1"``, ``"x"`` -> ``"x"``."""
-    if isinstance(value, float) and value == int(value):
+    """A pandapower ``name``/``zone`` cell as an id: ``1.0`` -> ``"1"``, ``"x"`` -> ``"x"``
+    (``inf`` -> ``"inf"``; ``int(inf)`` would raise)."""
+    if isinstance(value, float) and math.isfinite(value) and value == int(value):
         return str(int(value))
     return str(value)
 

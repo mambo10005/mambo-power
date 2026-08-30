@@ -8,7 +8,8 @@ zero-optional-dependency import (design item R9; ``pypsa`` is a dev extra).
 
 * ``Bus`` → ``Bus``: ``v_nom = base_kv``, ``v_mag_pu_min/max``, ``control`` from ``type``
   (``Slack``/``PV``/``PQ``), ``x/y`` from ``geo`` (lon, lat),
-  ``v_mag_pu_set`` from the bus's generators' ``v_set_pu``; ``area``/``zone`` ride along as
+  ``v_mag_pu_set`` from the bus's *in-service* generators' ``v_set_pu`` (an out-of-service
+  unit's setpoint is not what the bus holds); ``area``/``zone`` ride along as
   custom columns (PyPSA keeps unknown columns through CSV export/import). PyPSA buses have no
   ``active`` flag, so ``in_service`` is kept as a custom ``in_service`` column and every element
   at an out-of-service bus is exported ``active = False`` — what ``numerics.NetworkArrays`` does
@@ -43,7 +44,10 @@ zero-optional-dependency import (design item R9; ``pypsa`` is a dev extra).
 **Dropped and reported** (design item D1 — never approximated; each entry names the element id
 and the field): piecewise costs, polynomial costs of effective degree > 2, load bids, zones,
 generator reactive limits, a ramp on a zero-capacity generator, and disagreeing voltage
-setpoints at one bus (PyPSA has one ``v_mag_pu_set`` per bus). :data:`CODES` lists the codes.
+setpoints at one bus (PyPSA has one ``v_mag_pu_set`` per bus). A concave quadratic cost
+(``c2 < 0``) is exported as it is *and* reported (``PYPSA_COST_NONCONVEX``): PyPSA hands it to
+the solver, which rejects the non-convex QP with its own error rather than a mambo issue.
+:data:`CODES` lists the codes.
 """
 
 from __future__ import annotations
@@ -65,6 +69,7 @@ CODES: tuple[str, ...] = (
     "PYPSA_GEN_RAMP_DROPPED",
     "PYPSA_GEN_VSET_CONFLICT",
     "PYPSA_UNRATED_S_NOM_DEFAULTED",
+    "PYPSA_COST_NONCONVEX",
 )
 """Every report code this exporter can emit (its documented limitations)."""
 
@@ -129,7 +134,10 @@ def _add_buses(n: pypsa.Network, net: Network, warn: Any) -> None:
     gens_at: dict[str, list[Generator]] = {}
     for g in net.generators:
         gens_at.setdefault(g.bus, []).append(g)
-    for bus_id, gens in gens_at.items():
+    for bus_id, all_gens in gens_at.items():
+        # in-service units decide the bus setpoint; with none in service, every unit is inert
+        # and the first one's value is as good as any (nothing PyPSA solves reads it)
+        gens = [g for g in all_gens if g.in_service] or all_gens
         v_set[bus_id] = gens[0].v_set_pu
         if len({g.v_set_pu for g in gens}) > 1:
             warn(
@@ -306,6 +314,16 @@ def _cost_terms(g: Generator, warn: Any) -> tuple[float, float, float]:
         )
         return 0.0, 0.0, 0.0
     padded = [0.0] * (3 - len(coeffs)) + coeffs
+    if padded[0] < 0.0:
+        warn(
+            ConversionIssue(
+                code="PYPSA_COST_NONCONVEX",
+                message=f"generator {g.id!r}: quadratic cost coefficient c2={padded[0]} is "
+                "negative (concave); exported as marginal_cost_quadratic unchanged, but PyPSA's "
+                "solver will reject the non-convex objective",
+                element_ids=[g.id],
+            )
+        )
     return padded[0], padded[1], padded[2]
 
 

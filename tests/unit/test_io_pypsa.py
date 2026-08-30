@@ -360,3 +360,27 @@ def test_tap_assigned_to_a_line_after_construction_exports_as_a_transformer() ->
     n = io_pypsa.to_network(net)
     assert line.id in n.transformers.index and line.id not in n.lines.index
     assert n.transformers.loc[line.id, "tap_ratio"] == 1.05
+
+
+def test_v_mag_pu_set_comes_from_in_service_generators_only() -> None:
+    """M8 critic finding 15: an out-of-service unit's setpoint is not what the bus holds."""
+    net = _hand_network()
+    bus = net.generators[0].bus
+    off = net.generators[0].model_copy(update={"id": "off", "v_set_pu": 1.05, "in_service": False})
+    net.generators.insert(0, off)  # first at the bus, but out of service
+    live = next(g for g in net.generators if g.bus == bus and g.in_service).v_set_pu
+    assert live != 1.05
+    n, report = io_pypsa.to_network_with_report(net)
+    assert n.buses.loc[bus, "v_mag_pu_set"] == live
+    assert "PYPSA_GEN_VSET_CONFLICT" not in report.codes
+
+
+def test_concave_quadratic_cost_is_exported_unchanged_and_reported() -> None:
+    net = _hand_network()
+    g = net.generators[0]
+    g.cost = PolynomialCost(coefficients=[-0.01, 10.0, 0.0])
+    n, report = io_pypsa.to_network_with_report(net)
+    assert n.generators.loc[g.id, "marginal_cost_quadratic"] == -0.01  # never approximated
+    issues = [w for w in report.warnings if w.code == "PYPSA_COST_NONCONVEX"]
+    assert len(issues) == 1 and issues[0].element_ids == [g.id]
+    assert "concave" in issues[0].message
