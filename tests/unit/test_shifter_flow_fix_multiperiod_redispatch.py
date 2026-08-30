@@ -35,7 +35,7 @@ from mambo_power import pf
 from mambo_power.market.multiperiod import solve_multiperiod
 from mambo_power.market.nodal import solve_nodal
 from mambo_power.market.zonal import solve_zonal
-from mambo_power.model import Network, Period, Scenario
+from mambo_power.model import Network, Scenario
 from mambo_power.numerics import NetworkArrays
 from mambo_power.numerics.bbus import flow_from_ptdf
 from mambo_power.opf import gen_cost_coeffs
@@ -100,9 +100,7 @@ def test_multiperiod_dc_opf_derived_flows_match_pf_solve_dc_at_every_period(
     g_shunt_mw = arr.g_shunt_pu * arr.base_mva
     for t, load_mw in enumerate(period_loads_mw):
         dispatch = {gid: float(sol.dispatch_mw[t, i]) for i, gid in enumerate(arr.gen_ids)}
-        gen_by_bus = np.bincount(
-            arr.gen_bus, weights=sol.dispatch_mw[t], minlength=arr.n_bus
-        )
+        gen_by_bus = np.bincount(arr.gen_bus, weights=sol.dispatch_mw[t], minlength=arr.n_bus)
         p_load_mw = np.zeros(arr.n_bus)
         p_load_mw[arr.load_bus[0]] = load_mw
         injection_mw = gen_by_bus - p_load_mw - g_shunt_mw

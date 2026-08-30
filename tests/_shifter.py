@@ -91,9 +91,7 @@ def shifter_loop_network(shift_deg: float, *, t12_rating_mva: float | None = Non
     )
 
 
-def zoned_shifter_loop_network(
-    shift_deg: float, *, t12_rating_mva: float | None = None
-) -> Network:
+def zoned_shifter_loop_network(shift_deg: float, *, t12_rating_mva: float | None = None) -> Network:
     """:func:`shifter_loop_network` with every bus assigned to one zone ``"Z1"`` (module
     docstring) -- the minimum ``market.solve_zonal`` needs to clear this fixture at all."""
     net = shifter_loop_network(shift_deg, t12_rating_mva=t12_rating_mva)
