@@ -44,6 +44,14 @@ ImportIssueCode = Literal[
     "FIELD_DROPPED",
     "COST_DROPPED",
     "BID_DROPPED",
+    # io.pypsa (wave M8, W3) — see ``mambo_power.io.pypsa.CODES``
+    "PYPSA_PWL_COST_DROPPED",
+    "PYPSA_COST_DEGREE_DROPPED",
+    "PYPSA_LOAD_BID_DROPPED",
+    "PYPSA_ZONE_DROPPED",
+    "PYPSA_GEN_Q_LIMITS_DROPPED",
+    "PYPSA_GEN_RAMP_DROPPED",
+    "PYPSA_GEN_VSET_CONFLICT",
 ]
 """The closed set of importer/repair warning codes.
 
@@ -84,6 +92,9 @@ filled with a stated default.
 ``FIELD_DROPPED`` — an exported model field the target format has no column for.
 ``COST_DROPPED`` — a generator cost the target format cannot express (never approximated).
 ``BID_DROPPED`` — a load bid the target format cannot express.
+``PYPSA_*`` — fields :mod:`mambo_power.io.pypsa` dropped because PyPSA cannot carry them
+(piecewise or degree > 2 costs, load bids, zones, generator Q limits, a ramp on a zero-capacity
+generator) or collapsed (disagreeing voltage setpoints at one bus).
 """
 
 

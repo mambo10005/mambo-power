@@ -121,6 +121,7 @@ nav:
       - mambo_power.io.matpower: api/io-matpower.md
       - mambo_power.io.native: api/io-native.md
       - mambo_power.io.psse_raw: api/io-psse-raw.md
+      - mambo_power.io.pypsa: api/io-pypsa.md
       - mambo_power.io.report: api/io-report.md
       - mambo_power.numerics: api/numerics.md
       - mambo_power.pf: api/pf.md
