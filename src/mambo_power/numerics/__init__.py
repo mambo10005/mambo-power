@@ -6,7 +6,7 @@ per-unit conversion site; every builder here takes that view, never a ``Network`
 """
 
 from mambo_power.numerics.arrays import NetworkArrays
-from mambo_power.numerics.bbus import bbus, bf, p_shift
+from mambo_power.numerics.bbus import bbus, bf, flow_from_ptdf, p_shift
 from mambo_power.numerics.errors import (
     NoSlackGeneratorError,
     SetpointConflictWarning,
@@ -27,6 +27,7 @@ __all__ = [
     "bf",
     "bridges",
     "effective_roles",
+    "flow_from_ptdf",
     "lodf",
     "p_shift",
     "ptdf",
