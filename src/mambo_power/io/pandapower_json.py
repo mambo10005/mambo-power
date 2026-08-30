@@ -813,7 +813,7 @@ def _to_pandapower(net: Network, *, f_hz: float) -> tuple[Any, list[ImportIssue]
     ``create_lines_from_parameters``, ...): pandapower's single-row creators cost a full-table
     dtype pass each, which made the export quadratic (33 s on case300, M8 critic finding 4).
     The tables and values are the ones the per-row creators produced; the test
-    ``test_bulk_export_is_byte_identical_to_pandapowers_per_row_creators`` pins that."""
+    ``test_bulk_export_equals_the_per_row_creators_by_nets_equal_and_per_cell`` pins that."""
     import pandapower as pp
 
     warnings: list[ImportIssue] = []

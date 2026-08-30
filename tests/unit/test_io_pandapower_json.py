@@ -947,13 +947,14 @@ def _case14_with_a_tap() -> Network:
 
 
 @pytest.mark.parametrize("build", [_net_with_everything, _case14_with_a_tap])
-def test_bulk_export_is_byte_identical_to_pandapowers_per_row_creators(build: Any) -> None:
+def test_bulk_export_equals_the_per_row_creators_by_nets_equal_and_per_cell(build: Any) -> None:
     """The exporter builds each table with one bulk creator call (``create_buses``,
     ``create_lines_from_parameters``, ...) instead of a creator call per element — 3.1 s → 0.11 s
-    on case300 here, 33 s on the critic's machine. The file must not change: ``pp.nets_equal``
-    against the per-row build, every table with the same column set (pandapower's bulk creators
-    append ``max_vm_pu``/``max_p_mw`` before the ``min_*`` twin, so column *order* in ``bus``
-    and ``gen`` is the one thing that legitimately differs), and the same re-imported network."""
+    on case300 here, 33 s on the critic's machine. The contract is ``pp.nets_equal`` against the
+    per-row build, every table with the same column *set* and the same cells (``None`` / NaN /
+    ``""`` included), and the same re-imported network — not byte identity: pandapower's bulk
+    creators append ``max_vm_pu``/``max_p_mw`` before the ``min_*`` twin, so column *order* in
+    ``bus`` and ``gen`` legitimately differs (M8 critic findings 4, 21)."""
     net = build()
     text = pj.dumps(net)
     ours = pp.from_json_string(text)
@@ -969,7 +970,6 @@ def test_bulk_export_is_byte_identical_to_pandapowers_per_row_creators(build: An
                 (x, type(x)) if not _isnan(x) else "nan" for x in b
             ], (table, column)
     assert pj.loads(text) == pj.loads(pp.to_json(reference))
-    assert text == pp.to_json(reference) or True  # column order (docstring) breaks byte equality
 
 
 def _isnan(value: object) -> bool:
