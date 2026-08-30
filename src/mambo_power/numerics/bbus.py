@@ -91,7 +91,7 @@ def flow_from_ptdf(ptdf: FloatArray, injection_mw: FloatArray, arr: NetworkArray
     rather than calling this helper, since their ``injection`` is not one vector (see that
     module's own derivation).
     """
-    result: FloatArray = ptdf @ (injection_mw - p_shift(arr) * arr.base_mva) + pf_shift(
-        arr
-    ) * arr.base_mva
+    result: FloatArray = (
+        ptdf @ (injection_mw - p_shift(arr) * arr.base_mva) + pf_shift(arr) * arr.base_mva
+    )
     return result

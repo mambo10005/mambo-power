@@ -30,7 +30,7 @@ import numpy.typing as npt
 import mambo_power
 from mambo_power.model import GeneratorCost, Network
 from mambo_power.numerics.arrays import NetworkArrays
-from mambo_power.numerics.bbus import pf_shift
+from mambo_power.numerics.bbus import flow_from_ptdf
 from mambo_power.opf.dc_opf import (
     MissingCostError,
     NonConvexCostError,
@@ -201,13 +201,14 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
     ptdf_matrix = solution.ptdf
     lmp = lmp_decomposition(solution.duals, ptdf_matrix)
 
-    # branch flows at the found dispatch: flow = PTDF @ (net injection) + phase-shift injection,
-    # the same construction dc_opf's own flow-limit rows are built from (module docstring there).
+    # branch flows at the found dispatch: flow_from_ptdf(ptdf, injection, arr) — the same
+    # PTDF-minus-shift identity dc_opf's own flow-limit rows are built from by hand (module
+    # docstring there) and pf.solve_dc solves for directly (numerics.bbus.flow_from_ptdf).
     gen_by_bus = np.bincount(arr.gen_bus, weights=solution.dispatch_mw, minlength=arr.n_bus)
     p_load_mw = arr.p_load_pu * arr.base_mva
     g_shunt_mw = arr.g_shunt_pu * arr.base_mva
     injection_mw = gen_by_bus - p_load_mw - g_shunt_mw
-    flows_mw = ptdf_matrix @ injection_mw + pf_shift(arr) * arr.base_mva
+    flows_mw = flow_from_ptdf(ptdf_matrix, injection_mw, arr)
 
     generators = [
         GenDispatchResult(

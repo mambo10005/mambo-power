@@ -10,8 +10,9 @@ private to ``market``: the public surface is the two solvers' result models, not
 
 **Branch rows** (M7 W4, AC-8). :class:`~mambo_power.opf.dc_opf.OpfSolution` carries no per-branch
 flow -- only the PTDF matrix and the flow-limit duals -- so the flow is derived here as
-``flow_k = PTDF[k] . (net injection) + phase-shift injection`` from the dispatch already solved
-for. This is not a parallel formula: it is exactly the construction
+``flow_k = PTDF[k] . (net injection - phase-shift bus injection) + phase-shift branch injection``
+(:func:`mambo_power.numerics.bbus.flow_from_ptdf`) from the dispatch already solved for. This is
+not a parallel formula: it is exactly the construction
 :func:`mambo_power.opf.dc_opf.dc_opf`'s own flow-limit rows are built from (that module's
 docstring), and the one :func:`mambo_power.opf.solve_dc_opf` and
 :func:`mambo_power.opf.redispatch.redispatch_dc_opf` already apply at their own solved points --
@@ -35,7 +36,7 @@ import numpy.typing as npt
 
 from mambo_power.model import Network
 from mambo_power.numerics.arrays import NetworkArrays
-from mambo_power.numerics.bbus import pf_shift
+from mambo_power.numerics.bbus import flow_from_ptdf
 from mambo_power.opf.dc_opf import OpfSolution
 from mambo_power.results import GenDispatchResult, LoadDispatchResult, OpfBranchFlowResult
 
@@ -112,7 +113,7 @@ def clearing_rows(
         elastic_bus, weights=solution.demand_dispatch_mw, minlength=arr.n_bus
     )
     injection_mw = gen_by_bus - demand_by_bus - p_load_mw - g_shunt_mw
-    flows_mw = solution.ptdf @ injection_mw + pf_shift(arr) * arr.base_mva
+    flows_mw = flow_from_ptdf(solution.ptdf, injection_mw, arr)
     branches = [
         OpfBranchFlowResult(
             id=branch_id,
