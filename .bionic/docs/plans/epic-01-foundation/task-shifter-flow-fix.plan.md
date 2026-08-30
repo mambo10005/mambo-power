@@ -1,6 +1,6 @@
 ---
 governing-skill: superpowers:writing-plans
-sdlc-step: 5
+sdlc-step: 9
 intent: bugfix
 rigor: audited
 scale: task
@@ -145,9 +145,37 @@ premise in the critic's brief didn't hold (`flow_from_ptdf` fires once per `solv
 after the loop, not per round) — it said so rather than reporting a manufactured number. Extended
 as T6–T8 below; Steps 4–6 re-run at the new head.
 
-| T6 | bugfix | audited | fix `opf/multiperiod.py:485`'s per-period flow-row constant (fold in `p_shift_mw`) | pending |
-| T7 | bugfix | audited | fix `opf/redispatch.py:424`'s constant and `:550`'s `branch_flow_mw` (call `flow_from_ptdf` directly for the latter — full injection vector, same shape as T2/T3) | pending |
-| T8 | build | audited | regression tests for `multiperiod_dc_opf`/`redispatch_dc_opf`/`solve_zonal`/`solve_multiperiod` on the shifter fixture vs `pf.solve_dc`; restore `formats.md`'s caveat narrowly, then remove once T6/T7 land; re-run the named sweep, re-dispatch walk/audit/critic at the new head |
+| T6 | bugfix | audited | fix `opf/multiperiod.py:485`'s per-period flow-row constant (fold in `p_shift_mw`) | **done** (`8a6fb11`; per-site sabotage: reverting T6 alone reddens only its own new tests) |
+| T7 | bugfix | audited | fix `opf/redispatch.py:424`'s constant and `:550`'s `branch_flow_mw` (call `flow_from_ptdf` directly for the latter — full injection vector, same shape as T2/T3) | **done** (`eb771b1`; line 428's zonal-point term re-derived by hand and confirmed it needed no correction, left as is) |
+| T8 | build | audited | regression tests for `multiperiod_dc_opf`/`redispatch_dc_opf`/`solve_zonal`/`solve_multiperiod` on the shifter fixture vs `pf.solve_dc`; restore `formats.md`'s caveat narrowly, then remove once T6/T7 land; re-run the named sweep, re-dispatch walk/audit/critic at the new head | **done** (`272d84c` 24 tests incl. the critic's exact two numbers reproduced then closed — 81.4 MW gap, false-Infeasible; `9e0cbb4` changelog names all five sites; `formats.md` needed no restoration — the orchestrator's own exhaustive grep and the agent's independent one agree: only the five now-fixed sites and `flow_from_ptdf`'s own definition remain. F1: `git status` showed 2 files uncommitted after the agent's own regression runs went unreported (unused import, two ruff-format lines) — same F8/F11 pattern a fourth time; orchestrator committed the trivial cleanup (`bd952cc`) and ran the sweep independently rather than waiting) |
+
+**Re-review (`record/shifter-critic.md`, at `bd952cc`): merge-ready as-is; both blockers
+closed.** Both original repros re-run and confirmed fixed: the 81.4 MW gap is now 1.8e-15; the
+false `Infeasible` now returns `Optimal` matching `dc_opf`. `multiperiod.py`'s period-invariant
+`p_shift_mw` hoist re-derived by hand (module docstring confirms static topology across periods —
+cannot vary per period); `redispatch.py`'s two-part constant re-derived by hand from the full
+identity — both match byte-for-byte, not "looks plausible." One nuance worth keeping: `git log` on
+`formats.md` shows exactly one commit ever touched it (`6a7617f`, T5's deletion, predating T6/T7) —
+there was a real window on this branch where the docs and code disagreed; nothing merged during it,
+and the code caught up to the docs rather than the reverse, so it's closed, but "needed no
+restoration" means the claim *became* true, not that it was never false. No new findings; `opf/zonal.py`
+confirmed to build no PTDF/branch-flow rows at all (cannot mask or double-count); `flow_from_ptdf`
+is not in any per-period loop (`multiperiod.py` never calls it; `redispatch.py` once, post-solve).
+The one should-fix from the first review (infeasible-status-only test) stands, non-blocking.
+
+**Re-audit (`record/shifter-audit.md`, at `bd952cc`): task verdict PASS, 8/8, 0 blocking, 1
+should-fix (non-blocking, same lineage as the first pass's — harmless, its sibling test covers
+it).** Own five-bus two-loop mesh, not the fix's fixtures. T6/T7 sabotaged alone each redden
+exactly their own tests (2 and 8), zero overlap, T1–T5 unaffected. `market.solve_zonal`/
+`solve_multiperiod` reproduced both of the critic's failure modes independently — confirmed live at
+the pre-T6/T7 head `9e00ab5` (up to 107.2 MW gap, false `Infeasible`), confirmed gone at `bd952cc`
+(0.0000 MW, `Optimal`). Exhaustive site search via four differently-shaped greps (not the plan's own
+pattern); two non-obvious candidates (`market/agents.py`, `contingency/n1.py`) read in full and
+cleared by reasoning, not grep-absence. **Self-correction recorded rather than hidden**: mid-audit
+caught its own first pass reading the wrong `MarketZonalResult` field (`generators`, the zonal-stage
+dispatch, instead of `generators_final`, what `branches[].p_from_mw` is actually sourced from) — a
+combo that happened to leave the two stages coincidentally equal would have made the check vacuous;
+re-ran with a combo provably forcing them to differ (g1: 100→50, g3: 0→50), held to <1e-6 MW.
 
 ## Verification
 
@@ -155,16 +183,26 @@ Regression check: full `tests/unit` 1228 passed (0 failed, 0 skipped — 10 new)
 292 passed / 4 skipped (2 new PyPSA shifter tests; the 4 skips are pre-existing zonal fixed-load
 skips, unchanged). Every pre-existing fixture has `shift_deg == 0` everywhere, so the fix is a
 provable no-op on all of them. Gates at `6a7617f`: ruff check, ruff format (204 files), mypy (59
-files), mkdocs --strict all clean. **Named sweep at `6a7617f`, 2026-08-30 19:33Z — the task's figure of record: 1525 passed / 4
-skipped in 1043.32s** (+12 over the 1513 baseline), ruff check, ruff format (204 files), mypy (59
-files), mkdocs --strict all clean. Log: scratchpad `shifter-gate-6a7617f.log`. Independent walk and
-audit dispatched at the same head — see below once they return.
+files), mkdocs --strict all clean. Named sweep at `6a7617f`, 2026-08-30 19:33Z: 1525 / 4, all gates clean (superseded — the critic
+found two more sites at this head). **Named sweep at `bd952cc`, 2026-08-30 23:18Z — after T6–T8,
+the task's figure of record: 1539 passed / 4 skipped in 778.25s** (+14 over `6a7617f`, +26 over the
+1513 baseline), ruff check, ruff format (205 files), mypy (59 files), mkdocs --strict all clean. Log:
+scratchpad `shifter-gate-bd952cc.log`. Re-dispatching the auditor and critic at this head, since T6–T8
+changed the diff both reviewed.
+
+## Steps 6-9
+
+- **Step 6**: critic not-merge-ready (2 blocking, at `9e00ab5`) → extended T6-T8 → merge-ready
+  as-is (re-review at `bd952cc`).
+- **Step 7**: adr: n/a — a restoration to `pf.solve_dc`'s own already-correct model, no new
+  decision beyond what this plan's Design section already states.
+- **Step 8**: merge to `epic/01-foundation`, tag/commit below; worktree removed with `--force`
+  (never `rm -rf` — M7 F20); `.bionic/tmp/shifter-*` preserved under `record/` before the wipe.
+- **Step 9**: this task was M9's queued first item (M8's continuation carry 1) — closing it there
+  rather than a separate continuation file; M9 Step 0 opens next on a checkout free of the defect.
 
 ## Handoff
 
-Steps 4 (T1–T5) done, orchestrator-verified (commits carry source, own tests pass). Independent
-walk, audit and named sweep dispatched at `6a7617f`. Awaiting their return before Step 6 (critic,
-required by the audited floor even at task scale), Step 7 (ADR — likely `n/a`, a restoration has no
-new decision to record beyond what the plan's Design section already states), Step 8 (merge to
-`epic/01-foundation`, remove the worktree with `--force`), Step 9 (continuation note, folded into
-the standing M8→M9 continuation since this was M9's queued first item).
+**Shipped 2026-08-30.** Task head `bd952cc` (10 commits, T1–T8 plus two orchestrator commits), two
+full review passes (critic found 2 more sites the first pass missed; both closed and re-confirmed).
+Merges to `epic/01-foundation` next.

@@ -193,3 +193,116 @@ should-fix. Recommend: extend the fix to `opf/multiperiod.py` and `opf/redispatc
 `redispatch.py`'s reported `branch_flow_mw`), add regression tests for the two now-covered
 solvers plus `market.solve_multiperiod`/`market.solve_zonal` on `tests/_shifter.py`'s fixture,
 restore narrowed `formats.md` caveats naming the still-affected paths, then re-run Steps 4-6.
+
+## Re-review at bd952cc
+
+Diff range `9e00ab5..bd952cc` (T6 `8a6fb11`, T7 `eb771b1`, T8 `272d84c` + `9e0cbb4`, cleanup
+`bd952cc`). Run against an isolated `git archive bd952cc` copy (`scratchpad/shifter-recritic-bd952cc/`),
+`mambo_power.__file__` verified to resolve there.
+
+### Finding 1 (blocking) — FIXED
+
+Both original reproductions re-run verbatim against the new head:
+
+- **81.4 MW gap** (`redispatch_dc_opf.branch_flow_mw` vs `pf.solve_dc`, shift_deg=-7): now
+  `[107.39101588 7.39101588 -7.39101588]` both sides, max abs diff `1.78e-15`. `multiperiod_dc_opf`
+  now returns `Optimal` matching `dc_opf` (was the divergence surface for the false-Infeasible case).
+- **False Infeasible** (`t12` rated 120 MVA, true flow 107.39 MW): `multiperiod_dc_opf` now
+  `Optimal`, `dispatch = [100. 0.]`, matching `dc_opf` exactly. No more false `Infeasible`.
+
+Ran the task's own new regression file plus the two existing ones
+(`tests/unit/test_shifter_flow_fix_multiperiod_redispatch.py`,
+`tests/unit/test_shifter_flow_fix.py`, `tests/parity/test_shifter_pf_vs_pypsa.py`): **26 passed**,
+including the two tests that reproduce this critic's exact numbers and assert them closed
+(`test_redispatch_dc_opf_no_longer_reproduces_the_critics_81_4_mw_gap`,
+`test_solve_multiperiod_no_longer_reproduces_the_critics_false_infeasible`).
+
+**Attacked the fix shape, both sites:**
+
+- `multiperiod.py`'s period-invariant `p_shift_mw`, computed once outside the per-period loop: the
+  module's own docstring (line 92-93, pre-existing, not part of this diff) states the row-family
+  core "assumes a static topology over the horizon (no intra-horizon switching or outage)" and
+  `multiperiod_dc_opf`'s signature takes one `arr: NetworkArrays` for the whole horizon — only
+  `cost_coeffs`/`period_load_mw`/ramp/storage arguments vary per period, none of which touch
+  `shift_deg` or any other branch attribute. `p_shift(arr)` is a pure function of `arr`'s branch
+  table, so it genuinely cannot vary across periods in this formulation. Confirmed correct — the
+  hoist is sound, not just asserted sound.
+- `redispatch.py`'s two-part `const` — re-derived the full identity by hand from the code's own
+  variable definitions (not from the plan's or the code's own comments): with
+  `injection_mw = (p0_by_bus − d0_by_bus) + (gen_net_by_bus − dem_net_by_bus) − p_load_mw −
+  g_shunt_mw` (the exact expression the post-solve `branch_flow_mw` line uses), the full identity
+  `flow_k = PTDF[k,:]@(injection − p_shift) + pf_shift_k` expands to `const_k = PTDF[k,:]@[(p0_by_bus
+  − d0_by_bus) − p_load_mw − g_shunt_mw − p_shift_mw] + pf_shift_mw_k` for the row's fixed part. That
+  is byte-for-byte what the two-line fold computes: `pf_shift_mw − ptdf@(p_load_mw + g_shunt_mw +
+  p_shift_mw)` then `+ ptdf@(p0_by_bus − d0_by_bus)`. The code's own comment claim ("p0/d0 ... no
+  further p_shift correction applies here") is correct — `p_shift` is topology-linked and additive
+  once, not per-contributor, so a single subtraction covers `p_load`, `g_shunt` *and* the zonal
+  point in one fold. Independently confirmed, not just re-stated.
+- `branch_flow_mw`'s new `flow_from_ptdf(ptdf_matrix, injection_mw, arr)` call: diffed
+  `9e00ab5..bd952cc` on `redispatch.py` directly — `injection_mw = gen_by_bus - demand_by_bus -
+  p_load_mw - g_shunt_mw` is **unchanged** by the refactor; only the final line moved from
+  `ptdf_matrix @ injection_mw + pf_shift_mw` to `flow_from_ptdf(ptdf_matrix, injection_mw, arr)`,
+  which is definitionally `ptdf @ (injection_mw − p_shift·base_mva) + pf_shift·base_mva` — same
+  measured quantity, correction added, nothing else changed.
+
+### Finding 2 (blocking) — FIXED, via the code rather than the docs
+
+`formats.md` git history across the *whole* task range (`1a2b31c..bd952cc`): exactly one commit
+touches the file, `6a7617f` (T5), which deleted the caveat — and that commit predates T6/T7
+(`8a6fb11`/`eb771b1`), so between `6a7617f` and `eb771b1` the working tree did carry a real
+inconsistency (caveat gone, multiperiod/redispatch still broken) — the same window this critic's
+first pass caught at `9e00ab5`. No commit ever restores caveat text; the plan's "needed no
+restoration" claim is true only in the sense that the underlying code caught up to the docs rather
+than the reverse. That's a legitimate way to close finding 2 — nothing on this branch ever merged
+to `epic/01-foundation` or shipped to a consumer while the inconsistency existed, and the Step-6
+gate that is designed to catch exactly this did — but it's worth being precise that "no restoration
+needed" means "the claim became true," not "the claim was never false." At the current head, both
+`formats.md` (no shift caveat text anywhere — grepped for the removed phrasing, zero hits) and
+`docs/changelog.md`'s "Fixed" entry (explicitly names all five sites: `dc_opf`, `solve_dc_opf`,
+`market._clearing`, `multiperiod_dc_opf`, `redispatch_dc_opf`, and both public paths
+`solve_zonal`/`solve_multiperiod`) are accurate and consistent with the code.
+
+### Item 3 — zonal/redispatch interaction and performance, both clean
+
+- `market.solve_zonal`'s stage 3 calls `redispatch_dc_opf` and reads `final.branch_flow_mw`
+  directly into `branches[].p_from_mw` (`market/zonal.py:689`) — the now-fixed field, unmediated.
+  Independently grepped `opf/zonal.py` (the copper-plate stage 1-2 LP) for `ptdf`/`p_shift`/
+  `pf_shift`: zero computational hits (one prose mention only) — it builds no PTDF product and no
+  branch-flow rows at all, so it cannot mask, duplicate, or interact with the fix. `p0`/`d0` handed
+  to redispatch are pure copper-plate clearing quantities, not phase-shift-adjusted in any way, so
+  no double-counting risk either.
+- Performance: the dispatch brief's premise doesn't hold, for a different reason than stated.
+  `flow_from_ptdf` is **not** called inside `multiperiod.py`'s per-period loop — `multiperiod.py`
+  never calls `flow_from_ptdf` at all; it folds a once-computed `p_shift_mw` array into each
+  period's `const` via a plain vector addition (same shape/cost as the pre-fix `p_load_mw +
+  g_shunt_mw` term, one extra add). `redispatch.py` calls `flow_from_ptdf` exactly once, after the
+  single-period LP solves — not in a loop. No T× recomputation exists anywhere in this diff to
+  regress.
+
+### Item 4 — exhaustiveness re-confirmed, one more grep shape
+
+`grep -rn "pf_shift("` across `src/`: seven hits — `bbus.py`'s own definitions of `pf_shift`/
+`p_shift`/`flow_from_ptdf`, `pf/dc.py`'s oracle (already correct), and exactly the five now-fixed
+call sites (`dc_opf.py:937`, `multiperiod.py:467`, `redispatch.py:423`), each immediately paired
+with a `p_shift_mw` fold on the next lines. `grep -rn "ptdf_matrix @\|ptdf @"`: the only additional
+hit is `dc_opf.py:799`, `duals.flow_limit @ ptdf` — this is the LMP congestion-component
+computation (a dual/price sensitivity, not a derived flow), explicitly out of scope per the plan's
+own Not-Doing list ("`lmp_decomposition`'s own math ... consume `duals`, not the derived flow"), so
+correctly untouched. Nothing left unfixed.
+
+### Item 5 — see Finding 2 above (folded in rather than kept separate, since the git-log check was
+the specific evidence needed to evaluate that finding's closure)
+
+## Verdict (re-review at bd952cc)
+
+**Merge-ready as-is.** Both blocking findings from the `9e00ab5` review are closed: the 81.4 MW gap
+and the false-`Infeasible` are both fixed and independently reproduced-then-confirmed-closed; the
+fix shape at both new sites (`multiperiod.py`'s hoisted-once `p_shift_mw`, `redispatch.py`'s
+two-part `const` and its direct `flow_from_ptdf` call) was re-derived by hand from the code itself,
+not trusted from the plan's or the code's own comments, and checks out exactly. `formats.md`'s
+caveat-removal is now consistent with the code, even though a real (never-shipped, never-merged)
+inconsistency existed for part of the branch's history — worth the team knowing, not worth blocking
+on. No new findings. The should-fix from the first review (finding 3, the `Infeasible`-status-only
+test) is unchanged and still non-blocking, carried forward as-is — not re-verified in this pass
+since nothing in T6-T8 touches it. The exhaustiveness claim holds under a second, independent grep
+shape traced to every call site. Recommend proceeding to Step 7 (ADR, likely n/a) and Step 8 (merge).
