@@ -115,7 +115,8 @@ bus `AREA` label); zone `1,'1'` → `Zone(id="1", name="1")` (matpower yields
 
 Authored 2026-08-29; 4 buses, SBASE 100 MVA, 50 Hz header. Purpose: every
 conversion branch of the importer that `case14_v33.raw` does not reach.
-Quirks present: CZ=2 and CZ=3, CW=2 and CW=3, CM=2, the four-line transformer
+Quirks present: CZ=2 and CZ=3, CW=2 and CW=3, CM=2, a neutral-tap (1.0 / 0 deg)
+transformer, the four-line transformer
 record continuation, two circuits between one bus pair (`CKT '1'` / `'2'`),
 a ZIP load, two loads (plus one out-of-service) on one bus, a fixed shunt,
 branch end shunts (`BI`, `GJ`), a 9-field bus record (no `NVHI..EVLO`), a
@@ -209,6 +210,19 @@ Record: `R1-2 = 10000` (W, load loss), `X1-2 = 0.12` (|Z| pu on `SBASE1-2`),
   1.029`, `t2 = 1.0`; `tap_ratio = 1.029`; `shift_deg = 5.0`.
 - CM=1 with `MAG1 = MAG2 = 0`: no magnetising shunt, no report entry.
 - `rating_mva = 30`, `b = 0`, in service.
+
+### T3 — `branch-2-4-1`, CW=1, CZ=1, CM=1, neutral tap (kind `transformer`; spec A7 / AC-6)
+
+Record: `R1-2 = 0.002, X1-2 = 0.05, SBASE1-2 = 100`; `WINDV1 = 1.0`, `NOMV1 = 0`,
+`ANG1 = 0`, `RATA1 = 40`; `WINDV2 = 1.0`, `NOMV2 = 0`; `MAG1 = MAG2 = 0`.
+
+- CZ=1: `r = 0.002`, `x = 0.05` verbatim (pu on SBASE).
+- CW=1: `t1 = 1.0`, `t2 = 1.0`; `tap_ratio = 1.0 / 1.0 = 1.0` — nominal; `shift_deg =
+  None` (ANG1 = 0). Nothing about the parameters distinguishes this branch from a
+  line: `kind = "transformer"` comes only from the record type, which is what the
+  fixture exists to prove (`Branch._default_kind` would infer `"line"` here).
+- `rating_mva = 40`, `b = 0`, in service; no magnetising shunt, no report entry.
+- Adds the loop 2-3-4-2; the network stays one island.
 
 ### Ignored records (one report entry each)
 

@@ -266,6 +266,24 @@ def test_quirks_transformer_cw3_cz3(quirks):
     assert (t2.b, t2.rating_mva) == (0.0, 30.0)
 
 
+def test_quirks_neutral_tap_transformer_keeps_kind(quirks):
+    """A7 / AC-6: tap 1.0, shift 0 is a transformer only because the record type says so."""
+    net, _ = quirks
+    t3 = next(b for b in net.branches if b.id == "branch-2-4-1")
+    assert t3.kind == "transformer"
+    assert t3.tap_ratio in (None, 1.0)
+    assert t3.shift_deg in (None, 0.0)
+    assert (t3.from_bus, t3.to_bus, t3.r, t3.x, t3.b, t3.rating_mva) == (
+        "bus-2",
+        "bus-4",
+        0.002,
+        0.05,
+        0.0,
+        40.0,
+    )
+    assert sum(b.kind == "transformer" for b in net.branches) == 3
+
+
 def test_quirks_ignored_records_one_entry_each(quirks):
     _, report = quirks
     assert not report.errors
