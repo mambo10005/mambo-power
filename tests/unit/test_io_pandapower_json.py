@@ -658,6 +658,65 @@ def test_ideal_shifter_with_a_missing_neutral_is_no_shift_and_reported() -> None
     assert len(dropped) == 1 and "tap_neutral is missing" in dropped[0].message
 
 
+def _legacy_trafo_net(phase_shifter: bool, **tap: Any) -> Any:
+    """A pandapower <= 2.x trafo table: no ``tap_changer_type`` column, a ``tap_phase_shifter``
+    one (what ``from_json`` of a ``format_version 2.x`` file yields on 3.3 -- measured by the
+    critic: the column is not added on load)."""
+    net = _pp_trafo_net(**tap)
+    net.trafo = net.trafo.drop(columns=["tap_changer_type"])
+    net.trafo["tap_phase_shifter"] = phase_shifter
+    return net
+
+
+@pytest.mark.parametrize(
+    ("phase_shifter", "tap"),
+    [
+        pytest.param(False, {**_TAP, "tap_side": "hv"}, id="ratio-hv"),
+        pytest.param(False, {**_TAP, "tap_side": "lv", "tap_step_degree": 5.0}, id="ratio-lv"),
+        pytest.param(
+            True,
+            {"tap_pos": 2, "tap_neutral": 0, "tap_step_degree": 5.0, "tap_side": "hv"},
+            id="ideal-hv",
+        ),
+    ],
+)
+def test_legacy_tap_phase_shifter_file_is_applied_as_pandapower_3_still_does(
+    phase_shifter: bool, tap: dict[str, Any]
+) -> None:
+    """M8 critic finding 18: pandapower 3.3 keeps a deprecation branch for pre-3.0 tables
+    (``tap_phase_shifter`` present, ``tap_changer_type`` absent) and applies the tap --
+    ``True`` as an ``Ideal`` shifter, ``False`` as a ``Ratio`` changer. The import used to take
+    the absent column as ``None`` and *say* pandapower applied nothing. It must match ``ppc``
+    and ``runpp`` and report nothing about the changer."""
+    net = _legacy_trafo_net(phase_shifter, **tap)
+    assert "tap_changer_type" not in pp.from_json_string(pp.to_json(net)).trafo.columns
+    tap_ppc, shift_ppc = _ppc_tap_shift(net)
+    assert (tap_ppc, shift_ppc) != (1.0, 0.0)  # the premise: pandapower applies the tap
+    ours, report = pj.loads_with_report(pp.to_json(net))
+    t = next(b for b in ours.branches if b.id == "t")
+    assert (t.tap_ratio or 1.0) == pytest.approx(tap_ppc, abs=1e-9)
+    assert (t.shift_deg or 0.0) == pytest.approx(shift_ppc, abs=1e-9)
+    assert not (report.codes & {"COLUMN_DROPPED", "TAP_CHANGER_TYPE_UNSUPPORTED"})
+    from mambo_power import pf
+
+    vm = {b.id: b.vm_pu for b in pf.solve_ac(ours).buses}
+    assert vm["lv"] == pytest.approx(float(net.res_bus.vm_pu.iloc[1]), abs=1e-6)
+
+
+def test_tap_columns_with_neither_changer_column_are_reported_as_absent() -> None:
+    """A table with neither ``tap_changer_type`` nor ``tap_phase_shifter``: pandapower applies
+    no tap, the import agrees, and the message says the column is *absent* rather than
+    ``None`` -- a reader must not be told the file holds an empty cell it does not have."""
+    net = _pp_trafo_net(**_TAP, tap_side="hv")
+    net.trafo = net.trafo.drop(columns=["tap_changer_type"])
+    assert _ppc_tap_shift(net) == (1.0, 0.0)
+    ours, report = pj.loads_with_report(pp.to_json(net))
+    t = next(b for b in ours.branches if b.id == "t")
+    assert t.tap_ratio is None
+    dropped = [w for w in report.warnings if w.code == "COLUMN_DROPPED"]
+    assert len(dropped) == 1 and "no tap_changer_type column" in dropped[0].message
+
+
 def test_untapped_transformer_with_every_tap_cell_empty_is_silent() -> None:
     """Both ``tap_pos`` and ``tap_neutral`` NaN (pandapower's own untapped row, even with a
     changer type set) is not a dropped value: nothing in the file asked for a tap."""

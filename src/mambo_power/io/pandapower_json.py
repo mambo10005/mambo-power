@@ -577,10 +577,15 @@ class _Importer:
         """``(vn_hv_kv, vn_lv_kv, extra shift_deg)`` after the tap changer, pandapower 3.3's
         ``build_branch._calc_tap_from_dataframe`` rule (M8 critic finding 2):
 
-        * ``tap_changer_type`` ``None`` (``create_transformer_from_parameters``'s default): the
+        * ``tap_changer_type`` ``None`` (``create_transformer_from_parameters``'s default), or
+          a table with neither a ``tap_changer_type`` nor a ``tap_phase_shifter`` column: the
           tap columns are inert -- pandapower solves the nominal tap, so does the import; a
           non-neutral ``tap_pos`` is reported ``COLUMN_DROPPED`` because the file holds a value
           that has no effect on either side;
+        * no ``tap_changer_type`` column but a ``tap_phase_shifter`` one (a pandapower <= 2.x
+          file; ``from_json`` does not add the new column): pandapower 3.3's deprecation branch
+          still applies the tap, ``True`` as ``"Ideal"``, ``False`` as ``"Ratio"`` -- so does
+          the import, silently (critic finding 18);
         * ``"Ratio"`` / ``"Symmetrical"``: the tapped winding's voltage becomes
           ``|vn + du*e^(j*theta)|`` with ``du = vn * (tap_pos - tap_neutral) * tap_step_percent
           / 100`` and ``theta = tap_step_degree`` (0 when absent -- the plain ratio tap), and the
@@ -605,7 +610,16 @@ class _Importer:
         step = float(_column(df, "tap_step_percent", idx, 0.0))
         degree = float(_column(df, "tap_step_degree", idx, 0.0))
         side = _column(df, "tap_side", idx)
-        changer = _column(df, "tap_changer_type", idx)
+        if "tap_changer_type" in df.columns:
+            changer = _column(df, "tap_changer_type", idx)
+            absent = "tap_changer_type=None"
+        elif "tap_phase_shifter" in df.columns:
+            # a pandapower <= 2.x table (from_json does not add the new column): 3.3's
+            # deprecation branch applies the old flag as Ideal (True) or Ratio (False)
+            changer = "Ideal" if bool(_column(df, "tap_phase_shifter", idx, False)) else "Ratio"
+            absent = ""
+        else:
+            changer, absent = None, "no tap_changer_type column"
         diff = pos - neutral
         if changer is not None and (pos_cell is None) != (neutral_cell is None):
             missing, present = (
@@ -630,8 +644,8 @@ class _Importer:
                         "COLUMN_DROPPED",
                         f"trafo[{idx}] ({element}): tap_pos={pos:g} (tap_neutral={neutral:g}, "
                         f"tap_step_percent={step:g}, tap_step_degree={degree:g}) with "
-                        "tap_changer_type=None: pandapower applies no tap without a changer "
-                        "type; imported at the nominal tap",
+                        f"{absent}: pandapower applies no tap without a changer type; "
+                        "imported at the nominal tap",
                         element_ids=[element],
                     )
                 )
