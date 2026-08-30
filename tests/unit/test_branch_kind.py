@@ -74,5 +74,5 @@ def test_explicit_line_with_tap_is_rejected(fields: dict[str, object]) -> None:
 
 
 def test_unknown_kind_is_rejected() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"kind\s+Input should be 'line' or 'transformer'"):
         _branch(kind="cable")

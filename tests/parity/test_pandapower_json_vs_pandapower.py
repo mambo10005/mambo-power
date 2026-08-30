@@ -222,8 +222,10 @@ def test_carried_values_survive_the_round_trip(own_case: tuple[Any, Any]) -> Non
         a, b = original[table], back[table]
         assert len(a) == len(b), table
         for col in columns:
-            if col not in a.columns:
-                continue
+            # a missing column would otherwise be silently skipped, so a dropped column could
+            # never fail this test (M8 audit hygiene)
+            assert col in a.columns, (table, col, "absent from pandapower's own table")
+            assert col in b.columns, (table, col, "dropped by the round trip")
             x, y = list(a[col]), list(b[col])
             if table == "pwl_cost":
                 assert x == y
