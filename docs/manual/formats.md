@@ -278,6 +278,10 @@ enters only the `c_nf_per_km` conversion below, and the importer reads the docum
 
 `bus`, `ext_grid`, `gen`, `sgen`, `load`, `shunt`, `line`, `trafo` (two-winding), `poly_cost`,
 `pwl_cost`, and `res_bus` when it is non-empty (a stored voltage state → `vm_pu` / `va_deg`).
+The slack bus is the exception to "no `res_bus`, no state": its `vm_pu` / `va_deg` come from the
+`ext_grid` row's `vm_pu` / `va_degree` (the setpoint the slack holds), so a network read without
+a `res_bus` has a state on that one bus and `None` on every other — the warm-start rule in
+[the model page](model.md) (every in-service bus carries both) does not apply to such a file.
 Every other non-empty table — `trafo3w`, `switch`, `impedance`, `ward`, `xward`, `dcline`,
 `storage`, `motor`, `asymmetric_*`, ... — is dropped **row by row** with `ELEMENT_DROPPED`, so
 the report says exactly what was left behind.
@@ -354,9 +358,11 @@ for every format.
   **not** applied to `in_service`.
 - The tap changer is folded into `tap_ratio`; `tap_step_degree` (a phase-shifting tap) is
   dropped with `COLUMN_DROPPED`.
-- A network with a non-zero `shift_deg` gets wrong `opf` / `market` branch flows until the
-  phase-shifter fix lands (M8 finding F1, carried as A19): `opf.dc_opf`'s flow rows omit the
-  shifter's PTDF term. `pf.solve_dc` is right, and pandapower's `rundcpp` agrees with it.
+- A network with a non-zero `shift_deg` gets wrong or infeasible `opf` / `market` results
+  until the phase-shifter fix lands (M8 finding F1, carried as A19): `opf.dc_opf`'s flow rows
+  omit the shifter's PTDF term, so the flows are wrong when the LP solves and a generously
+  rated loop with one shifter can come back `Infeasible` with no flows at all. `pf.solve_dc`
+  is right, and pandapower's `rundcpp` agrees with it.
 - **Round trip, measured (F2):** `pp.toolbox.nets_equal(from_json(dumps(loads(to_json(pn)))),
   pn)` holds for `poly_cost` and `pwl_cost` only. `bus`, `ext_grid`, `gen`, `sgen`, `load`,
   `shunt`, `line` and `trafo` fail strict equality on `name` (`None` in pandapower vs our ids),
@@ -441,9 +447,11 @@ Every issue names the element id and the field. The exporter raises nothing of i
   exporter carries the shift faithfully (`n.lpf()` agrees with `pf.solve_dc` on a shifted
   loop, sign included), so it is not reported, but DC-OPF parity is a statement about
   shift-free networks.
-- On the mambo side, a network with a non-zero `shift_deg` gets wrong `opf` / `market` branch
-  flows until the phase-shifter fix lands (F1 / A19): `opf.dc_opf`'s flow rows omit the
-  shifter's PTDF term. `pf.solve_dc` is right and matches PyPSA's `lpf()`.
+- On the mambo side, a network with a non-zero `shift_deg` gets wrong or infeasible `opf` /
+  `market` results until the phase-shifter fix lands (F1 / A19): `opf.dc_opf`'s flow rows omit
+  the shifter's PTDF term, so the flows are wrong when the LP solves and a generously rated
+  loop with one shifter can come back `Infeasible` with no flows at all. `pf.solve_dc` is right
+  and matches PyPSA's `lpf()`.
 - Parity, measured (F3): the DC-OPF objective agrees to 1e-8 relative on case14, case30 and
   case118 (worst 1.3e-12) and the dispatch to 1e-4 MW on case14 and case30. On case118 one
   generator differs by 1.87e-3 MW — the oracle's residual, not the mapping's: both dispatches
@@ -577,9 +585,11 @@ Anything wrong with the **network** raises `NetworkValidationError`, as for ever
   whose voltage profile relies on it solves to a different voltage.
 - Transformers have `b = 0`; the magnetising branch is a bus shunt, not line charging.
 - Only `RATEA` becomes `rating_mva`; `RATEB` / `RATEC` are dropped.
-- A network with a non-zero `shift_deg` (any transformer with `ANG1 != 0`) gets wrong `opf` /
-  `market` branch flows until the phase-shifter fix lands (F1 / A19): `opf.dc_opf`'s flow
-  rows omit the shifter's PTDF term. `pf.solve_dc` is right.
+- A network with a non-zero `shift_deg` (any transformer with `ANG1 != 0`) gets wrong or
+  infeasible `opf` / `market` results until the phase-shifter fix lands (F1 / A19):
+  `opf.dc_opf`'s flow rows omit the shifter's PTDF term, so the flows are wrong when the LP
+  solves and a generously rated loop with one shifter can come back `Infeasible` with no flows
+  at all. `pf.solve_dc` is right.
 
 ### Example
 
@@ -685,8 +695,9 @@ and raise `NetworkValidationError`, exactly as for the native format.
 - Spreadsheet applications that reformat floats on save (`0.1` → `0,1`, `1e-05` → `0.00001`)
   or coerce `01` to `1` break the bit-exact guarantee; the bundle detects the former as
   `CSV_BAD_VALUE` and cannot detect the latter.
-- A network with a non-zero `shift_deg` gets wrong `opf` / `market` branch flows until the
-  phase-shifter fix lands (F1 / A19), whichever format it was read from; `pf.solve_dc` is right.
+- A network with a non-zero `shift_deg` gets wrong or infeasible `opf` / `market` results
+  until the phase-shifter fix lands (F1 / A19), whichever format it was read from — wrong flows
+  when the LP solves, and possibly `Infeasible` with no flows at all; `pf.solve_dc` is right.
 
 ### Example
 
