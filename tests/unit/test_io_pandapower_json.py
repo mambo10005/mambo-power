@@ -717,6 +717,91 @@ def test_tap_columns_with_neither_changer_column_are_reported_as_absent() -> Non
     assert len(dropped) == 1 and "no tap_changer_type column" in dropped[0].message
 
 
+_TAP2_RATIO_LV = {
+    "tap2_pos": 2,
+    "tap2_neutral": 0,
+    "tap2_step_percent": 2.5,
+    "tap2_step_degree": 0.0,  # pandapower's own loop KeyErrors on an absent tap2_* column
+    "tap2_side": "lv",
+    "tap2_changer_type": "Ratio",
+}
+
+
+@pytest.mark.parametrize(
+    "tap",
+    [
+        pytest.param(_TAP2_RATIO_LV, id="tap2-only-ratio-lv"),
+        pytest.param(
+            {
+                **_TAP,
+                "tap_side": "hv",
+                "tap_changer_type": "Ratio",
+                **_TAP2_RATIO_LV,
+                "tap2_pos": 1,
+            },
+            id="ratio-hv-then-ratio-lv",  # +5 % hv over +2.5 % lv (equal steps would cancel)
+        ),
+        pytest.param(
+            {
+                **_TAP,
+                "tap_side": "hv",
+                "tap_changer_type": "Ratio",
+                **_TAP2_RATIO_LV,
+                "tap2_side": "hv",
+                "tap2_step_degree": 5.0,
+            },
+            id="two-changers-on-the-hv-winding",
+        ),
+        pytest.param(
+            {
+                **_TAP,
+                "tap_side": "hv",
+                "tap_changer_type": "Symmetrical",
+                "tap_step_degree": 5.0,
+                "tap2_pos": -1,
+                "tap2_neutral": 0,
+                "tap2_step_percent": 0.0,
+                "tap2_step_degree": 3.0,
+                "tap2_side": "lv",
+                "tap2_changer_type": "Ideal",
+            },
+            id="symmetrical-then-ideal",
+        ),
+    ],
+)
+def test_second_tap_changer_composes_as_pandapowers_ppc(tap: dict[str, Any]) -> None:
+    """M8 critic finding 19: pandapower 3.3 accepts a second changer (``tap2_*``) and
+    ``_calc_tap_from_dataframe`` loops over the prefixes ``("", "2")``, scaling the winding in
+    place (the second ``du`` is taken from the already-tapped voltage) and adding the shifts.
+    The import used to read only ``tap_*``; it must match ``ppc`` and ``runpp``."""
+    net = _pp_trafo_net(**tap)
+    tap_ppc, shift_ppc = _ppc_tap_shift(net)
+    assert (tap_ppc, shift_ppc) != (1.0, 0.0)
+    ours, report = pj.loads_with_report(pp.to_json(net))
+    t = next(b for b in ours.branches if b.id == "t")
+    assert (t.tap_ratio or 1.0) == pytest.approx(tap_ppc, abs=1e-9)
+    assert (t.shift_deg or 0.0) == pytest.approx(shift_ppc, abs=1e-9)
+    assert not (report.codes & {"COLUMN_DROPPED", "TAP_CHANGER_TYPE_UNSUPPORTED"})
+    from mambo_power import pf
+
+    vm = {b.id: b.vm_pu for b in pf.solve_ac(ours).buses}
+    assert vm["lv"] == pytest.approx(float(net.res_bus.vm_pu.iloc[1]), abs=1e-6)
+
+
+def test_second_tap_changer_reports_name_the_tap2_columns() -> None:
+    """The second changer's report entries name ``tap2_*``, not ``tap_*``: a missing
+    ``tap2_neutral`` (finding 17's rule) and an unsupported ``tap2_changer_type``."""
+    missing = {k: v for k, v in _TAP2_RATIO_LV.items() if k != "tap2_neutral"}
+    _, report = pj.loads_with_report(pp.to_json(_pp_trafo_net(**missing)))
+    dropped = [w for w in report.warnings if w.code == "COLUMN_DROPPED"]
+    assert len(dropped) == 1 and "tap2_neutral is missing" in dropped[0].message
+    _, report = pj.loads_with_report(
+        pp.to_json(_pp_trafo_net(**{**_TAP2_RATIO_LV, "tap2_changer_type": "Tabular"}))
+    )
+    unsupported = [w for w in report.warnings if w.code == "TAP_CHANGER_TYPE_UNSUPPORTED"]
+    assert len(unsupported) == 1 and "tap2_changer_type='Tabular'" in unsupported[0].message
+
+
 def test_untapped_transformer_with_every_tap_cell_empty_is_silent() -> None:
     """Both ``tap_pos`` and ``tap_neutral`` NaN (pandapower's own untapped row, even with a
     changer type set) is not a dropped value: nothing in the file asked for a tap."""

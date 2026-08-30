@@ -534,7 +534,7 @@ class _Importer:
             hv_idx, lv_idx = pn.trafo.at[idx, "hv_bus"], pn.trafo.at[idx, "lv_bus"]
             vnh = float(pn.trafo.at[idx, "vn_hv_kv"])
             vnl = float(pn.trafo.at[idx, "vn_lv_kv"])
-            vnh, vnl, tap_shift = self.tap_changer(idx, bid, vnh, vnl)
+            vnh, vnl, tap_shift = self.tap_changers(idx, bid, vnh, vnl)
             tap = (vnh / self.bus_kv[hv_idx]) / (vnl / self.bus_kv[lv_idx])
             parallel = float(_column(pn.trafo, "parallel", idx, 1))
             sn_trafo = float(pn.trafo.at[idx, "sn_mva"])
@@ -571,11 +571,27 @@ class _Importer:
             )
         return out
 
-    def tap_changer(
+    def tap_changers(
         self, idx: Any, element: str, vnh: float, vnl: float
     ) -> tuple[float, float, float]:
-        """``(vn_hv_kv, vn_lv_kv, extra shift_deg)`` after the tap changer, pandapower 3.3's
-        ``build_branch._calc_tap_from_dataframe`` rule (M8 critic finding 2):
+        """Both changers a pandapower 3.3 trafo row can carry, ``tap_*`` then ``tap2_*``,
+        composed as ``_calc_tap_from_dataframe`` loops its prefixes ``("", "2")``: the second
+        changer's step is taken from the winding voltage the first one left (in place), and
+        the shifts add (M8 critic finding 19). A row without a ``tap2_pos`` column has one."""
+        shift = 0.0
+        for prefix in ("", "2"):
+            if f"tap{prefix}_pos" not in self.pn.trafo.columns:
+                continue
+            vnh, vnl, extra = self.tap_changer(idx, element, vnh, vnl, prefix)
+            shift += extra
+        return vnh, vnl, shift
+
+    def tap_changer(
+        self, idx: Any, element: str, vnh: float, vnl: float, prefix: str = ""
+    ) -> tuple[float, float, float]:
+        """``(vn_hv_kv, vn_lv_kv, extra shift_deg)`` after the tap changer whose columns are
+        ``tap<prefix>_*``, pandapower 3.3's ``build_branch._calc_tap_from_dataframe`` rule
+        (M8 critic finding 2):
 
         * ``tap_changer_type`` ``None`` (``create_transformer_from_parameters``'s default), or
           a table with neither a ``tap_changer_type`` nor a ``tap_phase_shifter`` column: the
@@ -603,36 +619,43 @@ class _Importer:
           17). Both missing is pandapower's untapped row and is silent.
         """
         df = self.pn.trafo
-        pos_cell = _column(df, "tap_pos", idx)
-        neutral_cell = _column(df, "tap_neutral", idx)
+        c_pos, c_neutral, c_step, c_degree, c_side, c_type, c_phase = (
+            f"tap{prefix}_{name}"
+            for name in (
+                "pos", "neutral", "step_percent", "step_degree", "side", "changer_type",
+                "phase_shifter",
+            )
+        )  # fmt: skip
+        pos_cell = _column(df, c_pos, idx)
+        neutral_cell = _column(df, c_neutral, idx)
         pos = 0.0 if pos_cell is None else float(pos_cell)
         neutral = 0.0 if neutral_cell is None else float(neutral_cell)
-        step = float(_column(df, "tap_step_percent", idx, 0.0))
-        degree = float(_column(df, "tap_step_degree", idx, 0.0))
-        side = _column(df, "tap_side", idx)
-        if "tap_changer_type" in df.columns:
-            changer = _column(df, "tap_changer_type", idx)
-            absent = "tap_changer_type=None"
-        elif "tap_phase_shifter" in df.columns:
+        step = float(_column(df, c_step, idx, 0.0))
+        degree = float(_column(df, c_degree, idx, 0.0))
+        side = _column(df, c_side, idx)
+        if c_type in df.columns:
+            changer = _column(df, c_type, idx)
+            absent = f"{c_type}=None"
+        elif c_phase in df.columns:
             # a pandapower <= 2.x table (from_json does not add the new column): 3.3's
             # deprecation branch applies the old flag as Ideal (True) or Ratio (False)
-            changer = "Ideal" if bool(_column(df, "tap_phase_shifter", idx, False)) else "Ratio"
+            changer = "Ideal" if bool(_column(df, c_phase, idx, False)) else "Ratio"
             absent = ""
         else:
-            changer, absent = None, "no tap_changer_type column"
+            changer, absent = None, f"no {c_type} column"
         diff = pos - neutral
         if changer is not None and (pos_cell is None) != (neutral_cell is None):
             missing, present = (
-                ("tap_pos", f"tap_neutral={neutral:g}")
+                (c_pos, f"{c_neutral}={neutral:g}")
                 if pos_cell is None
-                else ("tap_neutral", f"tap_pos={pos:g}")
+                else (c_neutral, f"{c_pos}={pos:g}")
             )
             self.warnings.append(
                 _issue(
                     "COLUMN_DROPPED",
-                    f"trafo[{idx}] ({element}): {present} with tap_changer_type={changer!r} "
-                    f"but {missing} is missing (NaN): pandapower's tap step is NaN and counts "
-                    "as 0; imported at the nominal tap with no shift from the changer",
+                    f"trafo[{idx}] ({element}): {present} with {c_type}={changer!r} but "
+                    f"{missing} is missing (NaN): pandapower's tap step is NaN and counts as "
+                    "0; imported at the nominal tap with no shift from the changer",
                     element_ids=[element],
                 )
             )
@@ -642,23 +665,22 @@ class _Importer:
                 self.warnings.append(
                     _issue(
                         "COLUMN_DROPPED",
-                        f"trafo[{idx}] ({element}): tap_pos={pos:g} (tap_neutral={neutral:g}, "
-                        f"tap_step_percent={step:g}, tap_step_degree={degree:g}) with "
-                        f"{absent}: pandapower applies no tap without a changer type; "
-                        "imported at the nominal tap",
+                        f"trafo[{idx}] ({element}): {c_pos}={pos:g} ({c_neutral}={neutral:g}, "
+                        f"{c_step}={step:g}, {c_degree}={degree:g}) with {absent}: pandapower "
+                        "applies no tap without a changer type; imported at the nominal tap",
                         element_ids=[element],
                     )
                 )
             return vnh, vnl, 0.0
         direction = {"hv": 1.0, "lv": -1.0}.get(str(side))
         if direction is None or changer not in ("Ratio", "Symmetrical", "Ideal"):
-            why = f"tap_side={side!r}" if direction is None else f"tap_changer_type={changer!r}"
+            why = f"{c_side}={side!r}" if direction is None else f"{c_type}={changer!r}"
             return self.tap_unsupported(idx, element, vnh, vnl, why)
         if changer == "Ideal":
             if degree != 0.0 and step != 0.0:
                 why = (
-                    "tap_changer_type='Ideal' with both tap_step_percent and tap_step_degree "
-                    "set (pandapower's runpp refuses it too)"
+                    f"{c_type}='Ideal' with both {c_step} and {c_degree} set (pandapower's "
+                    "runpp refuses it too)"
                 )
                 return self.tap_unsupported(idx, element, vnh, vnl, why)
             if degree != 0.0:
