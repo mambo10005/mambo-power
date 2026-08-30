@@ -119,6 +119,7 @@ nav:
       - mambo_power.model: api/model.md
       - mambo_power.io.matpower: api/io-matpower.md
       - mambo_power.io.native: api/io-native.md
+      - mambo_power.io.report: api/io-report.md
       - mambo_power.numerics: api/numerics.md
       - mambo_power.pf: api/pf.md
       - mambo_power.opf: api/opf.md
