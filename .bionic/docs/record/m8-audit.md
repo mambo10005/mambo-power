@@ -296,3 +296,275 @@ reproduce independently — they are honest narrowings, not tolerances hiding a 
 
 Evidence files (scratchpad): `full-run.txt`, `mkdocs.txt`, `ex-*.txt`, `sabotage.txt`,
 `sabotage2.txt`, `probe/*.py`, `probe/sabotage*.sh`.
+
+---
+
+## Re-audit at e2d6da8
+
+Auditor: m8-audit (Fable 5), 2026-08-30. Same rigor and method as above; every row re-discharged
+at the new head with my own sabotage or recomputation, and each of the S7/S8 fixes checked against
+the walk/critic finding that motivated it.
+
+**Head and isolation.** `e2d6da8` ("fix(m8): critic nits 13-15 …"), `wave/08-interop`, 19 commits
+after `7ec0b0b` (S7 walk fixes `3f2a9a0..a78db18`, S8 critic fixes `36e8398..e2d6da8`). Two fresh
+`git archive` copies under the session scratchpad, `m8-audit-e2d6da8` (read-only) and
+`m8-sabotage-e2d6da8`; `mambo_power.__file__` proven for each
+(`…\scratchpad\m8-audit-e2d6da8\src\mambo_power\__init__.py`,
+`…\scratchpad\m8-sabotage-e2d6da8\src\mambo_power\__init__.py`). The 7ec0b0b per-row exporter was
+run once from the surviving `m8-audit-7ec0b0b` archive to produce a reference file. Nothing ran in
+`mambo-power` or `mambo-power-m8`. Slice reports not read; walk and critic read for their findings.
+Pins: pandapower 3.3.0, PyPSA 1.2.4.
+
+**Stack health (archive, full suite):** `1494 passed, 4 skipped, 10 warnings in 269.10s`, exit 0
+(`full-run-e2d6da8.txt`). No example-13 timeout: the script now runs in 8.8 s wall here under a
+per-script 240 s budget (`test_examples_run.py:28`) — the first audit's should-fix 1 is resolved as
+asked (per-script, measured, not a blanket raise). `mkdocs build --strict` exit 0
+(`mkdocs-e2d6da8.txt`, 249 fields documented). Four skips are the pre-existing zonal-parity ones.
+
+**Pre-M8 tests:** `git diff --stat cdb4fef e2d6da8 -- tests` touches the nine new files, the schema
+snapshot (one property, description text re-worded at `738dcf8`), `test_examples_run.py` (budget),
+and two pre-M8 files: `test_jobs.py` (+1 parametrised test, additive) and
+`test_opf_solve_dc_opf.py`, where the pre-M8 `test_solve_dc_opf_treats_a_costless_generator_as_free`
+is **renamed and inverted** to `test_solve_dc_opf_refuses_a_costless_generator`. See Finding 1.
+
+### AC-1 — pandapower JSON import — DISCHARGED
+
+Named tests green in the full run (`test_io_pandapower_json.py`, now 45 items). Fix check (critic 2,
+`tap_changer_type`): my own 110/20 kV two-bus pandapower net, `tap_pos=2`, `tap_step_percent=2.5`,
+`tap_side=hv`, run through `runpp` and read back from `net._ppc["branch"][:,8:10]` against the
+imported `Branch`:
+
+| changer | `_ppc` tap / shift | mambo `tap_ratio` / `shift_deg` | `vm_lv` pp / mambo | report |
+|---|---|---|---|---|
+| `None` | 1.000000 / 0.000 | `None` / `None` | 0.992164 / 0.992164 | `COLUMN_DROPPED` naming `tap_pos=2 … tap_changer_type=None` |
+| `Ratio` | 1.050000 / 0.000 | 1.05 / `None` | 0.944114 / 0.944114 | — |
+| `Symmetrical` (5°) | 1.049819 / 0.238 | 1.0498187795 / 0.2378348844 | 0.944280 / 0.944280 | — |
+| `Ideal` (step 0, 5°) | 1.000000 / 10.000 | `None` / 10.0 | 0.992164 / 0.992164 | — |
+
+The critic's silent 0.048 pu case (`None`) is gone and reported. `Ideal` with both step and degree
+set is one pandapower's own `runpp` refuses (`UserWarning`); mambo imports it at nominal with
+`TAP_CHANGER_TYPE_UNSUPPORTED`. Fix check (critic 6, `gen.slack=True`): no `ext_grid` + a
+`slack=True` gen → bus types `['slack','pq']`, `vm_pu` 1.03 from `gen.vm_pu`, `GEN_SLACK_PROMOTED`,
+`pf.solve_ac` vm `[1.03, 1.02992]` == `runpp`; with an out-of-service `ext_grid` the same; with a
+live `ext_grid` the gen stays PV (`COLUMN_DROPPED` for `slack`); two `slack=True` gens → one slack,
+one PV. Sabotage (moves only the `None` gate — `changer = "Ratio"` when `None`): `4 failed,
+41 passed` — `test_tap_changer_type_matches_pandapowers_ppc[none-ignored|none-with-shift]`,
+`test_tap_columns_without_a_changer_type_are_reported_dropped`,
+`test_import_report_is_empty_on_pandapowers_own_cases[case14]`. Sabotage (gen.slack gate off):
+`test_slack_gen_without_a_live_ext_grid_is_the_slack[None|off]` FAILED. Both restored, identical.
+
+### AC-2 — pandapower JSON export — DISCHARGED
+
+Independent recomputation (own script): DC worst |Δva| case14 `8.9e-15`°, case30 `1.8e-15`°,
+case57 `1.3e-13`°; AC worst |Δvm| `2.1e-12`, `8.8e-11`, `2.1e-13` pu; `res_bus` rows in the export:
+0 on all three. Fix check (critic 10, `res_bus`): grep of `pandapower_json.py` for `res_` gives
+three hits — the docstring (`:11`), the import-side skip `name.startswith("res_")` (`:698`) and the
+`_drop_bus_state` message (`:1051`); nothing reads or writes a results table. Behaviour: importing
+`pp.networks.case14()` *after* `runpp` (14 `res_bus` rows) yields `vm_pu` `None` on every bus but
+the slack (1.06, the `ext_grid` setpoint); exporting `case14.m` writes no `res_*` table and reports
+`FIELD_DROPPED` for `vm_pu/va_deg` on the 13 non-slack buses (Finding 6). Fix check (critic 4,
+bulk creators): `dumps(case300)` **0.28 s** (0.28 s repeat) vs **12.39 s** for the 7ec0b0b
+exporter on this machine; `loads` 0.61 s. The 7ec0b0b file vs the e2d6da8 file, table by table:
+same row counts, same column *sets*, `DataFrame.equals` **True on all ten tables**
+(`bus, line, trafo, gen, sgen, ext_grid, load, shunt, poly_cost, pwl_cost`); `rundcpp` angles
+identical (max diff 0.0). `pp.toolbox.nets_equal(old, new)` is **False**, for two reasons that are
+both intended: column *order* differs on `bus`/`gen` (bulk creators put `max_*` before `min_*`) and
+the old file carries `res_bus`. So "nets_equal to the per-row form" (plan S8 row) is literally false
+against the previous exporter's file and true against the test's own per-row reference (which
+writes no `res_bus`) — see Finding 2 for the test that pins it. Sabotage (`x_ohm_per_km` ×1.001):
+`16 failed, 53 passed` across DC/AC angles, voltages, branch flows and `carried_values` on
+case14/30/57. Restored, identical.
+
+### AC-3 — PyPSA export — DISCHARGED
+
+Independent recomputation: `('ok','optimal')` on all three; objective rel diff case14 `7.5e-14`,
+case30 `8.8e-13`, case118 `1.3e-12`; worst dispatch `2.3e-5`, `8.4e-5`, **`1.867e-3` MW at gen-5**
+(F3 reproduced to the digit); `p_set` all NaN. Fix check (critic 1, transformer `b`): own two-bus
+110/20 kV case, `r=0.01 x=0.2 s_nom=40`, PyPSA `pf()` vs `pf.solve_ac`:
+
+| `b` (pu, 100 MVA) | PyPSA `b` column | mambo vm_b | PyPSA vm_b | |Δvm| |
+|---|---|---|---|---|
+| 0.3 | 0.75 | 1.0179358926 | 1.0179358926 | 2.2e-16 |
+| −0.2 | −0.5 | 0.9674524581 | 0.9674524581 | 2.2e-16 |
+| 0.0 | 0 | 0.9870413907 | 0.9870413907 | 1.1e-16 |
+
+The written column is `b × base_mva / s_nom` (0.3 × 100/40 = 0.75), the admittance direction; angles
+agree to 1e-6°. Fix check (walk 4, unrated `s_nom`): case14 has 20 unrated branches → exactly 20
+`PYPSA_UNRATED_S_NOM_DEFAULTED` entries whose `element_ids` equal the unrated ids; a fully rated copy
+→ 0 entries and `s_nom` = the rating. Sabotage (`b / k` → `b * k`, the original bug): `2 failed,
+37 passed` — `test_transformer_charging_b_matches_pypsa_ac_pf[-0.05|0.3]`. Sabotage (unrated report
+gated off): `test_unrated_branches_are_reported_one_entry_each_naming_the_sentinel` and
+`test_report_names_q_limits_and_zone_only_on_the_hand_network` FAILED. Both restored, identical.
+
+### AC-4 — PSS/E RAW v33 import — DISCHARGED
+
+`git diff 7ec0b0b e2d6da8 -- psse_raw.py` touches the docstring, `_SECTIONS`/terminator tables,
+`_scan` (section naming) and the area-record report — not one line of the CZ/CW/CM conversion, so
+the hand derivations above stand; `test_io_psse_raw.py` `29 passed`. Fix check (walk 5,
+`UNTERMINATED_SECTION`): deleting `case14_v33.raw`'s bus terminator (line 18,
+`0 / END OF BUS DATA, BEGIN LOAD DATA`) now gives `UNTERMINATED_SECTION: bus section is not
+terminated by a '0' line: the '0' at line 29 ends the load section, so the records between were
+read as bus records (line 29)` — the right section, and the line the parser gave up at; the walker
+got "vsc dc … (line 31)". The location comes from the terminator comments (`_terminator_section`):
+a hand-written file with bare `0` lines and the same deletion surfaces as `BAD_RECORD: generator
+record has 15 fields … (line 11)` one section later (Finding 4). Costless: `RAW_NO_COSTS` still
+emitted; the report now also carries `RAW_SECTION_IGNORED` for the area record (critic 13).
+Sabotage (`_terminator_section` always `None`):
+`test_unterminated_section_names_the_section_and_the_line_the_parser_gave_up_at` FAILED, 28 passed.
+Restored, identical.
+
+### AC-5 — CSV bundle — DISCHARGED
+
+`csv_bundle.py` diff: docstring, `_blank_line`, `dump` staging, reader encoding — the float codec
+and `_cell` are untouched, so the bit-exactness probe above stands; `test_io_csv_bundle.py`
+`60 passed`. Fix checks (walk 6/7): on a case14 bundle, three trailing `\n` on `loads.csv` → loads
+`== net`; a UTF-8 BOM on `buses.csv` → `== net`; a blank line and a whitespace-only line in the
+middle of `branches.csv` → `== net`; a `,,,,,,,,,,` row is still a row (refused
+`CSV_MANIFEST_INVALID … 21 rows`); the writer emits no BOM and no trailing blank row. Fix check
+(critic 7, atomic dump): after a good `dump(case14, d)`, `dump(bad, d)` with a `""` zone name raises
+`ValueError` and every byte of `d` is unchanged, no leftovers; with `_write_csv` made to raise
+`OSError` on the third table, `d` is byte-unchanged, loads `== case14`, no stray staging dir in
+`d` or beside it. Injecting a failure on the **fourth `os.replace`** of the move-in phase does leave
+a mixed bundle (Finding 3). Sabotages, each restored identical: `utf-8-sig`→`utf-8` →
+`test_a_utf8_bom_on_a_table_is_ignored` FAILED; blank-line skip removed →
+`test_trailing_blank_lines_are_not_rows` FAILED; staging dir = target (old bundle wiped before
+write) → `test_dump_that_fails_midway_leaves_the_old_bundle_intact` FAILED.
+
+### AC-6 — `Branch.kind` — DISCHARGED (criterion text needs one amendment, Finding 1)
+
+Snapshot: still exactly one property vs `cdb4fef`; its description text changed at `738dcf8` to
+say "promoted". Fix check (critic 3): on case14, `line.tap_ratio = 1.05` → `kind` stays `"line"`,
+`is_transformer` **True**; `native.loads(native.dumps(net))` gives `kind="transformer"`, tap 1.05,
+no raise (the critic's `ValidationError` is gone); `Branch.model_validate(model_dump())` →
+`transformer`; pandapower export writes it as the 4th `trafo` row and re-imports tap 1.05 (nothing
+"dropped" in the report); PyPSA puts it in `transformers` with `tap_ratio` 1.05; CSV round-trips
+`kind=transformer`. Same for `shift_deg = 10.0`. Construction with `kind="line"` + tap/shift →
+`"transformer"`. The round-tripped network is `!=` the mutated one (kind differs) — documented in
+the field description (Finding 5). Spec: the working-tree `## Design` S1 item now reads "**promoted**
+to `"transformer"` by the validator, not rejected" (`spec:164`) and the plan's AC-6 readback says
+"PROMOTED (amended, F7)" — both say so; the committed AC-6 criterion text is unchanged and still
+claims "every pre-M8 test passes unmodified" (Finding 1). Revert-and-watch (the wave's one named
+revert, now the promotion): `_default_kind` returns the data untouched for an explicit kind and
+`is_transformer` reads `kind` only → `7 failed, 142 passed`:
+`test_explicit_line_with_tap_is_promoted_to_transformer[×2]`,
+`test_is_transformer_reads_the_fields_not_only_kind`,
+`test_tap_assigned_after_construction_round_trips_through_native[×2]`,
+`test_tap_assigned_to_a_line_after_construction_exports_as_a_trafo` (pandapower) and
+`…_as_a_transformer` (PyPSA). Restored, identical.
+
+### AC-7 — reports — DISCHARGED
+
+Silence, re-run on the new head (stdout/stderr redirected, root logger at DEBUG, warnings recorded)
+across pandapower export+import, PyPSA export, RAW case14+quirks, CSV dump+load on case14 and a
+hand net: **STDOUT `''`, STDERR `''`, 0 log records from mambo, 0 warnings from mambo** (34 records
+from `pypsa`, `matplotlib`, `numexpr`). Lossless → empty: CSV on both nets, pandapower import of
+`pp.networks.case14()`. Lossy → named: the codes listed per module above. Registry (critic 9):
+`report.py` imports only `dataclasses` and `mambo_power.model`; `LIMITATIONS` lives in
+`io/limitations.py`; 13 import orders × {libraries free, `pandapower`/`pypsa`/`pandas` blocked via
+`sys.modules[...] = None`} = **26 subprocesses, all OK**, `mambo_power.io.report` has no
+`pypsa`/`pandapower_json`/`psse_raw`/`csv_bundle` attribute. Union check redone: each module's
+`CODES == LIMITATIONS[module]`, every `CODES` ⊆ `ImportIssueCode`, every code literal emitted in
+source ∈ `CODES` (RAW's six `RawImportError` codes correctly outside), every `CODES` entry
+documented, and — closing the first audit's note 7 — **every code documented in `formats.md` is
+registered**. Walk 3 (cost-less RAW): `opf.solve_dc_opf` raises `MissingCostError` naming all five
+generators; `jobs.run(kind="opf.dc")` → `status failed`, code **`VALIDATION`**, same message;
+`market.solve_nodal` raises the same. Sabotages, each restored identical: `if missing:` → `if
+False:` → `8 failed` (`test_costless_generators_fail_as_validation_under_every_pricing_kind[×5]`,
+`test_solve_dc_opf_refuses_a_costless_generator`, `…names_every_costless_generator`,
+`test_gen_cost_coeffs_accepts_a_costs_override…`); `report.py` given a format import →
+`test_io_limitations.py` fails at collection (circular import, `1 error`).
+
+### AC-8 — docs — DISCHARGED
+
+`mkdocs build --strict` exit 0 from the archive; `examples/13_interop.py` exit 0 in 8.8 s, and its
+report lines moved honestly (PyPSA `['PYPSA_GEN_Q_LIMITS_DROPPED','PYPSA_UNRATED_S_NOM_DEFAULTED',
+'PYPSA_ZONE_DROPPED'] (26 issues)`, RAW `[…,'RAW_SECTION_IGNORED'] (16 issues)`, pandapower
+`10 issues`), matching the doc blocks. `io-limitations` API page added to `mkdocs.yml`;
+`site/api/model` renders `is_transformer`; `site/api/opf` renders `MissingCostError` (25×);
+`model.md:112-118` documents promotion and `is_transformer`; `formats.md:600` documents the
+`MissingCostError` refusal under RAW. Sabotage (rename every occurrence of
+`RAW_XFMR_MAGNETISING_FOLDED` in `formats.md`):
+`test_every_registered_code_is_documented[io.psse_raw-RAW_XFMR_MAGNETISING_FOLDED]` FAILED, 87
+passed. (A first attempt renaming only the limitations-table row stayed green because the record map
+at `formats.md:543` still named the code — the test is "documented anywhere", which is what it
+claims.) Restored, identical.
+
+### Findings at e2d6da8
+
+1. **should-fix — a pre-M8 behaviour changed without its paper trail.** The walk fix `dcbeb5e` makes
+   `opf.solve_dc_opf` / `market.*` raise `MissingCostError` on `Generator.cost is None` where they
+   priced it at zero before; correct (A3 made true), proven (Finding-free above), and documented in
+   `formats.md:600` and the opf API page. But: (a) the pre-M8 test
+   `tests/unit/test_opf_solve_dc_opf.py::test_solve_dc_opf_treats_a_costless_generator_as_free` was
+   renamed and its assertion inverted, so AC-6's "every pre-M8 test passes unmodified" is no longer
+   literally true and the spec's AC-6 text does not say so (the plan's F5 does); (b)
+   `docs/changelog.md`'s M8 section has no `### Changed` line for it — the only public behaviour
+   change to a pre-M8 module in this wave is absent from the changelog, and `docs/manual/opf.md`
+   still does not mention the refusal. Fix: one amendment sentence on AC-6 (or A3) in the spec, one
+   `### Changed` bullet, one sentence in `opf.md`.
+2. **should-fix — a vacuous assertion under a name that promises byte identity.**
+   `tests/unit/test_io_pandapower_json.py:743` `test_bulk_export_is_byte_identical_to_pandapowers_per_row_creators`
+   ends with `assert text == pp.to_json(reference) or True` (`:766`), and
+   `pandapower_json.py:756-757` says that test "pins" byte identity. What it proves (and what I
+   measured) is `nets_equal` + same column sets + cell-for-cell equality + same re-import — value
+   identity, with column order legitimately different. Rename the test, delete the `or True` line,
+   and fix the docstring sentence; the S8 plan row already states the accepted deviation.
+3. **note — `csv_bundle.dump` is atomic against rendering and writing, not against the move-in.**
+   `csv_bundle.py:352-354` moves the ten files with sequential `os.replace`; a failure between moves
+   (injected on the 4th) leaves a mix of new and old files. Here `load` refused it
+   (`CSV_MANIFEST_INVALID`, row counts differed) but a same-shape network would load a hybrid. Narrow
+   window on a same-filesystem rename; worth one clause in the docstring ("all-or-nothing up to the
+   final rename step").
+4. **note — `UNTERMINATED_SECTION`'s location relies on the `/ END OF … DATA` comments.** With bare
+   `0` lines (the docstring calls the comment optional) the missing bus terminator surfaces as
+   `BAD_RECORD … (line 11)` one section later; the walk's exact case is fixed, the general one is
+   not detectable without the comments. Say so in `formats.md`'s error row.
+5. **note — a mutated network is not `==` to its native round trip.** After `br.tap_ratio = 1.05`
+   on a line, `native.loads(native.dumps(net)) != net` because `kind` differs; nothing is lost and
+   the field description says assignment does not re-run the rule. Fine, but a `Network.__eq__`
+   caller may be surprised; `model.md:116` covers it.
+6. **note — pandapower export of a MATPOWER-derived network is never lossless now.** With
+   `res_bus` no longer written, the bus `vm_pu/va_deg` MATPOWER carries are `FIELD_DROPPED` (13
+   entries on case14). Right under D1 and reported; the example's "9 issues" became "10".
+7. **note — the plan's S8 wording "nets_equal to the per-row form" holds against the test's own
+   per-row reference, not against the file the 7ec0b0b exporter wrote** (`res_bus`, column order).
+   Substance holds (values identical on all ten tables); the sentence could say "value-identical".
+
+First-audit items: should-fix 1 (example budget) **resolved**; should-fix 2 (matrix pending)
+**resolved** in the working-tree plan (rows discharged, stack-health filled, auditor column awaiting
+this section); note 3 (skipped columns) **resolved** (`b56e9aa`, assert on both sides); note 5
+(bare `raises`) **resolved**; note 7 (docs-side direction) **closed by measurement** above; notes 4
+and 6 stand as notes.
+
+Hygiene on the new tests: `match=` on every new `pytest.raises` (`test_opf_solve_dc_opf.py`,
+`test_branch_kind.py`); the `continue` at `test_io_pandapower_json.py:718` is loop control in the
+per-row reference builder, not a skipped assertion; the injected-failure CSV test monkeypatches and
+restores `_write_csv`; the import-order test runs real subprocesses with `sys.modules` blocking. The
+one blemish is Finding 2.
+
+### Overall at e2d6da8
+
+**Criteria: 8 DISCHARGED, 0 PARTIAL, 0 REFUTED.** Findings: 0 blocking, 2 should-fix, 5 notes.
+Fourteen sabotages (one per criterion, one per fix, plus the promotion revert-and-watch) each
+reddened exactly the tests that guard the thing moved, and every file restored byte-identical
+(`sabotage-e2d6da8.txt`; the sabotage copy's `src/` and `docs/` diff clean against the read-only
+copy at the end).
+
+**Every walk and critic fix verified against its finding:** walk 3 (`MissingCostError` →
+`VALIDATION`), 4 (per-branch unrated report), 5 (section + line), 6/7 (blank lines, BOM); critic 1
+(`b` as admittance, PyPSA `pf()` to 2e-16), 2 (four changer types against `_ppc`), 3 (promotion +
+`is_transformer`, mutated tap survives every exporter and the native round trip), 4 (12.4 s → 0.28 s,
+values identical), 6 (`gen.slack`), 7 (atomic up to the move-in), 9 (leaf `report.py`, 26 import
+orders), 10 (`res_bus` neither read nor written).
+
+**Wave-level coverage verdict: COVERED.** The chain R11 → W1…W5 → AC-1…AC-5, "Explicit kind,
+defaulted" → W6 → AC-6, "Best effort + report" → W7 → AC-7, R14 → W8 → AC-8 is unchanged; the S1
+design decision now reads "promote" in the spec's `## Design` and the plan's readback; A1–A8 were
+re-observed (A6 as amended, A3 now true by construction rather than by assumption); the two fix
+slices added tests for every new behaviour and I found no fix without a guarding test. The one
+gap in the paper trail is Finding 1 — a criterion sentence and a changelog line, not evidence.
+Merge-ready from the audit's standpoint once Findings 1 and 2 are addressed or explicitly waived.
+
+Evidence files (scratchpad): `full-run-e2d6da8.txt`, `mkdocs-e2d6da8.txt`, `ex13-e2d6da8-1.txt`,
+`sabotage-e2d6da8.txt`, `probe2/{walk,critic,imports,ne,parity,quiet,registry,sabotage,old_dump300}.py`,
+`probe2/case300_perrow.json`.

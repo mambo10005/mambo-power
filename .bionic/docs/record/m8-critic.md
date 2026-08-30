@@ -254,3 +254,201 @@ should-fixes 4–10 (quadratic export, the example's 58-of-60 s budget that alre
 in the suite, `gen.slack`, non-atomic CSV dump, BOM, the inverted `report.py` import, and the
 undeclared `res_bus` scope) are the difference between "works on the fixtures" and "works on
 what users will feed it"; I would land 4, 5 and 7 with the blockers and file the rest.
+
+## Re-review at e2d6da8
+
+Head `e2d6da8` on `wave/08-interop` (fix commits `3f2a9a0..e2d6da8`, base `15e71fa`). Reviewed
+from a fresh `git archive` copy (`scratchpad/m8-critic-e2d6da8`, `mambo_power.__file__` proven
+under its `src/`). Every first-round script (`e1`–`e9`) re-run there unchanged; the new attacks are
+`scratchpad/m8-critic-exp/x1_tap.py … x7_slack.py`, `x1b_legacy.py`, `x3b_mixed.py`, `x5b_cost.py`.
+
+Suite on the copy: `1494 passed, 4 skipped` (the same four pre-existing zonal parameter skips),
+0 failed, 225 s. `test_example_runs_to_completion[13_interop]` is now the slowest test at 8.5 s
+(was 57.8 s).
+
+### Status of the sixteen first-round findings
+
+| # | sev | status | evidence at e2d6da8 |
+|---|-----|--------|---------------------|
+| 1 | blocking | **FIXED** | e2/e3: trafo `b` column 0.75 → `b_pu` 30.0 (= 0.3·100); `n.pf()` vm_b 1.00534996 = mambo 1.00534996 (was 0.97977872) |
+| 2 | blocking | **FIXED** | e1: `tap_changer_type=None` → nominal + `COLUMN_DROPPED`; `Ratio` hv/lv, `Symmetrical` (tap 1.049819, shift 0.238), `Ideal` (shift 10.0) all match `net._ppc` and `runpp` to 1e-6; x1 B–G, L (negative steps, lv side, `tap_pos == neutral`, `tap_side` None, `Ideal` with neither step) agree too. Three edges it does not cover are new findings 17–19 |
+| 3 | blocking | **FIXED DIFFERENTLY — accepted** | Promotion at validation + `Branch.is_transformer` for routing. e5: after `br.tap_ratio = 1.1` the pandapower round trip returns tap 1.1 (was `None`); e9: `model_validate(dump)` of the mutated branch → `transformer` (was `ValidationError`); x2: PyPSA puts it in `transformers`, CSV/native/pandapower all re-import it as a transformer. `kind` itself stays `"line"` until the next validation, which is what the docstring now says; see nit 24 for the file-level residue |
+| 4 | should-fix | **FIXED** | e7 (best of 3): pandapower `dumps` case300 24 332 → **333 ms**, `loads` 3 814 → 646 ms; the bulk-creator ruling is `nets_equal` + per-cell equality, not byte identity — accepted (column order is pandapower's), but see finding 21 |
+| 5 | should-fix | **FIXED** | per-script budget (`BUDGETS_S["13_interop"] = 240`), and the script itself now runs in 8.5 s in the suite |
+| 6 | should-fix | **FIXED** | E2: `['slack', 'pq']` with `GEN_SLACK_PROMOTED`; x7: flagged gen out of service or on a dead bus → `NO_SLACK` (pandapower cannot solve those either), two flagged → first wins + `COLUMN_DROPPED` on the second, a live `ext_grid` wins over the flag. E11 (every `ext_grid` out of service) is still a `NetworkValidationError`, now stated in the module docstring — accepted as a ruling |
+| 7 | should-fix | **PARTLY FIXED** | e8d: the `""` refusal now leaves the old bundle intact (`== original: True`). A failure in the *move* phase does not — finding 20 |
+| 8 | should-fix | **FIXED** | e8b: BOM bundle loads (`utf-8-sig`) |
+| 9 | should-fix | **FIXED** | x4: `report` is a leaf; `import mambo_power.io.{report,limitations,pypsa,pandapower_json,csv_bundle}` each succeed first in a fresh interpreter with `pandapower`/`pypsa`/`pandas` blocked; `mambo_power.io.report` no longer carries `pypsa`/`LIMITATIONS` attributes |
+| 10 | should-fix | **FIXED** | `res_bus` neither read nor written; the export reports `FIELD_DROPPED` naming every non-slack bus with a stored state — recorded in the module docstring and the changelog |
+| 11 | nit | not fixed | e3: `ext_grid` without limits still imports `min = max = 0`; documented, stands as a nit |
+| 12 | nit | not fixed | e5: `psse_raw` still raises `RawImportError` on the first problem; stands |
+| 13 | nit | **FIXED** | e5: area record → `RAW_SECTION_IGNORED`; docstring says only the bus `AREA` labels survive |
+| 14 | nit | **FIXED** | e8e: over-limit cell → `CSV_BAD_VALUE`; `_label(inf)` → `"inf"` |
+| 15 | nit | **FIXED** | e6c: in-service unit's 1.0 wins; e6b: `PYPSA_COST_NONCONVEX` reported |
+| 16 | nit | not fixed | `generators()` is still 122 lines of three near-identical blocks; `psse_raw.__all__` still re-exports `ImportReport`; stands |
+
+### New findings
+
+#### 17. should-fix — `tap_neutral` NaN with a `Ratio` changer imports a tap pandapower does not apply (`pandapower_json.py`, `_Importer.tap_changer`)
+
+`tap_neutral` defaults to `nan` in `create_transformer_from_parameters` (checked on 3.3.0), so a
+user who sets `tap_pos`, `tap_step_percent`, `tap_side` and `tap_changer_type` and forgets it is
+an ordinary file. pandapower computes `tap_diff = nan` and `_replace_nan` turns the step into 0;
+the importer defaults the missing neutral to 0 and applies the tap:
+
+```
+# x1_tap.py case A: tap_pos=2, tap_step_percent=2.5, tap_side=hv, tap_changer_type=Ratio, no tap_neutral
+pp    tap=1.0  vm=[1.0, 0.993405]
+mambo tap=1.05 vm=[1.0, 0.945418] codes=['FIELD_DEFAULTED']      <- no tap-related report entry
+```
+
+Same invariant as finding 2, same silence. Fix: when `tap_pos` or `tap_neutral` is missing,
+`diff = 0` (pandapower's rule) and report `COLUMN_DROPPED` naming the missing column.
+
+#### 18. should-fix — pandapower ≤ 2.x files (`tap_phase_shifter`, no `tap_changer_type`) import at nominal tap while pandapower 3.3 still applies the tap, and the report says the opposite
+
+`_calc_tap_from_dataframe` keeps an `elif "tap_phase_shifter" in trafo_df` branch (with a
+`DeprecationWarning`) that applies the old-style tap; `from_json` of a `format_version 2.14.0`
+file does **not** add `tap_changer_type` (measured: column absent after `from_json_string`).
+The importer sees no `tap_changer_type` column, takes the changer as `None`, and writes a
+`COLUMN_DROPPED` message asserting "pandapower applies no tap without a changer type":
+
+```
+# x1b_legacy.py: 2.x-style file, tap_pos=2 tap_neutral=0 tap_step_percent=2.5 tap_side=hv tap_phase_shifter=False
+pp 3.3  ppc tap=1.05  vm=[1.0, 0.945418]
+mambo   tap=None      codes=['COLUMN_DROPPED', 'FIELD_DEFAULTED']
+        "…with tap_changer_type=None: pandapower applies no tap without a changer type; imported at the nominal tap"
+```
+
+Reported, but wrong — a reader of the report would believe the two engines agree. Fix: when the
+`tap_changer_type` column is absent and `tap_phase_shifter` is present, map `True → "Ideal"`,
+`False → "Ratio"` (exactly pandapower's fallback), and keep the `None` wording for files that have
+the new column with an empty cell.
+
+#### 19. should-fix — the second tap changer (`tap2_*`) is silently ignored
+
+pandapower 3.3's `create_transformer_from_parameters` accepts `tap2_side/neutral/pos/
+step_percent/step_degree/changer_type` and `_calc_tap_from_dataframe` loops over `("", "2")`.
+The importer reads only `tap_*` and `check_columns` lists no `tap2_*` expectation:
+
+```
+# x1_tap.py case I: no tap1; tap2_side=lv tap2_pos=2 tap2_neutral=0 tap2_step_percent=2.5 tap2_changer_type=Ratio
+pp    tap=0.952381 vm=[1.0, 1.043075]
+mambo tap=None     vm=[1.0, 0.993405] codes=['FIELD_DEFAULTED']   <- nothing names tap2
+```
+
+Fix: run `tap_changer` twice (prefix `""`, `"2"`) and compose — the same function with a column
+prefix — or at minimum report `COLUMN_DROPPED` for a `tap2_pos ≠ tap2_neutral`.
+
+#### 20. should-fix — the "all-or-nothing" CSV dump is atomic against the `""` refusal but not against a failed move (`csv_bundle.py:dump`)
+
+The staging directory is written under `try/except`, but the `os.replace` loop that follows is
+not: on Windows a read-only target file or a file another process holds open (Excel with
+`buses.csv` open is precisely the "spreadsheet tooling" use the docstring sells) fails mid-loop.
+Tables before it are new, tables after it are old, the manifest is old, and the bundle loads:
+
+```
+# x3b_mixed.py: dump(a); hold generators.csv open; dump(b)  (b: buses[0].base_kv=999, generators[0].p_max_mw=12345)
+dump(b) failed: PermissionError
+buses.csv from b? True | generators.csv from b? False | == a: False | == b: False
+orphaned staging dirs: ['.bundle.tmp-8352']
+# x3_csv_atomic.py: read-only generators.csv → same PermissionError, same orphan; target that is a file →
+# FileExistsError with an orphaned '.file.txt.tmp-<pid>'
+```
+
+Finding 7's Frankenstein bundle is back through a different door, plus an orphan `.<name>.tmp-
+<pid>` per failure. Fix: swap at the directory level (rename `target` → `.<name>.old-<pid>`,
+`staging` → `target`, `rmtree` the old; a directory rename with an open file inside fails on
+Windows *before* anything moves, which is the atomic property wanted), and put the cleanup of
+`staging` in a `finally`. Add the read-only-file test; it is one `os.chmod`.
+
+#### 21. should-fix — a dead assertion in the bulk-export test (`tests/unit/test_io_pandapower_json.py:765`)
+
+```python
+def test_bulk_export_is_byte_identical_to_pandapowers_per_row_creators(build):
+    ...
+    assert text == pp.to_json(reference) or True  # column order (docstring) breaks byte equality
+```
+
+`… or True` cannot fail; the name promises what the body explicitly cannot prove. The real
+contract the test does prove — `nets_equal`, identical column *sets*, per-cell equality including
+`None`/`NaN`/`""`, identical re-import — is the right one (pandapower's bulk creators append
+`max_*` before `min_*`; that is theirs). Delete the line and rename the test to what it checks.
+
+#### 22. should-fix — `MissingCostError` is a behaviour change to `opf`/`market`/`jobs` that the changelog does not mention
+
+`opf.solve_dc_opf`, `market.solve_nodal/multiperiod/zonal/agents` and the `opf.dc`,
+`market.*` job kinds now refuse a network with an in-service cost-less generator
+(x5b: `MissingCostError` from each; jobs → `failed` / `VALIDATION`); before M8 such a generator
+was dispatched free (`test_solve_dc_opf_treats_a_costless_generator_as_free` was deleted). The
+change is right (spec A3) and the manual pages say it, but `docs/changelog.md` has no line for it
+— its only "cost" mention is `RAW_NO_COSTS`. A user upgrading gets a new exception from a
+module M8 does not advertise touching. Add it to the changelog under a "behaviour change"
+line, and extend the spec's `### Assumptions` with the rulings this round made (`kind`
+promotion, no results tables, `gen.slack` promotion, `nets_equal` not byte identity, cost-less
+generators refused): none of the five is there.
+
+#### 23. nit — `MissingCostError`'s advice cannot be followed from the public API
+
+The message ends "set `Generator.cost` or pass `costs=`", but `OpfDcOptions` has only
+`ac_check` and no `market.solve_*` takes `costs` (`costs=` is `gen_cost_coeffs`'s private-ish
+parameter; the agents path fills it from strategies, which refuse a cost-less generator with
+`AgentSetError` anyway). Jobs carry the ids only in the message (`error.issues is None`), so a
+client cannot read them structurally. Drop the `costs=` clause, or say where it applies.
+
+#### 24. nit — a mutated branch's CSV/native row says `kind=line` beside a tap
+
+x2: `csv row: {'kind': 'line', 'tap_ratio': '1.05'}`; native JSON the same. It heals on load
+(promotion), so nothing is lost, but the file carries two truths and a spreadsheet reader
+sees a "line" with a tap. Either write `is_transformer` into the `kind` column or say in the
+CSV docstring that `kind` is the value at last validation.
+
+#### 25. nit — three trafo edges where pandapower itself cannot solve
+
+`tap_dependency_table=True` without a characteristic table: `runpp` raises `UserWarning`; the
+importer applies the plain formula with a `COLUMN_DROPPED` on the flag (reported, so fine).
+`tap_changer_type` as `pd.NA` (pandas `string` dtype): both sides `TypeError` — the "report is
+the only channel" hole again, at an input pandapower rejects too. `Ideal` with `tap_neutral`
+NaN: pandapower `FloatingPointError`, importer shift 10°. None is worth code; listed so the
+next reviewer does not re-derive them.
+
+#### 26. nit — a pre-existing `.<name>.tmp-<pid>` directory is `rmtree`'d without a word
+
+x3 case 7: foreign content under that exact name is destroyed. The pid suffix makes a
+collision unlikely; `tempfile.mkdtemp(prefix=f".{name}.tmp-", dir=parent)` makes it impossible.
+
+### Attacks on the fixes that held
+
+- **Tap formulas vs `_calc_tap_from_dataframe`** (x1): `Ideal` with negative steps
+  (−8.6024°), `Ideal` on the lv side (−10°), `Symmetrical` lv side with a negative position
+  (tap 1.051747, shift 0.5232°), `Ratio` with `tap_step_degree` (pandapower applies the angle to
+  `Ratio` too and so does the importer), `tap_pos == tap_neutral`, `tap_side` None
+  (`TAP_CHANGER_TYPE_UNSUPPORTED`, and pandapower applies nothing either) — all match `_ppc` to
+  1e-6 and `runpp` voltages to 1e-6.
+- **`kind` leak** (x2): an explicit `kind="line"` with a tap in the constructor, `model_copy`,
+  `Network(**objects)`, numpy taps, `-0.0` shift — every exporter routes on `is_transformer`
+  and every importer/loader re-derives; the schema text changed once as A2 allows.
+- **PyPSA `b` with the `s_nom` sentinel** (x6): unrated trafo with `b = 0.3`, `r, x` `× k` and
+  `b / k` with the same `k = UNRATED_S_NOM_MVA / base` → `n.pf()` 1.00534996 = mambo; a zero
+  rating is refused by the model (`BAD_RANGE`), so no division by zero is reachable.
+- **`MissingCostError` callers** (x5/x5b): an out-of-service cost-less generator is not in
+  `gen_ids` and does not raise (`Optimal`); `pf.dc`, `pf.ac`, `n1` job kinds untouched (`ok`);
+  a strategy on a cost-less generator was already `AgentSetError`; the `VALIDATION` failure
+  round-trips through JSON; every RAW fixture now raises with all five generator ids named.
+- **Import order** (x4): each `io` submodule importable first with the three third-party
+  packages blocked; `report` carries no format-module attributes.
+- **`GEN_SLACK_PROMOTED`** (x7): out-of-service or dead-bus flagged gen → `NO_SLACK` (pandapower
+  cannot solve those either); two flags → first promoted, second `COLUMN_DROPPED`; a live
+  `ext_grid` always wins.
+
+## Verdict
+
+**Merge after the listed should-fixes (17–22).** All three first-round blockers are fixed —
+1 and 2 verified against PyPSA's and pandapower's own solvers, 3 by a design I accept — and
+findings 4, 5, 8, 9, 10, 13, 14, 15 are closed with reproductions. What survives is a second
+ring of the same invariant around the tap changer (17: `tap_neutral` NaN, pandapower's own
+default; 18: pre-3.0 files, where the report now says the wrong thing; 19: `tap2_*`), the CSV
+dump's atomicity gap on the failure Windows users will actually hit (20 — finding 7's bundle is
+back through the move loop), a dead `or True` assertion (21) and a changelog that omits the
+one behaviour change outside `io` (22). None needs design; 17, 18 and 20 are the ones I would
+not merge without, since each reproduces the class of defect the first round was about.

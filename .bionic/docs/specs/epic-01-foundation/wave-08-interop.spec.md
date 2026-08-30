@@ -136,7 +136,10 @@ v33 record layouts (the PSS/E manual is proprietary).
   provenance: epic R11; user 2026-08-30 "Machine round-trip"; `m8-research.md` §4
 - **AC-6** — `Branch.kind`: constructing a `Branch` with no `kind` yields `"line"` at nominal tap
   and `"transformer"` otherwise; the schema snapshot changes by exactly that one property; every
-  pre-M8 test passes unmodified; pandapower's case14 neutral-tap transformer imports as
+  pre-M8 test passes unmodified **except one, amended at Step 6 (re-audit)**: the walk's fix for a
+  cost-less generator (F5 → `MissingCostError`) inverted the pre-M8 test that asserted such a
+  generator is *free* — a deliberate behaviour change outside `io`, recorded in the changelog's
+  `Changed` bullet and in A9 below; pandapower's case14 neutral-tap transformer imports as
   `"transformer"` and round-trips as one (A7).
   provenance: user 2026-08-30 "Explicit kind, defaulted"; `m8-research.md` G4
 - **AC-7** — reports: for each of the four modules, a conversion that drops something produces a
@@ -222,3 +225,12 @@ did, against the Not-doing above — removed at Step 6, critic S10: the slack's 
   default is exercised in both directions.
 - **A8** — HiGHS via linopy is available on all three CI runners for AC-3 (M3's parity already
   runs PyPSA optimize in CI).
+- **A9 (Step 4–6 rulings, appended for the record)** — a generator with `cost=None` is refused
+  by `gen_cost_coeffs` (`MissingCostError`, `jobs` → `VALIDATION`) unless the caller supplies the
+  cost; before M8 it was silently priced at zero (the walk found it on a RAW import). `Branch.kind`
+  promotes rather than rejects (S1 amended). pandapower `res_bus` is neither read nor written.
+  The bulk pandapower export is `nets_equal`-identical to the per-row form, not byte-identical
+  (pandapower's bulk creators order `max_*`/`min_*` columns differently). A neutral-tap transformer
+  exports with pandapower's own NaN `tap_pos` encoding, because that is what `pp.networks.case14()`
+  stores and the round-trip test proves it. `LIMITATIONS` lives in `io/limitations.py` so
+  `io/report.py` stays a leaf.

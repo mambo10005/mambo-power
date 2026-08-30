@@ -71,18 +71,19 @@ commit's `--stat` against it (M7 F16).
 
 ## Verification Matrix
 
-stack-health: PENDING — taken at Step 5 (baseline 1175 passed / 4 skipped at cdb4fef, CI green on 3 OS)
+auditor-wave: CONFIRMED — COVERED at 7ec0b0b and e2d6da8 (every W has a criterion, every criterion an inbound citation, ownership-table citations resolve)
+stack-health: before 1175 passed / 4 skipped at 15e71fa (clean main checkout, 452.70s) → after **1494 passed / 4 skipped at e2d6da8** (268.82s; ruff check, ruff format 201 files, mypy 59 files, mkdocs --strict all clean) — +319; log scratchpad `m8-gate-e2d6da8.log`, 2026-08-30 15:31Z
 
 | AC | tier | status | evidence | auditor |
 |---|---|---|---|---|
-| AC-1 | T2 | pending | see AC-1 | |
-| AC-2 | T2 | pending | see AC-2 | |
-| AC-3 | T2 | pending | see AC-3 | |
-| AC-4 | T1 | pending | see AC-4 | |
-| AC-5 | T1 | pending | see AC-5 | |
-| AC-6 | T1 | pending | see AC-6 | |
-| AC-7 | T1 | pending | see AC-7 | |
-| AC-8 | T0 | pending | see AC-8 | |
+| AC-1 | T2 | discharged | see AC-1 | CONFIRMED (7ec0b0b, e2d6da8) |
+| AC-2 | T2 | discharged | see AC-2 | CONFIRMED (7ec0b0b, e2d6da8) |
+| AC-3 | T2 | discharged | see AC-3 | CONFIRMED (7ec0b0b, e2d6da8) |
+| AC-4 | T1 | discharged | see AC-4 | CONFIRMED (7ec0b0b, e2d6da8) |
+| AC-5 | T1 | discharged | see AC-5 | CONFIRMED (7ec0b0b, e2d6da8) |
+| AC-6 | T1 | discharged | see AC-6 | CONFIRMED (7ec0b0b, e2d6da8) |
+| AC-7 | T1 | discharged | see AC-7 | CONFIRMED (7ec0b0b, e2d6da8) |
+| AC-8 | T0 | discharged | see AC-8 | CONFIRMED (7ec0b0b, e2d6da8) |
 
 Tier rationale: AC-1..AC-3 are T2 because the real engine (pandapower, PyPSA) runs over the
 converted network — the fixture-fidelity declaration is the MATPOWER case each was derived from;
@@ -91,48 +92,48 @@ schema snapshot); AC-8 is docs. No T3: nothing is a live surface. The walk (requ
 four modules from `formats.md` as a user would, before any row discharges.
 
 AC-1:
+  tier-run: `uv run pytest -q tests/unit/test_io_pandapower_json.py tests/parity/test_pandapower_json_vs_pandapower.py` at e2d6da8 — 44 passed (S2) + B2's ten tap_changer_type cases (S8); in the named sweep
+  readback: import of pp.networks.case14()/case30() equals io.matpower.load on every listed field at ≤1.1e-16 with the five pandapower deviations asserted PRESENT (vn_kv, the two nominal-tap trafos, cp2 4e-8, rating sentinel, zones); multi-ext_grid → one slack + EXTRA_EXT_GRID_DEMOTED; dropped columns each in the report; tap_changer_type None/Ratio/Symmetrical/Ideal match net._ppc TAP/SHIFT to 1e-9 (S8 B2). Sabotages: shunt sign, tap ignored, report entry dropped — each reddened the named test
   criterion: pandapower JSON import agrees with the MATPOWER-derived Network on case14/30 to 1e-9 on every listed field; multi-ext_grid → one slack + warning; dropped columns reported
   provenance: epic R11; user 2026-08-30 "Best effort + report"; m8-research.md §1
   fixture-fidelity: pandapower's own `pp.networks.case14()`/`case30()` (real pandapower objects) against `fixtures/case14.m`/`case30.m` (MATPOWER, PROVENANCE files)
-  tier-run: (pending)
-  readback: (pending)
 AC-2:
+  tier-run: same parity file — rundcpp vs pf.solve_dc and runpp vs pf.solve_ac on case14/30/57; bulk-export nets_equal test (S8 S4); in the named sweep
+  readback: angles worst 8.9e-15 / 1.8e-15 / 1.3e-13 deg, flows ≤1e-6, vm worst 6.7e-16 / 8.9e-16 / 2.4e-15 pu; every fixture's export loads in pp.from_json; strict nets_equal holds on {poly_cost, pwl_cost} and is PINNED (F2); every carried value survives at 1e-12; export report names dropped setpoints; case300 export 3062 → 112 ms with nets_equal to the per-row form. Sabotage: export tap dropped → case57 angles red at 0.215
   criterion: exported JSON loads in pandapower; rundcpp/runpp agree with pf.solve_dc/solve_ac to 1e-6 on case14/30/57; nets_equal on carried tables; dropped costs reported
   provenance: epic R11; user 2026-08-30 "Drop + report"; m8-research.md §1
   fixture-fidelity: the six bundled MATPOWER cases, exported by this wave and solved by pandapower 3.3.0
-  tier-run: (pending)
-  readback: (pending)
 AC-3:
+  tier-run: `tests/unit/test_io_pypsa.py tests/parity/test_pypsa_export_vs_pypsa.py` — 33 passed (S3) + b≠0 pf parity (S8 B1); in the named sweep
+  readback: PyPSA optimize vs opf.solve_dc_opf objective ≤1.3e-12 relative on case14/30/118; dispatch ≤1e-4 MW on case14/30 and 1.87e-3 MW on case118 (the oracle's QP residual, F3, amended to 2e-3); piecewise units at marginal_cost 0 each named; no generator p_set (asserted); transformer b as admittance: n.pf() vm matches pf.solve_ac to 1e-6 for b=0.3/−0.05; unrated s_nom sentinel reported per branch (walk). Sabotages: p_set set → parity infeasible; x unscaled → rated-loop test red; b factor reverted → 2 red
   criterion: PyPSA optimize on to_network(net) agrees with opf.solve_dc_opf on case14/30/118 (1e-8 rel objective, 1e-4 MW dispatch); piecewise units at marginal_cost 0 and reported; no generator p_set
   provenance: epic R11; user 2026-08-30 "Drop + report"; m8-research.md §2; M3 spec AC-3
   fixture-fidelity: bundled MATPOWER cases with degree ≤ 2 costs, solved by PyPSA 1.2.4 / linopy 0.9.1 / HiGHS
-  tier-run: (pending)
-  readback: (pending)
 AC-4:
+  tier-run: `tests/unit/test_io_psse_raw.py` — 26 passed (S4 + neutral-tap follow-up) + UNTERMINATED_SECTION fix tests (S7); in the named sweep
+  readback: case14_v33.raw equals case14.m's Network on every bus/branch(kind)/generator/load field to 1e-9, costs None with RAW_NO_COSTS; quirks fixture matches hand-derived CZ=2/CW=3/CM=2/ZIP/end-shunt values (auditor re-derived by hand); neutral-tap transformer imports as transformer with tap None; 3-winding → one entry per record; area records reported. Sabotages: CZ=2 skipped → r red; kind dropped → 3 red on the quirks fixture
   criterion: case14_v33.raw imports equal to case14.m's Network (kind included) to 1e-9, costs absent and reported; quirks fixture matches hand-derived values; 3-winding records ignored with one report entry each
   provenance: epic R11; user 2026-08-30 "Hand-author from case14.m"; m8-research.md §3
-  tier-run: (pending)
-  readback: (pending)
 AC-5:
+  tier-run: `tests/unit/test_io_csv_bundle.py` — 56 passed (S5) + BOM/blank-line/atomic tests (S7, S8); in the named sweep
+  readback: load(dump(net)) == net and array_equal on every NetworkArrays field for 14 networks incl. 0.1+0.2, 5e-324, 1e300, −0.0, ids "01"/"1"/"" (auditor reproduced); unknown column / missing table / duplicated id / schema 99 each a named error; manifest carries the native schema version; mid-write failure leaves the old bundle byte-identical. Sabotages: .12g floats → 4 red; int-coerced ids → 20 red
   criterion: load(dump(net)) == net and array_equal on every NetworkArrays matrix for all fixtures; three malformed bundles fail with named errors; manifest names the schema version
   provenance: epic R11; user 2026-08-30 "Machine round-trip"; m8-research.md §4
-  tier-run: (pending)
-  readback: (pending)
 AC-6:
+  tier-run: `tests/unit/test_branch_kind.py tests/unit/test_json_schema_snapshot.py` — 15 + promotion/mutation tests (S8 B3); in the named sweep
+  readback: default line/transformer from tap/shift both ways; explicit transformer at nominal tap preserved through native; explicit line with a tap PROMOTED (amended, F7); mutated line round-trips through native equal to a fresh build; snapshot changed by exactly the kind property (+ its description text at 738dcf8); every pre-M8 unit test unmodified and green (920 collected pre-M8). Revert-and-watch: default forced to line → 4 red (auditor)
   criterion: Branch.kind defaults line/transformer from tap/shift; snapshot changes by one property; every pre-M8 test unmodified and green; pandapower's neutral-tap transformer round-trips as transformer
   provenance: user 2026-08-30 "Explicit kind, defaulted"; m8-research.md G4
-  tier-run: (pending)
-  readback: (pending)
 AC-7:
+  tier-run: `tests/unit/test_export_report.py tests/unit/test_io_limitations.py tests/unit/test_io_limitations_import_order` (S1, S6, S8 S9) + each module's report tests; in the named sweep
+  readback: lossless paths yield an empty report on all four modules (auditor: stdout/stderr/root logger empty on each); every lossy path names element id and field; LIMITATIONS == union of the four CODES by construction, every code documented in formats.md; registry in io/limitations.py, report.py a leaf, eight import orders with pandapower/pypsa blocked. Sabotage: a code removed from formats.md → exactly one test red
   criterion: each module's lossy conversion yields a report naming element and field; lossless yields an empty report; raise_on_error as ImportReport; no logging/printing
   provenance: user 2026-08-30 "Best effort + report"; M1 io.report
-  tier-run: (pending)
-  readback: (pending)
 AC-8:
+  tier-run: `uv run --group docs mkdocs build --strict` exit 0 at e2d6da8 (24.83s, no unlinked/anchor lines); `tests/unit/test_examples_run.py` 15 passed with example 13 at its measured budget (F4); api-docs coverage and docstrings green
+  readback: formats.md has a section per format in the matpower shape naming every code; API pages for the four modules, io.report and io.limitations; examples/13_interop.py exit 0 and embedded as example 13; changelog M8 entry; architecture and roadmap updated
   criterion: formats.md sections, API pages under the griffe guard, examples/13_interop.py exit 0 and embedded, changelog, mkdocs --strict exit 0
   provenance: epic R14; M6/M7 docs rows
-  tier-run: (pending)
-  readback: (pending)
 
 ## Tasks
 
@@ -150,8 +151,9 @@ AC-8:
 | m8-critic | critic | Step 6 five-axis review of `15e71fa..7ec0b0b` from an archive; unit-conversion and untrusted-input hunts named in the brief | record/m8-critic.md | **done** (not merge-ready: 3 blocking / 7 should-fix / 6 nits) → F7; fixes to S8 |
 | m8-s7-walkfix | senior-implementor | S7: the walk's findings (F5) — `gen_cost_coeffs` guard for `cost=None`, PyPSA unrated-`s_nom` report code, `tap_pos` 0 not NaN, RAW `UNTERMINATED_SECTION` location, CSV blank lines + BOM, docs corrections. Own worktree `mambo-power-m8-s7` on `wave/08-interop-s7` off `3f2a9a0` | record/m8-s7-report.md + 7 commits | **done** (`dcbeb5e` `MissingCostError` — the previous agent's diff was mid-sabotage (`pass  # SABOTAGE` where the raise belongs), caught by reading it; nothing in 1144 unit + 113 parity tests relied on cost-less pricing at zero; `jobs` → `VALIDATION`; `c46c063` `PYPSA_UNRATED_S_NOM_DEFAULTED` — case14's 20 unrated branches now report, so the doc example's report grew from 2 codes to 3, honestly; `591f458` fix 3 **deviation accepted**: pandapower's own case14 stores a neutral tap as `tap_side None`/NaN, which is what mambo writes, and the A16 round-trip test proved `from_ppc`'s encoding would break it — docs corrected instead; `d3ca8d4` `UNTERMINATED_SECTION` names the right section and line via the terminator comments; `044b8a9` utf-8-sig read + blank-line skip narrowed so `,,,,` is still a row; `172eb68` docs; `b56e9aa` the audit's two hygiene items). Merged into `wave/08-interop`; orchestrator-verified: 333 passed across seven affected files, every commit carries source |
 | m8-s8-criticfix | senior-implementor | S8: the critic's B1–B3 (PyPSA transformer `b` factor, `tap_changer_type`, `Branch.kind` promotion on mutation), S4 bulk export, S6 `gen.slack`, S7 atomic CSV dump, S9 registry to `io/limitations.py`, S10 no `res_bus`, four nits with new codes. Works in the wave worktree on `a78db18` (only agent there) | record/m8-s8-report.md + 11 commits | **done** (`36e8398` B1 admittance factor with a `b≠0` parity test; `9e2c9b3` B2 all four `tap_changer_type`s against `net._ppc`, `TAP_CHANGER_TYPE_UNSUPPORTED`; `df51ee8`+`738dcf8` B3 promotion + `Branch.is_transformer`, exporters route on it, mutation round-trip test; `1f442d6` S10 `res_bus` neither read nor written; `841fb46` S4 bulk creators — case300 export 3062 → 112 ms, `nets_equal` to the per-row form, column *order* differs (pandapower's creators) and is documented; `c6f9894` S6 `GEN_SLACK_PROMOTED`; `c5070ac` S7 atomic dump via staging dir + `os.replace`; `53b084a` S9 registry to `io/limitations.py`, `report.py` imports no format, eight import orders with pandapower/pypsa blocked as a test; `e2d6da8` nits incl. `PYPSA_COST_NONCONVEX`). Orchestrator-verified: 237 passed across six affected files, every commit carries source. One process slip it reported itself (a `cp` restore briefly reverted a file mid-work; re-applied before commit). Two accepted deviations: S4 is `nets_equal`-identical not byte-identical; example 13's report lines changed honestly (more codes, more issues) |
-| m8-reaudit | auditor | Re-audit at `e2d6da8` from archives: AC-1..AC-8 re-discharged, every walk/critic fix verified against its finding, revert-and-watch, coverage verdict | record/m8-audit.md (appended) | active |
-| m8-recritic | critic | Re-review at `e2d6da8`: all 16 first-pass reproductions re-run, the fixes attacked for the regression class | record/m8-critic.md (appended) | active |
+| m8-reaudit | auditor | Re-audit at `e2d6da8` from archives: AC-1..AC-8 re-discharged, every walk/critic fix verified against its finding, revert-and-watch, coverage verdict | record/m8-audit.md (appended) | **done** (8/0/0, COVERED; 2 should-fix — spec AC-6 letter, dead assertion) → F10 |
+| m8-recritic | critic | Re-review at `e2d6da8`: all 16 first-pass reproductions re-run, the fixes attacked for the regression class | record/m8-critic.md (appended) | **done** (merge after 17–22; no blockers) → F9; fixes to S9 |
+| m8-s9-recriticfix | senior-implementor | S9: re-review should-fixes 17–22 (+ nits 23–24 if cheap) in the wave worktree on `e2d6da8` | record/m8-s9-report.md + commits | active |
 
 ## Findings the review layers caught
 
@@ -266,6 +268,38 @@ agent mid-fix-1** (six files modified, nothing committed, no progress line). Par
 record-in-waiting: pytest **1430 passed / 4 skipped in 546.50s**, ruff check and format clean; mypy
 and mkdocs not reached. S7 relaunched with its own uncommitted diff as the starting point and an
 instruction to commit early. Rule added to briefs: commit at every self-contained sub-deliverable.
+
+**F9 — the critic's re-review at `e2d6da8` (`record/m8-critic.md`): merge after should-fixes 17–22;
+no blocker survives.** First-round status: 11 FIXED with output, B3 FIXED DIFFERENTLY and accepted
+(promotion + `is_transformer`), atomic dump PARTLY fixed, three nits standing; the nominal-tap NaN
+encoding and `nets_equal`-not-byte-identical bulk export accepted as rulings. Its suite run on an
+archive: 1494 / 4 / 0; example 13 now 8.5 s; case300 export 24.3 s → 333 ms on its machine. New:
+(17) `tap_neutral` NaN — pandapower's own default — with a `Ratio` changer: mambo applies tap 1.05,
+pandapower none (vm 0.945 vs 0.993), unreported; (18) pandapower ≤2.x files carry
+`tap_phase_shifter` and no `tap_changer_type`, and pandapower 3.3 still applies the tap through
+its deprecation branch while mambo imports nominal and the message claims otherwise; (19) a
+`tap2_*` second changer silently ignored; (20) the CSV dump's per-file `os.replace` loop can fail
+mid-way on Windows (read-only file, Excel holding one open) and leave a *loadable* mixed bundle plus
+an orphan temp dir; (21) `test_bulk_export_is_byte_identical…` ends in `assert … or True` — a check
+that cannot fail under a name that claims it can, the F16 class in a test; (22) `MissingCostError`
+is a behaviour change outside `io` missing from the changelog, and the spec's assumptions lack this
+round's rulings. Held under attack: every other tap formula against `_calc_tap_from_dataframe`,
+`kind` leaks via every construction path, `b` with the `s_nom` sentinel, `MissingCostError`'s
+callers, import order with pandapower/pypsa/pandas blocked, `GEN_SLACK_PROMOTED` edge cases. All
+to **S9** in the wave worktree; the spec's assumptions are the orchestrator's.
+
+**F10 — the re-audit at `e2d6da8` (`record/m8-audit.md`, appended): 8 DISCHARGED / 0 PARTIAL /
+0 REFUTED, wave COVERED; 0 blocking, 2 should-fix, 5 notes; archive suite 1494 / 4 / 0.** Every walk
+and critic fix verified on the auditor's own inputs (PyPSA trafo `b`: `pf()` vs `solve_ac` to 2e-16;
+all four `tap_changer_type`s against `net._ppc`; 26 import orders with pandapower/pypsa/pandas
+blocked; 14 sabotages each reddening exactly the guarding tests). Should-fix 1 is the spec's own
+letter: AC-6's "every pre-M8 test unmodified" stopped being literally true when the walk's
+`MissingCostError` fix inverted the pre-M8 "cost-less generator is free" test — amended in the spec
+(AC-6 + A9) by the orchestrator; changelog bullet with S9 (#22). Should-fix 2 = the critic's #21
+(the dead `or True` assertion), with S9. Notes: the dump is atomic up to the per-file move-in (= the
+critic's #20, with S9); `UNTERMINATED_SECTION` location relies on the `END OF` comments; a mutated
+network is not `==` its round-trip (kind promoted — by design); the plan's "nets_equal to the per-row
+form" is true against the test's reference, not against the pre-S8 file (column order, `res_bus`).
 
 ## Assumptions
 
