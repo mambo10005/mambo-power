@@ -604,6 +604,69 @@ def test_unsupported_tap_changer_imports_nominal_with_a_report(tap: dict[str, An
     assert tap["tap_changer_type"] in issues[0].message
 
 
+_RATIO_HV = {"tap_step_percent": 2.5, "tap_side": "hv", "tap_changer_type": "Ratio"}
+
+
+@pytest.mark.parametrize(
+    ("tap", "missing"),
+    [
+        pytest.param({"tap_pos": 2, **_RATIO_HV}, "tap_neutral", id="neutral-nan-ratio"),
+        pytest.param(
+            {
+                "tap_pos": 2,
+                "tap_step_percent": 2.5,
+                "tap_step_degree": 5.0,
+                "tap_side": "lv",
+                "tap_changer_type": "Symmetrical",
+            },
+            "tap_neutral",
+            id="neutral-nan-symmetrical",
+        ),
+    ],
+)
+def test_missing_tap_pos_or_neutral_is_no_tap_as_in_pandapower(
+    tap: dict[str, Any], missing: str
+) -> None:
+    """M8 critic finding 17: ``tap_neutral`` defaults to NaN in
+    ``create_transformer_from_parameters``, so a file with a changer type and a ``tap_pos`` but
+    no neutral is ordinary (the creator fills a missing ``tap_pos`` from ``tap_neutral``, so
+    only the neutral can be NaN through it). pandapower's ``tap_diff`` is NaN and
+    ``_replace_nan`` makes the step 0 -- no tap. The import must agree (nominal) and say which
+    column is missing, once."""
+    net = _pp_trafo_net(**tap)
+    assert _ppc_tap_shift(net) == (1.0, 0.0)  # the premise: pandapower applies no tap
+    ours, report = pj.loads_with_report(pp.to_json(net))
+    t = next(b for b in ours.branches if b.id == "t")
+    assert t.tap_ratio is None and t.shift_deg is None
+    dropped = [w for w in report.warnings if w.code == "COLUMN_DROPPED"]
+    assert len(dropped) == 1 and dropped[0].element_ids == ["t"]
+    assert f"{missing} is missing" in dropped[0].message
+    assert "TAP_CHANGER_TYPE_UNSUPPORTED" not in report.codes
+
+
+def test_ideal_shifter_with_a_missing_neutral_is_no_shift_and_reported() -> None:
+    """The ``Ideal`` twin of finding 17: pandapower's ``runpp`` cannot even solve it (NaN in the
+    shift, a ``FloatingPointError``), so there is no ``ppc`` to agree with; the import takes
+    the same missing-column rule -- no shift, ``COLUMN_DROPPED`` naming ``tap_neutral``."""
+    net = _pp_trafo_net(
+        tap_pos=2, tap_step_degree=5.0, tap_side="hv", tap_changer_type="Ideal"
+    )  # fmt: skip
+    ours, report = pj.loads_with_report(pp.to_json(net))
+    t = next(b for b in ours.branches if b.id == "t")
+    assert t.tap_ratio is None and t.shift_deg is None
+    dropped = [w for w in report.warnings if w.code == "COLUMN_DROPPED"]
+    assert len(dropped) == 1 and "tap_neutral is missing" in dropped[0].message
+
+
+def test_untapped_transformer_with_every_tap_cell_empty_is_silent() -> None:
+    """Both ``tap_pos`` and ``tap_neutral`` NaN (pandapower's own untapped row, even with a
+    changer type set) is not a dropped value: nothing in the file asked for a tap."""
+    net = _pp_trafo_net(tap_side="hv", tap_changer_type="Ratio", tap_step_percent=2.5)
+    ours, report = pj.loads_with_report(pp.to_json(net))
+    t = next(b for b in ours.branches if b.id == "t")
+    assert t.tap_ratio is None and report.codes == set()
+
+
 def test_tap_assigned_to_a_line_after_construction_exports_as_a_trafo() -> None:
     """M8 critic finding 3: ``kind`` is derived at validation; a tap assigned later must still
     reach the file (as a ``trafo`` row, re-importing with the tap), never be dropped silently."""

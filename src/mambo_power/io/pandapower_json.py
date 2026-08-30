@@ -590,16 +590,39 @@ class _Importer:
           ``tap_step_degree`` is set, else ``+-2*asin((tap_pos - tap_neutral) * tap_step_percent
           / 200)``; both set is what ``runpp`` itself refuses;
         * anything else (an unknown type, the refused ``Ideal`` case, or a ``tap_side`` that is
-          neither ``"hv"`` nor ``"lv"``): nominal tap with ``TAP_CHANGER_TYPE_UNSUPPORTED``.
+          neither ``"hv"`` nor ``"lv"``): nominal tap with ``TAP_CHANGER_TYPE_UNSUPPORTED``;
+        * ``tap_pos`` or ``tap_neutral`` missing (NaN -- ``tap_neutral``'s own default in
+          ``create_transformer_from_parameters``) under a changer type: pandapower's
+          ``tap_diff`` is NaN and ``_replace_nan`` makes the step 0, so no tap is applied on
+          either side; reported ``COLUMN_DROPPED`` naming the missing column (critic finding
+          17). Both missing is pandapower's untapped row and is silent.
         """
         df = self.pn.trafo
-        pos = float(_column(df, "tap_pos", idx, 0.0))
-        neutral = float(_column(df, "tap_neutral", idx, 0.0))
+        pos_cell = _column(df, "tap_pos", idx)
+        neutral_cell = _column(df, "tap_neutral", idx)
+        pos = 0.0 if pos_cell is None else float(pos_cell)
+        neutral = 0.0 if neutral_cell is None else float(neutral_cell)
         step = float(_column(df, "tap_step_percent", idx, 0.0))
         degree = float(_column(df, "tap_step_degree", idx, 0.0))
         side = _column(df, "tap_side", idx)
         changer = _column(df, "tap_changer_type", idx)
         diff = pos - neutral
+        if changer is not None and (pos_cell is None) != (neutral_cell is None):
+            missing, present = (
+                ("tap_pos", f"tap_neutral={neutral:g}")
+                if pos_cell is None
+                else ("tap_neutral", f"tap_pos={pos:g}")
+            )
+            self.warnings.append(
+                _issue(
+                    "COLUMN_DROPPED",
+                    f"trafo[{idx}] ({element}): {present} with tap_changer_type={changer!r} "
+                    f"but {missing} is missing (NaN): pandapower's tap step is NaN and counts "
+                    "as 0; imported at the nominal tap with no shift from the changer",
+                    element_ids=[element],
+                )
+            )
+            return vnh, vnl, 0.0
         if changer is None:
             if diff != 0.0 and (step != 0.0 or degree != 0.0):
                 self.warnings.append(
