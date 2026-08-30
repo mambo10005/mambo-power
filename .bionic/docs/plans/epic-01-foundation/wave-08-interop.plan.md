@@ -1,6 +1,6 @@
 ---
 governing-skill: superpowers:writing-plans
-sdlc-step: 5
+sdlc-step: 9
 intent: build
 rigor: audited
 scale: wave
@@ -15,6 +15,7 @@ use_worktree: true
 rigor-floor: audited
 walk: required
 design-interview: true
+cleaned: 2026-08-30
 model_plan:
   orchestrator: fable-5
   implementor: sonnet
@@ -36,7 +37,7 @@ integration-branch: epic/01-foundation
 intent: build
 rigor: audited
 scale: wave
-current: 5
+current: 9 — shipped; merge `511c6a0`
 
 - Step 0: prereqs: ok; configured 2026-08-30 via "confirm"; model_plan=fable-5/sonnet/opus;
   integration-branch=epic/01-foundation; base cdb4fef (1175 passed / 4 skipped locally; CI green on
@@ -48,10 +49,10 @@ current: 5
 - Step 3: plans/epic-01-foundation/wave-08-interop.plan.md approved by the user 2026-08-30 ("Approved — go"); design + plan + matrix locked together at that one checkpoint; governing design: the spec's `## Design` + epic.spec.md
 - Step 4: worktree: C:/Claude Projects/mambo-power-m8; base-sha: 15e71fa; branch: wave/08-interop; slices S1–S6 per `## Slices`; **baseline on the clean main checkout at 15e71fa, before any agent entered the worktree: 1175 passed / 4 skipped in 452.70s** (scratchpad `m8-baseline-15e71fa.log`, 2026-08-30 02:34Z); `.bionic/docs` is edited only by the orchestrator in the main checkout and committed on epic/01-foundation — the wave branch never touches it
 - Step 5: walk-artifact: record/m8-walk.md (0 `AC-[0-9]` hits, at 7ec0b0b, dispatched first); cmd: `uv run pytest -q -p no:cacheprovider` at 3f2a9a0; pass: 1430; total: 1430 (+4 skipped; ruff check + format clean at the same head; mypy/mkdocs cut by the F8 restart — retaken at the post-S7/S8 head); output: scratchpad `m8-gate-3f2a9a0.log`; auditor: record/m8-audit.md — 8 DISCHARGED / 0 PARTIAL / 0 REFUTED, wave COVERED (at 7ec0b0b); rows discharge in the matrix below at the final head
-- Step 6: (pending)
-- Step 7: (pending)
-- Step 8: (pending)
-- Step 9: (pending)
+- Step 6: critic: record/m8-critic.md — two full passes, `not merge-ready (3 blocking)` → `merge after should-fixes` → confirmed clean at the final sweep; every finding fixed at the layer it lives, red → green → sabotage (S8, S9)
+- Step 7: adr: docs/design/decisions.md#ADR-011 (commit 33abd13/`33abd13`); continuation: record/continuation-m8.md
+- Step 8: merge: 511c6a0 (--no-ff, epic/01-foundation, tree identical to 33abd13 modulo orchestrator-only .bionic commits); worktree-removed: C:/Claude Projects/mambo-power-m8 (2026-08-30, --force); cleanup: done; tmp-wiped: 97 m8-* files + 3 leftover M1-M3 critic dirs moved to record/, tmp/ empty; tasks-completed: all
+- Step 9: deploy: n/a (deploy_target: none — library, unpushed by convention); verified-at: 2026-08-30T17:38Z sweep at 33abd13; monitor: n/a
 
 ## Slices
 
@@ -348,6 +349,10 @@ Design assumptions A1–A8 live in the spec. Process assumptions, binding from S
 
 ## Handoff
 
-Awaiting the Step-3 approval checkpoint. On "go": commit the Step 0–3 artifacts on
-`epic/01-foundation`; create `wave/08-interop` + worktree; take the baseline on the clean main
-checkout; dispatch S1; on S1's commit, dispatch S2–S5 in parallel; S6 on all four.
+**Shipped 2026-08-30.** Wave head `33abd13` (~40 commits across S1–S9), merged `--no-ff` as
+`511c6a0` on `epic/01-foundation`, unpushed (the user's call, as M1–M7). Final sweep 1513 / 4, all
+gates clean. Audit 8/0/0 COVERED at two heads; critic clean after two full passes; walk's 8
+surprises fixed. ADR-011 in `docs/design/decisions.md`. Carries and lessons for M9 in
+`record/continuation-m8.md`. Eleven findings (F1–F11), nineteen assumptions (A1–A9 design, A11–A19
+process), spec AC-2/AC-3/AC-6/S1 corrected in place, one carried defect (F1/A19, the phase-shifter
+flow bug — a standalone bugfix task, first in line for M9).
