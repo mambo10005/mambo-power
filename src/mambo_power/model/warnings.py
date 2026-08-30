@@ -38,6 +38,7 @@ ImportIssueCode = Literal[
     "RAW_SECTION_IGNORED",
     # wave M8 (io.pandapower_json and later format modules)
     "EXTRA_EXT_GRID_DEMOTED",
+    "GEN_SLACK_PROMOTED",
     "TAP_CHANGER_TYPE_UNSUPPORTED",
     "COLUMN_DROPPED",
     "ELEMENT_DROPPED",
@@ -87,6 +88,8 @@ skipped; the message names the section and the record.
 Wave M8 interop codes (``io.pandapower_json`` first; later format modules reuse them):
 
 ``EXTRA_EXT_GRID_DEMOTED`` — a second in-service ``ext_grid`` imported as a PV generator.
+``GEN_SLACK_PROMOTED`` — with no in-service ``ext_grid``, a ``gen`` with ``slack = True``
+(pandapower's ext_grid-less reference bus) imported as the slack generator.
 ``TAP_CHANGER_TYPE_UNSUPPORTED`` — a pandapower ``trafo`` tap changer the model cannot express
 (an unknown ``tap_changer_type``, an ``Ideal`` shifter with both step columns set, a
 ``tap_side`` that is neither ``hv`` nor ``lv``); imported at the nominal tap.

@@ -35,10 +35,13 @@ Unit conventions (measured on pandapower 3.3.0 against ``fixtures/matpower/case1
   at ``p0`` taken as 0 (pandapower has no offset column).
 
 Bus roles: the first in-service ``ext_grid`` is the slack (mambo needs exactly one); any other
-``ext_grid`` becomes a PV generator (``EXTRA_EXT_GRID_DEMOTED``); a bus with an in-service ``gen``
-is ``pv``; everything else ``pq``. On export the rule runs backwards: the first in-service
-generator of the slack bus becomes ``ext_grid``, PV-bus generators ``gen``, PQ-bus generators
-``sgen``. Ids: import takes ``name`` when it is present, else ``<table>-<index>``; export writes
+``ext_grid`` becomes a PV generator (``EXTRA_EXT_GRID_DEMOTED``); with no in-service ``ext_grid``
+the first in-service ``gen`` with ``slack = True`` is the slack (``GEN_SLACK_PROMOTED``); a bus
+with an in-service ``gen`` is ``pv``; everything else ``pq``. A file with neither leaves the
+network without a slack, which ``Network`` refuses (``NO_SLACK``). On export the rule runs
+backwards: the first in-service generator of the slack bus becomes ``ext_grid``, PV-bus
+generators ``gen``, PQ-bus generators ``sgen``. Ids: import takes ``name`` when it is present,
+else ``<table>-<index>``; export writes
 the id into ``name``. ``Bus.area`` travels as an extra ``bus.area`` column (pandapower keeps
 unknown columns through ``to_json``, measured).
 """
@@ -90,11 +93,12 @@ CODES: tuple[str, ...] = (
     "FIELD_DEFAULTED",
     "ISLAND_DEACTIVATED",
     "TAP_CHANGER_TYPE_UNSUPPORTED",
+    "GEN_SLACK_PROMOTED",
     "FIELD_DROPPED",
     "COST_DROPPED",
     "BID_DROPPED",
 )
-"""Every report code this module emits (import: the first six; export: the last three plus
+"""Every report code this module emits (import: the first seven; export: the last three plus
 ``ELEMENT_DROPPED`` for storage and ``FIELD_DEFAULTED`` for an unrated transformer's
 ``sn_mva``). S6 registers them in :data:`mambo_power.io.report.LIMITATIONS`."""
 
@@ -370,14 +374,36 @@ class _Importer:
             bus = by_id[self.bus_id[bus_idx]]
             active = bool(pn.gen.at[idx, "in_service"])
             vm = float(pn.gen.at[idx, "vm_pu"])
-            if active and bus.type == "pq":
+            slack_flag = bool(_column(pn.gen, "slack", idx, False))
+            expectations: dict[str, object] = {
+                "slack": False,
+                "slack_weight": 0.0,
+                "controllable": True,
+            }
+            if active and slack_flag and not slack_taken:
+                # pandapower's ext_grid-less slack (gen.slack = True): runpp solves it as the
+                # reference bus, so the import gives it the slack role (M8 critic finding 6)
+                slack_taken = True
+                bus.type = "slack"
+                bus.vm_pu = vm
+                bus.va_deg = 0.0
+                expectations.pop("slack")
+                self.warnings.append(
+                    _issue(
+                        "GEN_SLACK_PROMOTED",
+                        f"gen[{idx}] ({gid}) at bus {bus.id!r}: gen.slack is True and no "
+                        "in-service ext_grid exists; imported as the slack generator "
+                        "(bus type 'slack', vm_pu from gen.vm_pu, va_deg 0.0)",
+                        bus_ids=[bus.id],
+                        element_ids=[gid],
+                    )
+                )
+            elif active and bus.type == "pq":
                 bus.type = "pv"
             self.bus_vset.setdefault(bus_idx, vm)
             p = float(pn.gen.at[idx, "p_mw"]) * float(_column(pn.gen, "scaling", idx, 1.0))
             p_min, p_max, q_min, q_max = self.limits("gen", idx, gid, p, 0.0)
-            self.check_columns(
-                "gen", idx, gid, {"slack": False, "slack_weight": 0.0, "controllable": True}
-            )
+            self.check_columns("gen", idx, gid, expectations)
             gens.append(
                 Generator(
                     id=gid,

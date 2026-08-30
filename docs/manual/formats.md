@@ -303,8 +303,15 @@ pandapower has no bus `type` column; roles come from what is connected. On impor
 in-service `ext_grid`** is the slack (its bus is `slack`, the `ext_grid` row becomes the slack
 generator with `v_set_pu = vm_pu` and limits from `min/max_p_mw`, `min/max_q_mvar`); every
 further in-service `ext_grid` is **demoted to a PV generator** with `EXTRA_EXT_GRID_DEMOTED`,
-because the model has exactly one slack. A bus with an in-service `gen` is `pv`; everything
-else is `pq`. `sgen` rows become generators on their PQ bus (`v_set_pu = 1.0`, `p`/`q` scaled by
+because the model has exactly one slack. With **no in-service `ext_grid`** — none at all, or
+every one switched off — the first in-service `gen` with `slack = True` (pandapower's own
+ext_grid-less reference bus, which `runpp` solves) is the slack, reported `GEN_SLACK_PROMOTED`,
+with `vm_pu` from `gen.vm_pu` and `va_deg = 0`; a `gen.slack = True` beside a live `ext_grid`
+stays a PV generator and the flag is `COLUMN_DROPPED`. A file with neither a live `ext_grid`
+nor a live slack `gen` has no reference bus, and the import ends in `NetworkValidationError`
+(`NO_SLACK`) — the network is what the file says, and the model refuses it, as it refuses a
+MATPOWER case with no type-3 bus. A bus with an in-service `gen` is `pv`; everything else is
+`pq`. `sgen` rows become generators on their PQ bus (`v_set_pu = 1.0`, `p`/`q` scaled by
 `scaling`). On export the rule runs backwards: the first in-service generator on the slack bus
 becomes `ext_grid`, PV-bus generators become `gen`, PQ-bus generators become `sgen`.
 
@@ -339,7 +346,8 @@ to compute its impedance — it re-imports as a rating.
 | Code | Direction | Repair |
 | --- | --- | --- |
 | `EXTRA_EXT_GRID_DEMOTED` | import | A second in-service `ext_grid`; imported as a PV generator (one slack). `bus_ids` names the bus. |
-| `COLUMN_DROPPED` | import | A column the model has no place for held a non-inert value (`bus.type != "b"`, `gen.slack_weight`, `line.g_us_per_km`, `trafo.pfe_kw` / `i0_percent`, a `trafo.tap_pos` off neutral under `tap_changer_type = None` (pandapower applies no tap either), `load.const_z_*` / `const_i_*`, `*.max_loading_percent`, `*.controllable`, ...); the message names table, row, column and value. |
+| `GEN_SLACK_PROMOTED` | import | No in-service `ext_grid`; the first in-service `gen` with `slack = True` became the slack generator (`bus_ids` names the bus, `element_ids` the generator). |
+| `COLUMN_DROPPED` | import | A column the model has no place for held a non-inert value (`bus.type != "b"`, `gen.slack` beside a live `ext_grid`, `gen.slack_weight`, `line.g_us_per_km`, `trafo.pfe_kw` / `i0_percent`, a `trafo.tap_pos` off neutral under `tap_changer_type = None` (pandapower applies no tap either), `load.const_z_*` / `const_i_*`, `*.max_loading_percent`, `*.controllable`, ...); the message names table, row, column and value. |
 | `TAP_CHANGER_TYPE_UNSUPPORTED` | import | A `trafo` tap changer neither pandapower nor the model can express as a ratio and a shift: an unknown `tap_changer_type`, an `"Ideal"` shifter with both `tap_step_percent` and `tap_step_degree` set (`runpp` refuses it too), or a `tap_side` that is neither `hv` nor `lv`. Imported at the nominal tap; the message names the transformer. |
 | `ELEMENT_DROPPED` | both | Import: a row of a table that is not read (`trafo3w`, `switch`, `storage`, ...) or a `poly_cost` / `pwl_cost` row that is not a generator's active-power cost. Export: a `Storage` unit (pandapower's `storage` has no efficiency columns). |
 | `FIELD_DEFAULTED` | both | Import: a missing or `NaN` limit column (`min/max_p_mw`, `min/max_q_mvar` on `ext_grid` / `gen` / `sgen`) set to the element's setpoint, so the limits pin the setpoint rather than invent a range. Export: an unrated transformer's `sn_mva` set to `base_mva`. |

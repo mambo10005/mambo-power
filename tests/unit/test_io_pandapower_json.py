@@ -767,3 +767,62 @@ def test_bulk_export_is_byte_identical_to_pandapowers_per_row_creators(build: An
 
 def _isnan(value: object) -> bool:
     return isinstance(value, float) and math.isnan(value)
+
+
+# --- gen.slack = True, pandapower's ext_grid-less slack (M8 critic finding 6) ------------------
+
+
+def _pp_slack_gen_net(*, ext_grid: str | None) -> Any:
+    """Two 110 kV buses, a line, a 10 MW load at bus 2 and a ``gen.slack = True`` at bus 1;
+    ``ext_grid`` is ``None`` (no row), ``"off"`` (a row out of service) or ``"on"``."""
+    net = pp.create_empty_network(sn_mva=100.0)
+    b1 = pp.create_bus(net, 110.0, name="a")
+    b2 = pp.create_bus(net, 110.0, name="b")
+    if ext_grid is not None:
+        pp.create_ext_grid(net, b1, vm_pu=1.03, in_service=ext_grid == "on", name="x")
+    pp.create_gen(net, b1, p_mw=0.0, vm_pu=1.01, slack=True, name="g", max_p_mw=100.0,
+                  min_p_mw=0.0, max_q_mvar=50.0, min_q_mvar=-50.0)  # fmt: skip
+    pp.create_load(net, b2, p_mw=10.0, q_mvar=1.0)
+    pp.create_line_from_parameters(net, b1, b2, 1.0, 0.1, 0.4, 10.0, 1.0)
+    return net
+
+
+@pytest.mark.parametrize("ext_grid", [None, "off"])
+def test_slack_gen_without_a_live_ext_grid_is_the_slack(ext_grid: str | None) -> None:
+    """pandapower documents ``gen.slack = True`` as the alternative to an ``ext_grid`` and
+    ``runpp`` solves it; the import used to end in ``NO_SLACK``. Now the generator takes the
+    slack role, reported, and ``pf.solve_ac`` reproduces ``runpp``."""
+    net = _pp_slack_gen_net(ext_grid=ext_grid)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pp.runpp(net, numba=False)
+    assert net.converged
+    ours, report = pj.loads_with_report(pp.to_json(net))
+    a = next(b for b in ours.buses if b.id == "a")
+    assert a.type == "slack" and (a.vm_pu, a.va_deg) == (1.01, 0.0)
+    promoted = [w for w in report.warnings if w.code == "GEN_SLACK_PROMOTED"]
+    assert len(promoted) == 1 and promoted[0].bus_ids == ["a"] and promoted[0].element_ids == ["g"]
+    assert not any(w.code == "COLUMN_DROPPED" and "slack=" in w.message for w in report.warnings)
+    from mambo_power import pf
+
+    vm = {b.id: b.vm_pu for b in pf.solve_ac(ours).buses}
+    assert vm["b"] == pytest.approx(float(net.res_bus.vm_pu.iloc[1]), abs=1e-6)
+
+
+def test_slack_gen_beside_a_live_ext_grid_stays_pv_and_is_reported_dropped() -> None:
+    ours, report = pj.loads_with_report(pp.to_json(_pp_slack_gen_net(ext_grid="on")))
+    a = next(b for b in ours.buses if b.id == "a")
+    assert a.type == "slack" and a.vm_pu == 1.03  # the ext_grid's
+    assert "GEN_SLACK_PROMOTED" not in report.codes
+    assert any(w.code == "COLUMN_DROPPED" and "slack=True" in w.message for w in report.warnings)
+
+
+def test_no_live_ext_grid_and_no_slack_gen_is_the_models_no_slack_error() -> None:
+    """Documented: a file with no reference bus at all is refused by the model, as a MATPOWER
+    case with no type-3 bus is."""
+    from mambo_power.model import NetworkValidationError
+
+    net = _pp_slack_gen_net(ext_grid="off")
+    net.gen.at[0, "slack"] = False
+    with pytest.raises(NetworkValidationError, match="NO_SLACK"):
+        pj.loads(pp.to_json(net))
