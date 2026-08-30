@@ -72,7 +72,7 @@ commit's `--stat` against it (M7 F16).
 ## Verification Matrix
 
 auditor-wave: CONFIRMED — COVERED at 7ec0b0b and e2d6da8 (every W has a criterion, every criterion an inbound citation, ownership-table citations resolve)
-stack-health: before 1175 passed / 4 skipped at 15e71fa (clean main checkout, 452.70s) → after **1494 passed / 4 skipped at e2d6da8** (268.82s; ruff check, ruff format 201 files, mypy 59 files, mkdocs --strict all clean) — +319; log scratchpad `m8-gate-e2d6da8.log`, 2026-08-30 15:31Z
+stack-health: before 1175 passed / 4 skipped at 15e71fa (clean main checkout, 452.70s) → after **1513 passed / 4 skipped at 33abd13** (205.38s; ruff check, ruff format 201 files, mypy 59 files, mkdocs --strict all clean) — +338 over the M7 baseline. This is the wave's figure of record: log scratchpad `m8-gate-33abd13.log`, 2026-08-30 17:38Z. Intermediate sweeps, each recorded above at its own head: `7ec0b0b` (1 failed — F4), `3f2a9a0`, `e2d6da8` (1494/4).
 
 | AC | tier | status | evidence | auditor |
 |---|---|---|---|---|
@@ -153,7 +153,7 @@ AC-8:
 | m8-s8-criticfix | senior-implementor | S8: the critic's B1–B3 (PyPSA transformer `b` factor, `tap_changer_type`, `Branch.kind` promotion on mutation), S4 bulk export, S6 `gen.slack`, S7 atomic CSV dump, S9 registry to `io/limitations.py`, S10 no `res_bus`, four nits with new codes. Works in the wave worktree on `a78db18` (only agent there) | record/m8-s8-report.md + 11 commits | **done** (`36e8398` B1 admittance factor with a `b≠0` parity test; `9e2c9b3` B2 all four `tap_changer_type`s against `net._ppc`, `TAP_CHANGER_TYPE_UNSUPPORTED`; `df51ee8`+`738dcf8` B3 promotion + `Branch.is_transformer`, exporters route on it, mutation round-trip test; `1f442d6` S10 `res_bus` neither read nor written; `841fb46` S4 bulk creators — case300 export 3062 → 112 ms, `nets_equal` to the per-row form, column *order* differs (pandapower's creators) and is documented; `c6f9894` S6 `GEN_SLACK_PROMOTED`; `c5070ac` S7 atomic dump via staging dir + `os.replace`; `53b084a` S9 registry to `io/limitations.py`, `report.py` imports no format, eight import orders with pandapower/pypsa blocked as a test; `e2d6da8` nits incl. `PYPSA_COST_NONCONVEX`). Orchestrator-verified: 237 passed across six affected files, every commit carries source. One process slip it reported itself (a `cp` restore briefly reverted a file mid-work; re-applied before commit). Two accepted deviations: S4 is `nets_equal`-identical not byte-identical; example 13's report lines changed honestly (more codes, more issues) |
 | m8-reaudit | auditor | Re-audit at `e2d6da8` from archives: AC-1..AC-8 re-discharged, every walk/critic fix verified against its finding, revert-and-watch, coverage verdict | record/m8-audit.md (appended) | **done** (8/0/0, COVERED; 2 should-fix — spec AC-6 letter, dead assertion) → F10 |
 | m8-recritic | critic | Re-review at `e2d6da8`: all 16 first-pass reproductions re-run, the fixes attacked for the regression class | record/m8-critic.md (appended) | **done** (merge after 17–22; no blockers) → F9; fixes to S9 |
-| m8-s9-recriticfix | senior-implementor | S9: re-review should-fixes 17–22 (+ nits 23–24 if cheap) in the wave worktree on `e2d6da8` | record/m8-s9-report.md + commits | active |
+| m8-s9-recriticfix | senior-implementor | S9: re-review should-fixes 17–22 (+ nits 23–24 if cheap) in the wave worktree on `e2d6da8` | record/m8-s9-report.md + 7 commits | **done** (`a676800`–`5baa223`; F11: its bookkeeping phase never ran — no report, no completion message, consistent with F8's restart pattern — the deliverable phase was clean and complete: worktree clear, seven commits with a full progress log. Orchestrator re-verified independently rather than trusting the log: 1218 unit passed, ruff/format/mypy clean, and wrote the report itself from the commits + progress lines, marked as such). Closes should-fixes 17–22 and nit 24: `tap_neutral`/`tap_pos` NaN → no tap, reported; legacy `tap_phase_shifter` files import the tap pandapower 3.3 still applies; `tap2_*` composed; CSV dump swaps at the directory level; the dead `or True` assertion dropped; dumps write the promoted `kind`; changelog `Changed` bullet for `MissingCostError` |
 
 ## Findings the review layers caught
 
@@ -300,6 +300,16 @@ letter: AC-6's "every pre-M8 test unmodified" stopped being literally true when 
 critic's #20, with S9); `UNTERMINATED_SECTION` location relies on the `END OF` comments; a mutated
 network is not `==` its round-trip (kind promoted — by design); the plan's "nets_equal to the per-row
 form" is true against the test's reference, not against the pre-S8 file (column order, `res_bus`).
+
+**F11 — S9's bookkeeping phase never ran (no report, no completion notification), the second
+instance of F8's restart pattern this wave.** Its deliverable phase was intact: a clean worktree,
+seven commits, a complete progress log at `.bionic/tmp/m8-s9-progress.md`. The orchestrator did not
+trust the log — re-ran `tests/unit`, ruff, format and mypy independently against the final commit
+before writing the report itself. Two-restart pattern across M7 (F17) and M8 (F8, F11) says the
+brief's "commit at every self-contained fix, progress lines per commit" instruction is necessary
+but the report-gate discipline needs a cheaper fallback: **the orchestrator writing the report from
+verified re-execution, never from an agent's self-report alone, is now the standing recovery — not
+an exception**.
 
 ## Assumptions
 
