@@ -109,9 +109,16 @@ explicitly, with a default so that no existing file, fixture or hand-built `Bran
   with `WINDV1 == WINDV2`), so the element comes back out of an exporter as a transformer
   rather than being demoted to a line by its numbers. pandapower's own case14 carries such a
   transformer, so the rule is exercised in both directions.
-- **A line with a tap is rejected.** An explicit `kind="line"` together with a tap or a phase
-  shift is a validation error at construction (`a line cannot have a tap or phase shift`): the
-  two statements contradict, and neither is silently preferred.
+- **A line with a tap is promoted.** An explicit `kind="line"` together with a tap or a phase
+  shift validates as `kind="transformer"`: the data wins over the label. This is what keeps a
+  *mutated* network loadable — entities are not frozen, and `br.tap_ratio = 1.05` on a line
+  does not re-run validation, so the object keeps `kind == "line"` in memory; its native dump
+  says `"kind": "line"` next to the tap, and `native.loads` promotes it. The same network
+  built fresh with that tap is equal to the reloaded one.
+- **Exporters route on `Branch.is_transformer`**, not on `kind` alone: it is true when
+  `kind == "transformer"` *or* the tap/shift is off-nominal, so a tap assigned after
+  construction is exported as a transformer (pandapower `trafo`, PyPSA `Transformer`) rather
+  than silently dropped from a line.
 
 Solvers never read `kind`; `numerics` builds the same π-model from `r`, `x`, `b`, `tap_ratio`
 and `shift_deg` whatever it says. The JSON schema snapshot moved once for the new field.

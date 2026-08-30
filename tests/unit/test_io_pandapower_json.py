@@ -602,3 +602,18 @@ def test_unsupported_tap_changer_imports_nominal_with_a_report(tap: dict[str, An
     issues = [w for w in report.warnings if w.code == "TAP_CHANGER_TYPE_UNSUPPORTED"]
     assert len(issues) == 1 and issues[0].element_ids == ["t"]
     assert tap["tap_changer_type"] in issues[0].message
+
+
+def test_tap_assigned_to_a_line_after_construction_exports_as_a_trafo() -> None:
+    """M8 critic finding 3: ``kind`` is derived at validation; a tap assigned later must still
+    reach the file (as a ``trafo`` row, re-importing with the tap), never be dropped silently."""
+    net = matpower.load(FIXTURES_DIR / "case14.m")
+    line = next(b for b in net.branches if b.kind == "line")
+    line.tap_ratio = 1.05
+    assert line.kind == "line"
+    text, report = pj.dumps_with_report(net)
+    back = pj.loads(text)
+    theirs = next(b for b in back.branches if b.id == line.id)
+    assert theirs.kind == "transformer"
+    assert theirs.tap_ratio == pytest.approx(1.05)
+    assert line.id in pp.from_json_string(text).trafo.name.values

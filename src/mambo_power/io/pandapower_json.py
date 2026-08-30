@@ -864,7 +864,7 @@ def _to_pandapower(net: Network, *, f_hz: float) -> tuple[Any, list[ImportIssue]
 
     for br in net.branches:
         vn_from = bus_by_id[br.from_bus].base_kv
-        if br.kind == "line":
+        if not br.is_transformer:  # kind, or a tap/shift assigned after construction
             zb = vn_from * vn_from / net.base_mva
             pp.create_line_from_parameters(
                 pn,

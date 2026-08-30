@@ -48,8 +48,10 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   bundle could not read it back.
 - `model.Branch.kind: "line" | "transformer"`, defaulted at construction — `"transformer"` iff
   the tap is off-nominal or the shift non-zero — so no existing file changes; importers set it
-  from the source table (a neutral-tap transformer stays one), exporters route on it, and an
-  explicit `"line"` with a tap is rejected. The JSON schema snapshot moved once.
+  from the source table (a neutral-tap transformer stays one), exporters route on
+  `Branch.is_transformer` (`kind` or an off-nominal tap/shift, so a tap assigned after
+  construction is still exported), and an explicit `"line"` with a tap is promoted to
+  `"transformer"`. The JSON schema snapshot moved once.
 - `io.report.ExportReport`, mirroring `ImportReport` (same issue record, `warnings` / `errors`,
   `codes`, `as_strings`, `raise_on_error`), returned by every exporter under one rule: an empty
   report means the conversion was lossless, and anything dropped, approximated or repaired is an

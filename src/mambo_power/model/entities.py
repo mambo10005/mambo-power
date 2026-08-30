@@ -58,7 +58,9 @@ class Branch(_Entity):
 
     # ``kind`` (wave M8, W6) is defaulted by ``_default_kind`` below: "transformer" iff the tap
     # or shift is off-nominal, else "line"; an explicit "transformer" at nominal tap is kept (a
-    # neutral-tap transformer is still a transformer); an explicit "line" with a tap is rejected.
+    # neutral-tap transformer is still a transformer); an explicit "line" with a tap is promoted
+    # to "transformer" (M8 critic finding 3: entities are mutable, so a line that acquires a tap
+    # by assignment must still dump/load and export as the transformer its data says it is).
 
     id: str = Field(description="Unique within branches.")
     from_bus: str = Field(description="Bus id of the from (tap) side.")
@@ -74,8 +76,20 @@ class Branch(_Entity):
         default="line",
         description="'line' or 'transformer'. Defaults to 'transformer' when tap_ratio is not "
         "None/1.0 or shift_deg is not None/0.0, else 'line'; an explicit 'transformer' at "
-        "nominal tap is kept; an explicit 'line' with a tap or shift is rejected.",
+        "nominal tap is kept; an explicit 'line' with a tap or shift is promoted to "
+        "'transformer' at validation. Assignment after construction does not re-run this "
+        "rule: exporters route on is_transformer, which reads the fields.",
     )
+
+    @property
+    def is_transformer(self) -> bool:
+        """What exporters route on: ``kind == "transformer"`` **or** an off-nominal tap/shift.
+
+        ``kind`` is derived at validation and entities are mutable, so ``br.tap_ratio = 1.05``
+        on a line leaves ``kind == "line"`` until the next validation (a native dump/load
+        promotes it). Reading the fields here means an exporter never drops such a tap.
+        """
+        return self.kind == "transformer" or not _is_nominal(self.tap_ratio, self.shift_deg)
 
     @model_validator(mode="before")
     @classmethod
@@ -86,10 +100,7 @@ class Branch(_Entity):
         if "kind" not in data:
             return {**data, "kind": "line" if nominal else "transformer"}
         if data["kind"] == "line" and not nominal:
-            raise ValueError(
-                f"branch {data.get('id')!r}: kind='line' but tap_ratio={data.get('tap_ratio')!r} "
-                f"shift_deg={data.get('shift_deg')!r}; a line cannot have a tap or phase shift"
-            )
+            return {**data, "kind": "transformer"}
         return data
 
 

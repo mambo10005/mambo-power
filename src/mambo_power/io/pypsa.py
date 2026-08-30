@@ -13,12 +13,14 @@ zero-optional-dependency import (design item R9; ``pypsa`` is a dev extra).
   ``active`` flag, so ``in_service`` is kept as a custom ``in_service`` column and every element
   at an out-of-service bus is exported ``active = False`` — what ``numerics.NetworkArrays`` does
   with such elements, so the solvers on both sides see the same network.
-* ``Branch`` with ``kind == "line"`` → ``Line`` in physical units on the from-bus base:
+* ``Branch`` with ``is_transformer`` false (``kind == "line"`` at a nominal tap) → ``Line`` in
+  physical units on the from-bus base:
   ``Zb = base_kv² / base_mva``; ``r, x`` in ohm (``× Zb``), ``b`` in siemens (``÷ Zb``).
-* ``Branch`` with ``kind == "transformer"`` → ``Transformer(model="pi")`` with ``r, x, b`` per
-  unit on the transformer's own ``s_nom`` (impedances ``r, x`` ``× s_nom / base_mva``; the
-  admittance ``b`` ``× base_mva / s_nom``), ``tap_ratio``, ``tap_side=0``
-  (mambo's tap is on the from side) and ``phase_shift`` in degrees.
+* ``Branch`` with ``is_transformer`` (``kind == "transformer"`` or an off-nominal tap/shift,
+  so a line mutated to carry a tap is not dropped) → ``Transformer(model="pi")`` with
+  ``r, x, b`` per unit on the transformer's own ``s_nom`` (impedances ``r, x``
+  ``× s_nom / base_mva``; the admittance ``b`` ``× base_mva / s_nom``), ``tap_ratio``,
+  ``tap_side=0`` (mambo's tap is on the from side) and ``phase_shift`` in degrees.
 * ``rating_mva`` → ``s_nom``; an unrated branch gets :data:`UNRATED_S_NOM_MVA` because PyPSA's
   optimiser reads ``s_nom == 0`` as "carries nothing", not "unlimited" -- an approximation, so
   the report names each such branch (``PYPSA_UNRATED_S_NOM_DEFAULTED``, M8 walk surprise 4).
@@ -159,8 +161,8 @@ def _add_buses(n: pypsa.Network, net: Network, warn: Any) -> None:
 def _add_branches(
     n: pypsa.Network, net: Network, base_kv: dict[str, float], live: set[str], warn: Any
 ) -> None:
-    lines = [br for br in net.branches if br.kind == "line"]
-    trafos = [br for br in net.branches if br.kind == "transformer"]
+    lines = [br for br in net.branches if not br.is_transformer]
+    trafos = [br for br in net.branches if br.is_transformer]
     for br in net.branches:
         if br.rating_mva is None:
             warn(

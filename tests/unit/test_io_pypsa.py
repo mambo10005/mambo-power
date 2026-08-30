@@ -348,3 +348,15 @@ def test_pypsa_is_imported_lazily() -> None:
         alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names
     ] + [node.module or "" for node in tree.body if isinstance(node, ast.ImportFrom)]
     assert not any(name == "pypsa" or name.startswith("pypsa.") for name in names)
+
+
+def test_tap_assigned_to_a_line_after_construction_exports_as_a_transformer() -> None:
+    """M8 critic finding 3: exporters route on ``Branch.is_transformer`` (kind *or* the fields),
+    so a tap assigned after construction becomes a ``Transformer`` row, not a tapless ``Line``."""
+    net = _hand_network()
+    line = next(b for b in net.branches if b.kind == "line")
+    line.tap_ratio = 1.05
+    assert line.kind == "line"
+    n = io_pypsa.to_network(net)
+    assert line.id in n.transformers.index and line.id not in n.lines.index
+    assert n.transformers.loc[line.id, "tap_ratio"] == 1.05
