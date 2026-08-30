@@ -204,6 +204,8 @@ class _Importer:
     # -- reporting
 
     def dropped_column(self, element: str, table: str, index: Any, field: str, value: Any) -> None:
+        if hasattr(value, "item"):  # numpy scalar -> Python scalar, so the message reads 50.0
+            value = value.item()
         self.warnings.append(
             _issue(
                 "COLUMN_DROPPED",
