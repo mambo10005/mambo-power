@@ -41,12 +41,14 @@ RAW import, fixed across `opf`/`market`/`jobs`. `examples/13_interop.py`. ADR-01
 
 ## Carry-overs into M9
 
-1. **The `opf.dc_opf` phase-shifter flow defect (F1, ruled A19)** — the flow-limit rows never
-   redistribute a shifter's injection through the PTDF, so a network with `shift_deg != 0` gets
-   wrong (often `Infeasible`) `opf`/`market` flows; `pf.solve_dc` is right. Every M8 importer's
-   `formats.md` limitations say so. **Ruled a standalone bugfix task right after M8**, not inside
-   it — this is the first M9 item, ahead of the release work itself, because RAW/pandapower imports
-   are exactly how shifter networks start arriving.
+1. **CLOSED 2026-08-30** — the `opf.dc_opf` phase-shifter flow defect (F1, A19) was fixed as a
+   standalone bugfix task (`task/shifter-flow-fix`, merged `e9d454a` on `epic/01-foundation`) before
+   M9 opened. Its own review found the first pass incomplete: `opf/multiperiod.py` and
+   `opf/redispatch.py` carried independent copies of the identical bug, live end-to-end through
+   `market.solve_zonal`/`solve_multiperiod` (measured 81.4–107.2 MW flow errors, the exact
+   false-`Infeasible` failure mode) — extended and closed across two full audit/critic passes. All
+   `formats.md` caveats removed for real. See `record/task-shifter-flow-fix.plan.md` for the full
+   record; nothing carries forward from this item.
 2. **`res_bus` was read and written by an early landing of the pandapower importer/exporter**,
    against the spec's own Not-doing; removed at Step 6 (critic S10). Watch for the same class —
    reading a results table as an input — in any future format.
