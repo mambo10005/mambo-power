@@ -81,3 +81,40 @@ wave finishes and ships what exists, it doesn't start from zero.
    0.1.0 boundary?
 5. The PyPI trusted-publisher form values (`publish.yml`, `pypi` environment, owner/repo) were
    already given to the user outside this SDLC run — confirm no drift before Step 5's live check.
+
+## Design ledger (Step 2 interview, 2026-08-31)
+
+Frame ratified by the user ("Frame holds — walk S1"): three parallel tracks (tutorials, nav
+reorg, release mechanics), four strategic decisions walked one per turn, five tactical defaults
+surfaced at ratification.
+
+- **S1 — four tutorials, difficulty-tiered.** 1) load a case, run a power flow, read results;
+  2) DC-OPF + LMPs + N-1; 3) a nodal market clearing (the clearest market mode); 4) agents or
+  interop, framed as "where to go next." Each self-contained, ~15–20 min, referencing the
+  previous. *Rejected:* one long end-to-end notebook (worse for a reader who wants one topic, one
+  giant file to maintain); six notebooks one per market mode (most new content and CI time; N-1
+  and interop already have strong manual/example coverage and don't need a dedicated narrative).
+- **S2 — `nbmake` for CI execution.** Fails on any exception or nonzero exit; no output-diffing,
+  so it doesn't fight the solver's own float noise the way `nbval`'s default snapshot-compare
+  would — this repo has hit that exact false-failure class three times (case118, case30, macOS
+  ULPs). Matches the examples' "it ran clean" bar. *Rejected:* `nbval` (real upkeep tagging every
+  solver-number cell float-tolerant, for a benefit — catching silent output drift — the examples'
+  own convention doesn't provide either).
+- **S3 — Manual stays flat; `Tutorials` added above it.** The 12 Manual pages already read in
+  dependency order (model → formats → numerics → power-flow → opf → n1 → nodal → multiperiod →
+  zonal → agents → results → jobs); splitting an already-ordered list adds ceremony without fixing
+  a real confusion. *Rejected:* Core/Markets/Interop sub-groups (more nav editing, a grouping
+  choice someone has to keep consistent as future waves add pages).
+- **S4 — the changelog coexists.** The nine hand-written wave sections stay as history under a
+  dated archive; `python-semantic-release` adds new entries above them from 0.1.0 forward,
+  generated from conventional-commit messages — a floor, not a ceiling, so a future wave can still
+  write its own richer prose section if it chooses. *Rejected:* semantic-release taking over
+  entirely (loses the richer prose every wave from M1 has been writing, for no benefit this repo
+  needs).
+
+Tactical defaults, surfaced at ratification: **T1** a GitHub `pypi` environment manual-approval
+gate on the publish workflow (offered earlier this session, no objection); **T2** the `v0.1.0` tag
+is cut manually at Step 9, `semantic-release` computes every bump after that; **T3** `publish.yml`
+triggers only on a pushed `v*` tag, never on every commit to `epic/01-foundation`; **T4**
+`mkdocs-jupyter` is a docs-group dependency, not a runtime one; **T5** the four tutorials live
+under `docs/tutorials/`, one `.ipynb` each plus a short intro `.md`.

@@ -1,6 +1,6 @@
 ---
 governing-skill: superpowers:writing-plans
-sdlc-step: 3
+sdlc-step: 4
 intent: build
 rigor: audited
 scale: wave
@@ -35,7 +35,7 @@ integration-branch: epic/01-foundation
 intent: build
 rigor: audited
 scale: wave
-current: 3
+current: 4
 
 - Step 0: prereqs: ok; configured 2026-08-30 via "confirm"; base 9012c43 (1539/4, CI green on
   all 8 matrix jobs)
@@ -44,6 +44,10 @@ current: 3
   provenance, `## Design` ratified 2026-08-31 after S1–S4 walked one per turn, T1–T5 surfaced
   at ratification)
 - Step 3: plans/epic-01-foundation/wave-09-release-0.1.plan.md approved by the user 2026-08-31 ("Approved — go"); design + plan + matrix locked together at that one checkpoint; governing design: the spec's `## Design` + epic.spec.md
+- Step 4: worktree C:/Claude Projects/mambo-power-m9 on wave/09-release-0.1 from d18aaea, slices
+  in their own worktrees per A12. **Baseline on the clean main checkout at d18aaea, before any
+  agent entered a worktree: 1539 passed / 4 skipped in 1949.56s** (scratchpad
+  m9-baseline-d18aaea.log, 2026-08-31 03:13Z).
 
 ## Slices
 
@@ -121,6 +125,10 @@ AC-6:
 
 | id | role | unit | deliverable | status |
 |---|---|---|---|---|
+| m9-s1-tutorials | senior-implementor | S1: four narrative tutorial notebooks + intro page (W1). Own worktree `mambo-power-m9-s1` on `wave/09-release-0.1-s1` | record/m9-s1-report.md + commits | active |
+| m9-s4-getting-started | implementor | S4: PyPI-install-text-vs-tag drift guard (W5, AC-3). Own worktree `mambo-power-m9-s4` | record/m9-s4-report.md + 1 commit | **done** (`33412e7`, merged `fc8bc85`). S4 finished the work and reported holding, uncommitted, on its own full-suite background run before committing — the F8/F11/F17 pattern this session has hit repeatedly. Orchestrator verified independently (20/20 guard tests, the guard passing against the real getting-started.md) and committed directly rather than waiting on the agent's own background run |
+| m9-s5-semantic-release | senior-implementor | S5: python-semantic-release config, changelog restructure preserving all nine wave sections verbatim (W6, AC-4). Own worktree `mambo-power-m9-s5` | record/m9-s5-report.md + commits | active |
+| m9-s6-publish | senior-implementor | S6: publish.yml — tag-triggered, OIDC-only, pypi environment (W7, AC-5). Own worktree `mambo-power-m9-s6` | record/m9-s6-report.md + 1 commit | **done** (`a922ce6`, merged `bfddb0a`). Orchestrator-verified: trigger is exactly `push: tags: [v*]`, no `branches:`/`pull_request:`/`workflow_dispatch:`; `id-token: write` scoped only to the publish job; no `password`/`api-token` input on `gh-action-pypi-publish@v1.14.2`; a version-consistency check gates the build. Caught and fixed its own mistake before committing (a fabricated action SHA pin, corrected to a verified real tag). Dropped the optional `workflow_dispatch` escape hatch entirely rather than gate it — the safer reading of AC-5, kept as built |
 
 ## Assumptions
 
@@ -147,6 +155,7 @@ Design assumptions A1–A4 live in the spec. Process assumptions, binding from S
 
 ## Handoff
 
-Awaiting the Step-3 approval checkpoint. On "go": commit Steps 0–3, create `wave/09-release-0.1` +
-worktree, baseline on the clean checkout, dispatch S1 (tutorials) and S4/S5/S6 in parallel (no
-dependency on S1); S2 follows S1, S3 follows S2; S7 closes.
+Step 4 open: worktree `C:/Claude Projects/mambo-power-m9` on `wave/09-release-0.1` from `d18aaea`;
+baseline dispatched on the clean main checkout. S1/S4/S5/S6 each in their own worktree
+(`mambo-power-m9-s1/s4/s5/s6`) per A12, dispatched in parallel. S2 (needs S1's notebooks) and S3
+(needs S2's nav entry) dispatch once S1/S2 land respectively; S7 closes once S1–S6 are merged.
