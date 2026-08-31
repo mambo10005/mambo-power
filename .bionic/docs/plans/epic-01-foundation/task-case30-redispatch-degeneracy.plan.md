@@ -129,6 +129,47 @@ group not asserted), not simple point-wise equality. This generalizes ADR-009's 
 rather than special-casing case30, and stays sabotage-resistant — a real bug moving mass *out* of a
 redundant group, or getting the aggregate wrong, still fails.
 
+
+## T2 fix (2026-08-31, `ab2a89f`, `case30-t2-report.md`)
+
+**`tests/_degeneracy.py`** (new, shared by both test files): `ptdf_redundant_groups` clusters
+branch-flow rows that are *proportional* — not just equal — restricted to decision-variable
+columns, generalizing T1's exact-tie finding (row 11 turns out to be in the same rank-1 cluster as
+T1's {10,13}, at weight 0.5714 — implied by T1's "2D null space concentrated in {10,11,13}" but not
+spelled out as weighted). A group's KKT invariant is the **weighted** sum (reduces to a plain sum
+at weight 1, an exact tie); rows that are the zero vector on decision columns get no invariant at
+all — dual-feasible at any value, nothing to assert. D1's `flow_limit` and the LMP test both now
+compare point-wise outside redundant groups, weighted-group-sum inside them; the LMP test adds an
+independent structural-tie check (PTDF identical across *every* row, not just decision ones) for the
+bus-9/bus-11 radial pendant pair.
+
+**T1's own open gap closed, algebraically, no Linux needed.** T1 ruled out {10,11,13} for the
+LMP-tie failure by dotting its null space against `arr.bus_ids[2]`/`[29]` — **array-index** order.
+The failing assertion sorts by `sorted(final)` — **bus-id lexical** order — so position 2 is bus-11,
+position 29 is bus-9, not the buses T1 checked. Confirmed directly: PTDF is identical for bus-9 and
+bus-11 across all 41 rows (a plain radial identity), tied at two different shared values 8.9e-6
+apart on Windows's own "good" vertex — the *same* mechanism as the D1 swap, not a second one.
+
+**A bug in its own first draft, caught before shipping.** Pooling every redundant group into one
+combined least-squares fit let an unrelated defect on one group's bus inflate every other group's
+residual, masking real defects — found by the sabotage sweep, fixed by fitting each group
+separately against only its own buses.
+
+**Sabotage, 6/6, against the exact CI-reported failure shapes**: D1's row-10↔13 swap and the LMP
+test's bus-9/bus-11 shift (2.920348→3.938303, the CI run's own numbers) both reproduce the original
+bug and are correctly rejected by the new checks (accepted as legitimate by the old point-wise
+ones, which is the CI failure); an unrelated row/bus, a redundant group's own aggregate, and the
+structural tie itself (bus-11 moving without bus-9) are all correctly rejected too.
+
+**case14 carries one dormant redundant group** (every row measured exactly zero on all three
+solves) — quotienting is provably lossless there; noted in the test's own docstring.
+
+**Regression**: `tests/unit` 1242 passed, `tests/parity` 292 passed / 4 skipped; both target tests
+individually green; case300's shared helper imported, not duplicated, unchanged in behavior; 25/25
+Windows repro (confirms stability, not discriminating power — the sabotage proofs are that).
+Orchestrator-verified independently: 45/45 in `test_market_zonal.py` + the two originally-failing
+tests. Named sweep dispatched at `ab2a89f`.
+
 ## Handoff
 
 T1 dispatched first, alone, with an explicit stop-before-fixing instruction. The orchestrator
