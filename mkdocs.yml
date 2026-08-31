@@ -37,6 +37,17 @@ theme:
 plugins:
   - search
   - autorefs
+  - mkdocs-jupyter:
+      # W3 (wave-09-release-0.1): the four tutorial notebooks were executed once via
+      # nbconvert when S1 authored them (and are re-executed fresh on every CI push by
+      # nbmake, .github/workflows/ci.yml's `tutorials` job) — the outputs already stored in
+      # the .ipynb files ARE the CI-verified numbers. `execute: false` (the plugin's own
+      # default) renders those stored outputs at `mkdocs build` time instead of re-running
+      # solver code during a docs build, which would slow every build and duplicate work
+      # nbmake already does as the CI-enforced source of truth.
+      include: ["tutorials/*.ipynb"]
+      execute: false
+      include_source: false
   - mkdocstrings:
       default_handler: python
       handlers:
@@ -101,6 +112,12 @@ extra_javascript:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - Tutorials:
+      - tutorials/index.md
+      - 1. Your first power flow: tutorials/01-first-power-flow.ipynb
+      - 2. DC-OPF and N-1 screening: tutorials/02-dc-opf-and-n1.ipynb
+      - 3. A nodal market: tutorials/03-nodal-market.ipynb
+      - 4. Where next: tutorials/04-where-next.ipynb
   - Manual:
       - Network model: manual/model.md
       - File formats: manual/formats.md
