@@ -43,6 +43,13 @@ so `uv run` provisions `dev` and nothing else, and the last line then fails with
 The `install-smoke` CI job additionally builds the wheel and sdist and installs each into a
 clean virtual environment.
 
+`getting-started.md`'s install instructions may not claim PyPI availability until a matching
+`v0.1.0`+ git tag exists — enforced by `scripts/check_pypi_sequencing.py` in the
+`pypi-sequencing` CI job. The page is meant to read "not on PyPI yet ... install from source"
+until the real `v0.1.0` tag is cut; if a future edit adds an unqualified `pip install
+mambo-power` / `uv add mambo-power` line ahead of that tag, this check fails the build rather
+than letting the live docs site claim a release that doesn't exist yet.
+
 ## Test tiers and markers
 
 Tests live under `tests/` in three directories; the matching marker is applied automatically
