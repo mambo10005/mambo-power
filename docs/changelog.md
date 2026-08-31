@@ -5,11 +5,15 @@ All notable changes to mambo-power are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). Nothing has been released yet; the first release
 will be 0.1.0 on PyPI (wave M9).
 
-## [Unreleased]
+<!-- version list -->
 
-One section per wave, newest first. Nothing on this page has been released. Which waves have
-merged to `epic/01-foundation` and which are still on their own branch is tracked in [the home
-page's roadmap table](index.md), not restated here, so this page cannot go stale about it.
+## Released
+
+One hand-written section per wave, newest first — history now that `python-semantic-release`
+(wave M9) generates new entries above this heading, from the `v0.1.0` tag forward, one per
+computed version, from conventional-commit messages. Which waves have merged to
+`epic/01-foundation` and which are still on their own branch is tracked in [the home page's
+roadmap table](index.md), not restated here, so this page cannot go stale about it.
 
 ### Fixed — case30 redispatch/zonal dual degeneracy in CI (2026-08-31)
 
@@ -543,4 +547,4 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   withdraws the earlier "0.107 pu" and "pandapower cannot converge with Q-limits" figures,
   which came from a tap-side defect in the research's oracle copy, not from the data.
 
-[Unreleased]: https://github.com/mambo10005/mambo-power/commits/epic/01-foundation
+[Released]: https://github.com/mambo10005/mambo-power/commits/epic/01-foundation
