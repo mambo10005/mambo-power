@@ -25,11 +25,13 @@ dev = [
   "pypsa",
   "ruff",
   "mypy",
+  "nbmake",
 ]
 docs = [
   "mkdocs-material>=9.7",
   "mkdocstrings[python]>=1.0",
   "pymdown-extensions>=10.16",
+  "mkdocs-jupyter",
 ]
 
 [tool.hatch.build.targets.wheel]
