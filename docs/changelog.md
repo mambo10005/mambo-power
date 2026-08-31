@@ -11,6 +11,17 @@ One section per wave, newest first. Nothing on this page has been released. Whic
 merged to `epic/01-foundation` and which are still on their own branch is tracked in [the home
 page's roadmap table](index.md), not restated here, so this page cannot go stale about it.
 
+### Fixed — case30 redispatch/zonal dual degeneracy in CI (2026-08-31)
+
+- `test_market_zonal.py`'s AC-4 LMP comparison and `test_opf_redispatch.py`'s D1 theorem test on
+  case30 asserted a specific dual solution where the LP has more than one: a zero-injection radial
+  node makes two rated branches' PTDF rows exactly redundant, so HiGHS has legitimate freedom in
+  how it splits the shadow price between them, and which split it picks is platform-sensitive
+  (reproduced failing on `windows-latest` at `cdb4fef` and on `ubuntu-latest` at the pushed M9
+  head, never both). Fixed by quotienting the comparison by proven PTDF-row redundancy
+  (`tests/_degeneracy.py`) rather than widening a tolerance — [Design › Decisions](design/decisions.md)
+  gains ADR-012.
+
 ### Fixed — the DC-OPF phase-shifter flow defect (M7 F1, M8 A19)
 
 - `opf.dc_opf`'s flow-limit row constant, `opf.solve_dc_opf`'s derived `branches[].p_from_mw`,
