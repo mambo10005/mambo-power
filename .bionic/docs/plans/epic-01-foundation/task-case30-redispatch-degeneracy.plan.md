@@ -30,7 +30,7 @@ integration-branch: epic/01-foundation
 intent: bugfix
 rigor: audited
 scale: task
-current: T0
+current: T2
 
 - T0: prereqs: ok; configured 2026-08-31; base 059e533 (1539 passed / 4 skipped locally on
   Windows). Discovered on the first CI run since M7's cdb4fef (74 commits, M8 + shifter-fix).
@@ -90,6 +90,44 @@ re-verify rather than trust this scope note alone). No blanket tolerance change 
 | T1 | bugfix | audited | **Diagnose only — no fix yet.** Confirm or refute primal degeneracy on case30's redispatch optimum: are two or more flow-limit rows simultaneously at (or within solver tolerance of) their rating at the point in question? Does perturbing the LP's tie-breaking (e.g. a microscopic cost perturbation on one generator, or forcing HiGHS's simplex vs IPM) reproduce BOTH observed dual vectors on the same machine, proving both are legitimate optima? Confirm the primal (`dispatch_mw`, `welfare`, `objective_cost`) truly agrees to a tight tolerance across whichever dual vertex is chosen. Report with hard numbers before any fix is written. | pending |
 | T2 | bugfix/refactor | audited | Once T1 reports, design and implement the actual discriminating check (shape TBD by T1's findings — not a tolerance widen, not `priced ⊆ at_rating`) for both failing tests, or a documented reason case30 should be replaced by a non-degenerate fixture for these two assertions. Regression: full suite; specifically re-verify the tests still catch a real dual bug (sabotage: perturb a rating and confirm redness). | pending |
 | T3 | build | audited | Push a probe branch, confirm CI green on all matrix cells; merge to `epic/01-foundation`; document the finding in `docs/design/decisions.md` if it rises to ADR significance (extending ADR-009's own case300 finding to case30 — likely yes, momentous enough: this ships in M9's release CI). | pending |
+
+
+## T1 diagnosis (2026-08-31, `case30-t1-diagnosis.md`)
+
+**Verdict: genuine LP/QP dual degeneracy, proven algebraically, not a correctness bug — for the
+redispatch D1 test.** Windows never flipped the tie in 25 fresh-process reruns. Bus-9
+(`arr.bus_ids[8]`) carries zero net injection — no generator, load or shunt — sitting between
+`branch-11` (row 10, bus-6→bus-9) and `branch-14` (row 13, bus-9→bus-10); both branches sit exactly
+at rating (overloads 1.8e-15/2.7e-15 MW). PTDF rows 10 and 13, restricted to every column any
+decision variable touches, are identical to 1.2e-17 (they differ only on bus-9's own column, by
+exactly 1.0 — the PTDF self-column identity, which nothing multiplies). The active-set matrix
+`{0,10,11,13,19,25}` restricted to those columns has rank 4, not 6 — a real 2-D null space
+concentrated in rows {10,11,13}. Four independent solves (nodal + three redispatch starts) and 24
+microscopic cost perturbations (±1e-9/±1e-7 on each generator) all landed on the same vertex
+(row 13 only) on Windows — the primal is essentially rigid, exactly ADR-009's case300 signature,
+but the tie-break's *other* vertex was never visited on this machine. **A full scan found 19
+branch pairs total in case30 with exactly-redundant PTDF rows** — this fixture is riddled with
+zero-injection radial topology, not a one-off.
+
+For the LMP-tie test (bus-2/bus-29): the {10,11,13} redundancy is ruled out (its null-space
+directions dot to ~0 against bus-2's and bus-29's PTDF columns — reallocating that dual mass cannot
+move either bus's LMP). A second candidate family exists (rows 36/37/38, the bus-25→…→30 radial
+tail terminating at bus-30, adjacent to bus-29) but wasn't confirmed active on Windows. **Same
+class, not conclusively pinned to the exact mechanism** — the one experiment left undone needs
+either the CI run's own dual vector or a Linux solve.
+
+**The test author's own commit** (`f1782e8`, M6/S5) shows they knew case300 was degenerate and
+believed case30 was not — the 1e-3 tolerance was sized against one measured run (8.92e-6 agreement,
+100x headroom) for ordinary float noise, never against a real vertex swap (~1.02, three orders
+bigger). **Blind luck, not deliberate headroom.**
+
+**Design implication for T2**: the fix shape T1's own tooling makes obvious — a general
+PTDF-column-redundancy detector (already built and validated against all 19 pairs) that both tests'
+dual/LMP comparisons should *quotient by*: assert equality up to the known degenerate equivalence
+classes (aggregate dual mass conserved within a redundant group; individual attribution within the
+group not asserted), not simple point-wise equality. This generalizes ADR-009's own resolution
+rather than special-casing case30, and stays sabotage-resistant — a real bug moving mass *out* of a
+redundant group, or getting the aggregate wrong, still fails.
 
 ## Handoff
 
