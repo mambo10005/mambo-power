@@ -93,6 +93,14 @@ from mambo_power.results import (
     MarketZonalResult,
 )
 from tests._bids import with_bids
+from tests._degeneracy import (
+    assert_lmps_agree_up_to_redundancy,
+    decision_variable_bus_columns,
+    ptdf_redundant_groups,
+)
+from tests._degeneracy import (
+    congestion_residual_off as _congestion_residual_off,
+)
 from tests._fixtures import FIXTURES_DIR
 from tests._rated import rated_network
 from tests._zones import corridors, promote_areas_to_zones
@@ -560,19 +568,49 @@ def test_ac4_the_redispatched_point_is_the_nodal_optimum(
 def test_ac4_final_lmps_equal_the_nodal_lmps_on_case30(
     case30: tuple[Network, MarketZonalResult, MarketNodalResult],
 ) -> None:
-    """AC-4's price clause, asserted tightly on the fixture where it can be (A20). The final LMPs
-    come from ``lmp_decomposition`` over the *redispatch* LP's balance and flow-limit duals; the
-    reference comes from the same decomposition over ``dc_opf``'s. Measured agreement: 8.9e-6
-    $/MWh on prices of order 6.8."""
-    _net, result, nodal = case30
+    """AC-4's price clause on case30, quotiented by known PTDF-row redundancy
+    (``tests._degeneracy``; ``.bionic/docs/record/case30-t1-diagnosis.md`` and its T2 follow-up).
+    The final LMPs come from ``lmp_decomposition`` over the *redispatch* LP's balance and
+    flow-limit duals; the reference comes from the same decomposition over ``dc_opf``'s. Measured
+    agreement on a "good" Windows vertex: 8.9e-6 $/MWh on prices of order 6.8.
+
+    case30 was believed non-degenerate at authoring time (the 1e-3 tolerance was sized against
+    that one 8.9e-6 measurement, ~100x headroom for float noise). It is not: branch-11/branch-12/
+    branch-14's flow-limit rows around bus-9 (a zero-injection node) are exactly redundant, proven
+    by rank deficiency, not measurement, and Ubuntu's highspy build has been observed to land on
+    the *other* KKT-legitimate vertex, producing a real ~1.02 \\$/MWh gap the flat tolerance cannot
+    see through. The CI failure's own "bus indices [2] and [29]" name positions in ``sorted(final)``
+    (bus-id lexical order) — ``bus-11`` and ``bus-9`` respectively, exactly this redundant group's
+    own two "internal" buses (PTDF[row, bus-9] == PTDF[row, bus-11] for *every* row: bus-11 is a
+    radial continuation of bus-9, so the two always share one LMP, tied to each other in both the
+    chain and the reference, at two different values on the degenerate vertices the two Windows/
+    Ubuntu builds pick — reproduced and confirmed directly on this worktree,
+    ``.bionic/tmp/case30_check_bus9_bus11.py``). This is the *same* mechanism as
+    ``test_opf_redispatch.py``'s D1 failure, not a second, unconfirmed one — T1's diagnosis ruled
+    the group out using the wrong bus indices (array order, not the lexically-sorted order this
+    assertion actually uses).
+    """
+    net, result, nodal = case30
+    arr = NetworkArrays.from_network(net)
+    ptdf_matrix = ptdf(arr)
+    bid_coeffs, pwl_bids = load_bid_coeffs(net, arr)
+    elastic = sorted(set(bid_coeffs) | set(pwl_bids))
+    elastic_idx = np.asarray(elastic, dtype=np.int64)
+    decision_cols = decision_variable_bus_columns(arr.gen_bus, arr.load_bus[elastic_idx])
+    groups, zero_rows = ptdf_redundant_groups(ptdf_matrix, decision_cols)
+
     final = {row.id: row.lmp for row in result.buses}
     reference = {row.id: row.lmp for row in nodal.buses}
     assert set(final) == set(reference)
     ids = sorted(final)
-    assert_allclose(
+    bus_index = {bus_id: k for k, bus_id in enumerate(arr.bus_ids)}
+    ptdf_in_id_order = ptdf_matrix[:, [bus_index[i] for i in ids]]
+    assert_lmps_agree_up_to_redundancy(
         np.array([final[i] for i in ids]),
         np.array([reference[i] for i in ids]),
-        rtol=0.0,
+        ptdf_in_id_order,
+        groups,
+        zero_rows,
         atol=CASE30_LMP_ATOL,
     )
 
@@ -590,24 +628,6 @@ def _at_rating_branch_indices(
         if bid in rating and abs(abs(flow[bid]) - rating[bid]) <= CASE300_QUANTITY_ATOL
     }
     return [k for k, bid in enumerate(arr.branch_ids) if bid in ids], ids
-
-
-def _congestion_residual_off(
-    difference: np.ndarray, ptdf_matrix: np.ndarray, branch_rows: Sequence[int]
-) -> float:
-    """Sup-norm of what is left of ``difference`` (a per-bus congestion vector) after the best fit
-    by flow duals living **only** on ``branch_rows``.
-
-    A congestion component is by construction ``PTDFᵀ mu`` for a dual vector ``mu`` supported on the
-    binding branches, so two solves' congestion components differ by ``PTDFᵀ(mu_a − mu_b)``. Asking
-    which branch rows can reproduce that difference asks *where the two solvers disagreed*, and a
-    least-squares fit answers it without either solver having to hand over its dual vector.
-    """
-    if not branch_rows:
-        return float(np.max(np.abs(difference)))
-    columns = ptdf_matrix[list(branch_rows), :].T
-    coefficients, *_ = np.linalg.lstsq(columns, difference, rcond=None)
-    return float(np.max(np.abs(columns @ coefficients - difference)))
 
 
 def test_ac4_case300_prices_agree_except_across_the_degenerate_face(

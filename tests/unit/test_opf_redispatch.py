@@ -56,6 +56,12 @@ from mambo_power.opf.redispatch import (
 )
 from mambo_power.pf import dc as pfdc
 from tests._bids import with_bids
+from tests._degeneracy import (
+    assert_flow_limit_duals_agree_up_to_redundancy,
+    assert_lmps_agree_up_to_redundancy,
+    decision_variable_bus_columns,
+    ptdf_redundant_groups,
+)
 from tests._fixtures import FIXTURES_DIR
 from tests._rated import rated_network
 from tests._zones import promote_areas_to_zones, zone_of_bus
@@ -310,12 +316,30 @@ def test_d1_theorem_redispatch_reaches_the_nodal_optimum_from_any_start(case: st
     """D1's theorem: for **any** bound-feasible ``(p0, d0)``, the redispatched point is the nodal
     optimum — quantities to :data:`DISPATCH_TOL_MW`, welfare to :data:`WELFARE_REL_TOL`, prices to
     :data:`DUAL_TOL`. If this fails, the objective is wrong, not the theorem.
+
+    The price clause is quotiented by known PTDF-row redundancy
+    (``tests._degeneracy``, ``.bionic/docs/record/case30-t1-diagnosis.md``): rated case30 sits on a
+    genuine dual-degenerate face at branch-11/branch-12/branch-14 around bus-9 (a zero-injection
+    node, so two of the three branches' flow-limit rows are literally redundant constraints), proven
+    by rank deficiency of the restricted active-constraint matrix — not a measurement, algebra. Two
+    equally optimal solves may legitimately split that bottleneck's shadow price differently among
+    the three rows; only the group's own conserved (weighted) sum is a KKT invariant, so that is
+    what is asserted for those rows, point-wise everywhere else. case14 also carries one
+    structurally redundant group (branches never simultaneously at rating in this fixture; nodal
+    and both starts keep it at exactly zero every time), so quotienting changes nothing there --
+    verified by direct measurement, not assumed -- and the assertion is exactly as strong as the
+    point-wise form it replaces.
     """
     net = _elastic_network(case)
+    arr, *_rest, elastic = _problem(net)
     nodal = _nodal(net)
     assert nodal.status == "Optimal"
     nodal_welfare = _welfare_of(net, nodal.dispatch_mw, nodal.demand_dispatch_mw)
     nodal_lmp = lmp_decomposition(nodal.duals, nodal.ptdf).lmp
+
+    elastic_idx = np.asarray(elastic, dtype=np.int64)
+    decision_cols = decision_variable_bus_columns(arr.gen_bus, arr.load_bus[elastic_idx])
+    groups, zero_rows = ptdf_redundant_groups(nodal.ptdf, decision_cols)
 
     for label, p0, d0 in _starting_points(net):
         solution = _redispatch(net, p0, d0)
@@ -330,11 +354,24 @@ def test_d1_theorem_redispatch_reaches_the_nodal_optimum_from_any_start(case: st
         assert solution.welfare == pytest.approx(nodal_welfare, rel=WELFARE_REL_TOL), label
         assert solution.duals is not None
         assert solution.duals.balance == pytest.approx(nodal.duals.balance, abs=DUAL_TOL), label
-        assert solution.duals.flow_limit == pytest.approx(nodal.duals.flow_limit, abs=DUAL_TOL), (
-            label
+        assert_flow_limit_duals_agree_up_to_redundancy(
+            solution.duals.flow_limit,
+            nodal.duals.flow_limit,
+            groups,
+            zero_rows,
+            atol=DUAL_TOL,
+            label=f"{case}/{label}: ",
         )
         redispatch_lmp = lmp_decomposition(solution.duals, solution.ptdf).lmp
-        assert redispatch_lmp == pytest.approx(nodal_lmp, abs=DUAL_TOL), label
+        assert_lmps_agree_up_to_redundancy(
+            redispatch_lmp,
+            nodal_lmp,
+            nodal.ptdf,
+            groups,
+            zero_rows,
+            atol=DUAL_TOL,
+            label=f"{case}/{label}: ",
+        )
         # the reduced costs come back on the delta columns and mean what the docstring says
         assert solution.duals.gen_bound == pytest.approx(nodal.duals.gen_bound, abs=DUAL_TOL), label
         assert solution.demand_bound == pytest.approx(nodal.demand_bound, abs=DUAL_TOL), label

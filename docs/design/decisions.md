@@ -458,6 +458,80 @@ lossy conversions by default; the IEEE-14 RAW found in the wild (licence undetec
 through pandapower's `from_ppc`; reading `res_bus` as an input (the spec's Not-doing — an early
 landing did, and was removed).
 
+## ADR-012 — Degenerate duals are quotiented by proven PTDF redundancy, never widened by tolerance
+
+**Status:** accepted 2026-08-31, discovered on M9's first CI run since M7.
+
+**Context.** `epic/01-foundation` had not run CI since M7's close (`cdb4fef`); pushing it for M9
+(74 commits later) surfaced two failures — `test_market_zonal.py`'s AC-4 LMP comparison and
+`test_opf_redispatch.py`'s D1 theorem — on `ubuntu-latest` at both Python versions, while macOS,
+Windows and ubuntu 3.13 stayed green. A throwaway probe at `cdb4fef` itself reproduced the *same
+two tests* failing, but on Windows with ubuntu green — proving the defect predates M8 and the
+shifter-fix task entirely, and that which platform trips it is not fixed. ADR-009 had already
+named this class for case300 ("two optimal solves legitimately pick different active sets and
+their LMPs differ... while the primal agrees to 1e-8") and rejected a blanket tolerance as the
+fix ("would admit real regressions to hide a known degeneracy"). The test author's own commit
+(`f1782e8`, M6/S5) shows they believed case30, unlike case300, was *not* degenerate, and pinned
+`CASE30_LMP_ATOL`/`DUAL_TOL` at `1e-3` against one measured run of `8.9e-6` agreement — 100×
+headroom that turned out to be sized for ordinary float noise, never tested against a real vertex
+swap of `~1.02`, three orders larger.
+
+**Diagnosis.** Bus-9 carries zero net injection — no generator, load or shunt — sitting on a
+radial path between two rated branches. Restricted to every column any decision variable
+touches, their PTDF rows are identical to `1.2e-17`; the six-row active-constraint matrix at the
+optimum has rank 4, not 6 — a genuine 2-dimensional null space, not measurement noise. HiGHS has
+real, KKT-legitimate freedom in how it splits the shadow price on that shared bottleneck; the
+primal (dispatch, welfare, objective) stayed rigid at `~1e-5` across every re-solve and 24
+microscopic cost perturbations. A full scan found **19** such structurally-redundant branch pairs
+in case30's topology — this is not a one-off coincidence, it is what a radial subtree looks like
+under PTDF. The second failure (an LMP tie between two buses) traced to the identical mechanism
+once corrected for an array-index/bus-id-sort mismatch in the diagnosis's own first pass — the
+buses tied are connected by a plain radial PTDF identity across all 41 rows, the same shape as the
+dual swap, not a second unrelated defect.
+
+**Decision.** Neither of the two previously-tried resolutions is available: a tolerance widen
+was already rejected by ADR-009 for exactly this reason, and a `priced ⊆ at_rating`
+(complementary-slackness) check was tried and removed from this same module (audit F2) because
+every optimal solution satisfies it trivially — vacuous by construction, a check no sabotage can
+move. Instead: **compute the redundant-row equivalence classes directly from the PTDF matrix**
+(rows proportional to each other, restricted to decision-variable columns — a rank/proportionality
+test, not a hand-picked exception list) and assert equality **quotiented by those classes** — exact
+and point-wise for every row outside a redundant group, a *weighted group-sum* (the group's shared
+KKT invariant) for rows inside one. A row that is the zero vector on decision columns carries no
+invariant at all — dual-feasible at any value, nothing to assert. The utility (`tests/_degeneracy.py`)
+is shared by both test files, not duplicated.
+
+**Consequences.**
+
+1. **The check stays discriminating, proven by sabotage against the exact CI-reported failure
+   shapes** — the row-swap and the bus-tie-shift that broke CI are both reproduced and correctly
+   rejected by the new checks (and correctly *accepted* as legitimate by the old point-wise ones,
+   which is precisely the false failure); an unrelated row, a redundant group's own aggregate
+   value, and the structural tie itself moving are each independently rejected too. A check a
+   sabotage cannot move is not a check (ADR-009's own principle) — this one is proven to move.
+2. **The first draft pooled every redundant group into one combined residual fit and was caught
+   being too permissive by its own sabotage sweep** — an unrelated defect on one group's bus
+   inflated every other group's residual, masking real defects elsewhere. Fixed by fitting each
+   group separately, against only its own affected buses. Worth naming: the fix for a
+   too-strict check is not "loosen it" and the fix for a too-loose check is not "the first
+   generalization that occurs to you" — both directions get their own sabotage proof.
+3. **case14 carries one dormant redundant group too** — measured exactly zero on every solve, so
+   quotienting is provably lossless there. The class is general to radial topology, not specific
+   to case30; any future fixture with a zero-injection pass-through node will need the same
+   treatment, and now has the tool to get it for free.
+4. **CI had not run in weeks; a genuine, three-wave-old defect was sitting undetected.** M8 and
+   the shifter-fix both landed with clean local sweeps and never touched this code path — the
+   defect predates all of it. The lesson is not about either of those waves; it is that a local
+   sweep on one machine cannot see a degeneracy whose tie-break is platform-specific, and this
+   repo's CI matrix existing does no good unless CI actually runs before a release wave opens.
+
+*Rejected:* widening `CASE30_LMP_ATOL`/`DUAL_TOL` (ADR-009's own precedent, would hide a real
+regression class); a `priced ⊆ at_rating` check (already tried in this module, vacuous); a
+hand-picked exception list for the specific rows/buses observed failing (works for this fixture,
+teaches nothing to the next one, and case14's dormant group would have shipped unguarded); dropping
+case30 for a non-degenerate replacement fixture (loses coverage of exactly the topology class real
+networks contain).
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).
