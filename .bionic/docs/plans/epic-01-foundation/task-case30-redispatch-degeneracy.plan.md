@@ -1,6 +1,6 @@
 ---
 governing-skill: superpowers:writing-plans
-sdlc-step: 1
+sdlc-step: 9
 intent: bugfix
 rigor: audited
 scale: task
@@ -30,7 +30,7 @@ integration-branch: epic/01-foundation
 intent: bugfix
 rigor: audited
 scale: task
-current: T2
+current: T9 — shipped
 
 - T0: prereqs: ok; configured 2026-08-31; base 059e533 (1539 passed / 4 skipped locally on
   Windows). Discovered on the first CI run since M7's cdb4fef (74 commits, M8 + shifter-fix).
@@ -170,7 +170,18 @@ Windows repro (confirms stability, not discriminating power — the sabotage pro
 Orchestrator-verified independently: 45/45 in `test_market_zonal.py` + the two originally-failing
 tests. Named sweep dispatched at `ab2a89f`.
 
+## T3 (2026-08-31): CI-verified, ADR-012 written, merged
+
+Pushed `ab2a89f` (T2's fix) to `origin` and watched the actual CI matrix — the first real test,
+since the whole point of this task is a platform-sensitive defect no local run can see. **All 8
+jobs green, including both `ubuntu-latest` Python versions where the original failure lived.**
+ADR-012 written (extending ADR-009's case300 finding to case30, and to the general PTDF-redundancy
+class), changelog entry added, pushed again with `fde354e` — CI re-confirmed green at the final
+head before merge. `epic/01-foundation`'s own CI (the `059e533` push) is now explained and will be
+green from this head onward once merged.
+
 ## Handoff
 
-T1 dispatched first, alone, with an explicit stop-before-fixing instruction. The orchestrator
-decides T2's shape from T1's actual numbers, not from this plan's hypothesis.
+**Shipped 2026-08-31.** Task head `fde354e` (4 commits: T1 diagnosis-only, T2 fix, ADR/changelog).
+Merges to `epic/01-foundation` next, worktree removed with `--force`, `epic/01-foundation` pushed
+again so `origin`'s CI reflects the fix.
