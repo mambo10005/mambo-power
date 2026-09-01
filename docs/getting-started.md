@@ -6,8 +6,20 @@ numbers shown are the real ones.
 
 ## Install
 
-mambo-power is not on PyPI yet (that is wave M9, version 0.1.0). Until then, install from
-source with [uv](https://docs.astral.sh/uv/):
+mambo-power is on PyPI as of `v0.1.0`:
+
+```bash
+pip install mambo-power
+# or: uv add mambo-power
+```
+
+!!! note "What gets installed"
+    The wheel ships only the package and its `py.typed` marker. The MATPOWER fixtures under
+    `fixtures/` and the test suite are in the sdist and the repository, not in the wheel, so
+    the examples below — and the [tutorials](tutorials/index.md) — assume you are in a clone of
+    the repository, not just a `pip install`.
+
+To work from a clone (required for the examples on this page, and for the tutorials):
 
 ```bash
 git clone https://github.com/mambo10005/mambo-power.git
@@ -24,11 +36,6 @@ Without uv, any Python ≥ 3.11 environment works:
 ```bash
 pip install -e .        # or: pip install .
 ```
-
-!!! note "What gets installed"
-    The wheel ships only the package and its `py.typed` marker. The MATPOWER fixtures under
-    `fixtures/` and the test suite are in the sdist and the repository, not in the wheel, so
-    the examples below assume you are in a clone of the repository.
 
 ## Load a MATPOWER case
 
