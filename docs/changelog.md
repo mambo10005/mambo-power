@@ -2,8 +2,12 @@
 
 All notable changes to mambo-power are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
-[Semantic Versioning](https://semver.org/). Nothing has been released yet; the first release
-will be 0.1.0 on PyPI (wave M9).
+[Semantic Versioning](https://semver.org/). `python-semantic-release` inserts each new release
+directly below this line, computed from conventional-commit messages, starting from the
+`v0.1.0` tag (wave M9) — this preamble is deliberately written to stay true before *and* after
+that first release lands, so it can never repeat the contradiction a stale "nothing released
+yet" sentence caused here once (Step-6 critic finding C2: the tool writes below this exact
+line, permanently, so a release-state claim here has a shelf life of one release).
 
 <!-- version list -->
 
@@ -52,8 +56,8 @@ cannot go stale about it.
   table, computes the next version from conventional-commit messages on `epic/01-foundation`
   (`feat`→minor, `fix`/`perf`→patch, a `BREAKING CHANGE:` footer→major), starting from a
   manually-cut `v0.1.0` — never from this repo's full pre-semantic-release history. Its built-in
-  update mode inserts each new release's section above the `<!-- version list -->` flag now at
-  the top of this page; the nine wave sections that used to sit directly under
+  update mode inserts each new release's section directly below the `<!-- version list -->` flag
+  now at the top of this page; the nine wave sections that used to sit directly under
   `## [Unreleased]` are unchanged, byte-for-byte, just relocated under `## Pre-release history`
   below. Two operational notes for whoever runs a release: on Windows, a local
   `semantic-release` invocation needs `PYTHONUTF8=1` set first, or this page's non-ASCII prose

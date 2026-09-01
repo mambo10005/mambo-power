@@ -39,12 +39,16 @@ plugins:
   - autorefs
   - mkdocs-jupyter:
       # W3 (wave-09-release-0.1): the four tutorial notebooks were executed once via
-      # nbconvert when S1 authored them (and are re-executed fresh on every CI push by
-      # nbmake, .github/workflows/ci.yml's `tutorials` job) — the outputs already stored in
-      # the .ipynb files ARE the CI-verified numbers. `execute: false` (the plugin's own
-      # default) renders those stored outputs at `mkdocs build` time instead of re-running
-      # solver code during a docs build, which would slow every build and duplicate work
-      # nbmake already does as the CI-enforced source of truth.
+      # nbconvert when S1 authored them, and their SOURCE is re-executed fresh on every CI
+      # push by nbmake (.github/workflows/ci.yml's `tutorials` job) — nbmake proves the code
+      # still runs without raising, it does not diff or refresh the stored OUTPUTS. So
+      # `execute: false` (the plugin's own default) renders whatever outputs happen to be
+      # stored in the .ipynb files at `mkdocs build` time — the last authoring pass's numbers,
+      # not necessarily today's — instead of re-running solver code during a docs build, which
+      # would slow every build and duplicate work nbmake already does. Step-6 critic finding
+      # C4: don't describe stored outputs as "CI-verified" — CI verifies the code, not the
+      # numbers on this page. Keeping stored outputs in sync with source is a manual discipline
+      # (re-run + re-save when a tutorial's code changes), not a mechanically enforced one.
       include: ["tutorials/*.ipynb"]
       execute: false
       include_source: false

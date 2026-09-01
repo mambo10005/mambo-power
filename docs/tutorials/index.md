@@ -2,7 +2,7 @@
 
 Four narrative walkthroughs, difficulty-tiered, each self-contained but building on the one
 before it. If [Getting started](../getting-started.md) is a five-minute install-and-first-solve,
-these are the fifteen-to-twenty-minute-each story of what the package actually does and why —
+these are the five-to-eight-minute-each story of what the package actually does and why —
 prose-heavy, with the "why" explained alongside the "what," rather than the terse
 one-concept-per-script style of the [examples](../examples/index.md).
 
@@ -28,8 +28,11 @@ Each tutorial answers a progressively harder question about the same kind of net
    building.
 
 Every code cell in every notebook actually runs — they're executed fresh in CI on every push
-([nbmake](https://github.com/treebeardtech/nbmake)), so the numbers you see rendered here are
-the real ones, not hand-typed illustrations.
+([nbmake](https://github.com/treebeardtech/nbmake)), so the code you see is proven to run, not
+hand-typed illustration. The numbers rendered on this site are what running that code printed
+the last time someone re-executed and saved the notebook file, not something recomputed on every
+site build — CI proves the code doesn't break, it doesn't re-render this page's output. If you
+want fresh numbers, clone the repository and run the notebook yourself.
 
 Prefer a faster, terser reference once the narrative isn't needed anymore? See
 [Examples](../examples/index.md) (thirteen short scripts, one concept each) or the

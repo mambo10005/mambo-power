@@ -31,7 +31,7 @@ docs = [
   "mkdocs-material>=9.7",
   "mkdocstrings[python]>=1.0",
   "pymdown-extensions>=10.16",
-  "mkdocs-jupyter",
+  "mkdocs-jupyter>=0.26",
 ]
 release = [
   "python-semantic-release>=10.6.2",

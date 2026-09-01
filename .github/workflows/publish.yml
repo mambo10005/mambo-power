@@ -22,8 +22,17 @@ jobs:
     env:
       UV_PYTHON: "3.12"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      # Step-6 reviewer finding R13: this is the only workflow in the repo holding
+      # `id-token: write` and the authority to publish under this project's PyPI name, so
+      # every action here is pinned by commit SHA, not a mutable version tag (unlike ci.yml,
+      # which stays tag-pinned — it holds nothing worth stealing). Each SHA below was resolved
+      # from the named tag via `gh api repos/<owner>/<repo>/git/refs/tags/<tag>` (dereferencing
+      # through the tag object where GitHub returns an annotated tag) and independently
+      # confirmed real via `gh api repos/<owner>/<repo>/commits/<sha>` before being pasted here
+      # — never hand-typed (S6 caught itself fabricating a SHA once already; this is the fix
+      # for that pattern, not just this instance of it).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
       - run: uv python install 3.12
@@ -49,7 +58,7 @@ jobs:
       - name: List artifacts
         run: ls -la dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist
           path: dist/
@@ -74,16 +83,17 @@ jobs:
       id-token: write
     steps:
       - name: Download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dist
           path: dist/
 
       - name: Publish to PyPI
-        # Pinned to the current stable release tag (v1.14.2, released 2026-07-29 — checked
-        # at implementation time via the action's GitHub releases page). Deliberately no
+        # SHA-pinned (R13 — see the top-of-job comment); the trailing comment names the
+        # release this SHA resolves to (v1.14.2, released 2026-07-29 — checked at
+        # implementation time via the action's GitHub releases page). Deliberately no
         # `password:` / `api-token:` input — its absence is what puts the action into OIDC
         # (trusted publishing) mode instead of token-based auth.
-        uses: pypa/gh-action-pypi-publish@v1.14.2
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           print-hash: true

@@ -137,10 +137,19 @@ def test_matching_tag_exists_ignores_non_release_shaped_tags() -> None:
 # --- check / main: the three end-to-end scenarios the report requires ----------------------
 
 
-def test_scenario_no_pypi_text_passes_trivially(tmp_path: Path) -> None:
-    ok, message = check(NOT_YET_CONTENT, tmp_path, runner=_runner("should not be called"))
+def test_scenario_no_pypi_text_no_tag_passes(tmp_path: Path) -> None:
+    ok, message = check(NOT_YET_CONTENT, tmp_path, runner=_runner(""))
     assert ok is True
     assert "no unqualified" in message.lower()
+
+
+def test_scenario_no_pypi_text_but_tag_exists_fails(tmp_path: Path) -> None:
+    # C5: a released tag with a still-pre-release page must fail, not pass trivially --
+    # this is the exact post-release drift the guard exists to catch.
+    ok, message = check(NOT_YET_CONTENT, tmp_path, runner=_runner("v0.1.0\n"))
+    assert ok is False
+    assert "FAIL" in message
+    assert "still reads as pre-release" in message
 
 
 def test_scenario_pypi_text_present_no_tag_fails() -> None:
@@ -156,10 +165,10 @@ def test_scenario_pypi_text_present_tag_exists_passes() -> None:
     assert "OK" in message
 
 
-def test_main_returns_0_for_no_pypi_text(tmp_path: Path) -> None:
+def test_main_returns_0_for_no_pypi_text_no_tag(tmp_path: Path) -> None:
     page = tmp_path / "getting-started.md"
     page.write_text(NOT_YET_CONTENT, encoding="utf-8")
-    assert main(getting_started_path=page, runner=_runner("should not be called")) == 0
+    assert main(getting_started_path=page, runner=_runner("")) == 0
 
 
 def test_main_returns_1_for_pypi_text_without_tag(tmp_path: Path) -> None:
@@ -187,6 +196,15 @@ def test_guard_passes_against_real_getting_started() -> None:
     assert ok is True, message
 
 
-@pytest.mark.parametrize("tag", ["v1.0.0", "v0.1.0-rc1", "v10.20.30"])
+@pytest.mark.parametrize("tag", ["v1.0.0", "v0.1.0", "v10.20.30"])
 def test_is_release_tag_shapes_accepted(tag: str) -> None:
     assert matching_tag_exists(Path("."), runner=_runner(tag + "\n")) is True
+
+
+@pytest.mark.parametrize("tag", ["v0.1.0-rc1", "v1.0.0-beta", "v0.1.0+build.5"])
+def test_is_release_tag_rejects_prerelease_and_build_metadata(tag: str) -> None:
+    # R3 (Step-6 reviewer): a prerelease/build-metadata tag must not satisfy "a v0.1.0+ tag
+    # exists" -- it is not a release yet, and the bidirectional check above now REQUIRES a
+    # matching tag to carry real PyPI text, so treating an rc as a match would fail CI on the
+    # ordinary act of cutting a release candidate.
+    assert matching_tag_exists(Path("."), runner=_runner(tag + "\n")) is False
