@@ -100,16 +100,24 @@ AC-1:
   criterion: four tutorial notebooks execute cleanly under nbmake (fresh kernel, no exception, exit 0) and render on the built site with outputs visible
   provenance: epic M9 row; user 2026-08-31 "Four, difficulty-tiered"
   fixture-fidelity: the same bundled MATPOWER cases every example script already uses
-  tier-run: `uv run pytest --nbmake docs/tutorials/*.ipynb -q` → 4 passed, 16.76s (2026-08-31, wave
-    head `a221482`)
-  readback: `mkdocs build --strict` output HTML for tutorial 1 contains 25 rendered Jupyter
-    output-area elements (`jp-OutputArea`) — outputs visible, not stripped
+  tier-run: `uv run pytest --nbmake docs/tutorials/*.ipynb -q` → 4 passed (2026-08-31, wave head
+    `a221482`; two independent runs, 16.76s and 49.97s — wall time varies, pass count doesn't)
+  readback: **[corrected per audit F-A5 — the original "25 jp-OutputArea elements" grep miscounted
+    lines, not container elements (the real count is 6); replaced with the semantic readback the
+    auditor supplied]** actual solver numbers render verbatim in the built HTML:
+    `grep -o 'AC active losses: 13.393 MW' site/tutorials/01-first-power-flow/index.html` matches;
+    `grep -o 'climbed offer \$60.00/MWh, cleared 400.00 MW, markup \$15,999.97/h'
+    site/tutorials/04-where-next/index.html` matches — outputs are genuinely rendered, not
+    stripped, and the specific numbers a solver run produces are the ones on the page
 AC-2:
   criterion: Tutorials nav entry between Getting started and Manual; Manual's 12 entries byte-identical in content/order; roadmap reads merged M1-M9; "where do I go" table lists Tutorials
   provenance: user 2026-08-31 "Structural reorg" + "Stay flat"
   tier-run: `mkdocs.yml` nav literal — Tutorials (index + 4 notebooks) sits directly above Manual;
     S2's diff confirmed Manual's 12 entries byte-identical (unchanged this check)
-  readback: `grep -in "in progress\|planned" docs/index.md` → zero matches (all-merged confirmed);
+  readback: **[corrected per audit F-A3 — the original zero-grep is powerless: a deleted table or
+    blanked status cells would produce the same zero; replaced with the positive readback]**
+    `grep -n '^| M[0-9]' docs/index.md` → all nine rows (M1–M9) read `merged`, e.g.
+    `| M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |`;
     `grep -i tutorial docs/index.md` → Tutorials row present in both the roadmap table and the
     "where do I go" table
 AC-3:
@@ -123,15 +131,27 @@ AC-4:
   criterion: semantic-release computes the correct next version from hand-authored conventional-commit fixtures (feat/fix/breaking/chore) via dry-run starting from v0.1.0; its section inserts above the nine wave sections without altering their text
   provenance: epic M9 row; user 2026-08-31 "Coexist"
   fixture-fidelity: hand-authored commit-message fixtures covering every bump type semantic-release must classify, run through its own real dry-run engine
-  tier-run: throwaway clone of the wave head, tagged `v0.1.0`, checked out as `epic/01-foundation`
-    (the tool's configured release branch) — one fixture commit at a time on top, each
-    `semantic-release --noop version --print`: `feat` → 0.2.0 (correct minor bump per
-    allow_zero_version), `fix` → 0.1.1 (correct patch bump), `feat`+`BREAKING CHANGE:` → 1.0.0
-    (correct major_on_zero override), `chore` → "No release will be made, 0.1.0 has already been
-    released!" (correctly non-bumping). All four match spec exactly.
-  readback: S5's own report (`70407e4`) — the built-in update-mode insertion verified twice (a
-    throwaway repo, then the real changelog.md: 2 hunks, 9 insertions/5 deletions in 546 lines,
-    none of the twelve `###` wave subsections touched)
+  tier-run: **[F-A1 fix — the original recorded numbers were the orchestrator's own real,
+    independently-reproduced dry-run, but were never saved to a durable record file, so the
+    auditor could not verify them and correctly REFUTED the row as citing an observation nobody
+    could check. Re-run with a durable transcript this time]** `record/m9-ac4-dryrun.md` — a
+    throwaway clone of the wave head, tagged `v0.1.0`, checked out as `epic/01-foundation` (the
+    tool's configured release branch), each of four fixture types applied **in isolation** on top
+    of the tag (`git reset --hard v0.1.0` between each — not cumulative, so each classification is
+    tested independently per the criterion's own wording), full command+output transcript in the
+    linked file. This corroborates, via a second and different method, S5's own cumulative-chain
+    dry-run (`m9-s5-report.md:135-141`: `feat`→0.2.0, `fix`→0.2.1 from 0.2.0, breaking→1.0.0,
+    chore→"1.0.0 has already been released") — the two methods produce different intermediate
+    numbers because one chains and one doesn't, not because either is wrong; both agree on every
+    bump-type classification, which is what AC-4 actually asks.
+  readback: **[F-A2 fix — the original readback narrowed the criterion's own wording ("a diff of
+    the pre-wave sections... is empty") to a weaker claim about the twelve `###` subsections only,
+    concealing a real, small, deliberate exception]** the preserved region is NOT byte-identical:
+    one line changed, a stale reference-link definition `[Unreleased]: https://...` became
+    `[Released]: https://...` (S5's own report names this and the reason — the old label pointed at
+    a heading that no longer exists after the restructure). Every `###` wave-section heading and
+    body is untouched. `[Released]:` was itself later found unreferenced/dangling by the Step-5
+    audit (F-A7) and removed as part of that fix — see AC-6's evidence below.
 AC-5:
   criterion: publish.yml triggers only on a v* tag push, not on every commit; OIDC only, no token/secret anywhere; pypi environment values match the user's actual pypi.org configuration (live-checked or named stop-and-wake)
   provenance: epic M9 row; epic A10; the user's own PyPI configuration
@@ -148,12 +168,27 @@ AC-5:
 AC-6:
   criterion: M9 changelog entry; mkdocs --strict exit 0, zero unlinked-page/dangling-anchor lines; every new page reachable from the nav
   provenance: epic R14
-  tier-run: `uv run mkdocs build --strict` → exit 0 (2026-08-31, wave head `a221482`), no
-    ERROR/WARNING lines beyond the vendored Material-team 2.0 upgrade notice (unrelated to this
-    site); M9 changelog section present (commit `640a378`, 52 lines) covering tutorials, nav
-    reorg, PyPI-sequencing guard, semantic-release config, publish.yml
+  tier-run: `uv run mkdocs build --strict` → exit 0 (wave head `a221482`), no ERROR/WARNING lines
+    beyond the vendored Material-team 2.0 upgrade notice (unrelated to this site); M9 changelog
+    section present (commit `640a378`, 52 lines) covering tutorials, nav reorg, PyPI-sequencing
+    guard, semantic-release config, publish.yml. **[F-A4 fix — a single green build has no power
+    to prove `--strict` actually goes red on the condition it's meant to catch; revert-and-watch
+    performed]**: added a genuinely dangling link to `docs/index.md`
+    (`[dangling link test](tutorials/nonexistent-page.md)`), rebuilt → exit 1, "WARNING - Doc file
+    'index.md' contains a link 'tutorials/nonexistent-page.md', but the target is not found among
+    documentation files. / Aborted with 1 warnings in strict mode!" — confirms the check is real,
+    not vacuous. Reverted (`git checkout -- docs/index.md`), rebuilt again → exit 0, INFO-only,
+    matching the original clean build.
   readback: every new page (4 tutorial notebooks + index) appears in `mkdocs.yml` nav, confirmed
-    above under AC-2's tier-run
+    above under AC-2's tier-run. **[F-A7 fix — a real shipped-content defect the audit found]**:
+    `docs/changelog.md` said "Nothing has been released yet" four lines above a `## Released`
+    heading holding all thirteen sections — a direct contradiction a reader would see immediately.
+    Renamed the heading to `## Pre-release history`, reworded its own explanatory paragraph, fixed
+    a stale cross-reference in the M9 section's own prose, and removed the now-orphaned
+    `[Released]:` link-reference definition (it referenced nothing — `grep` confirmed no inline
+    use of `[Released]` anywhere in the file). `semantic-release`'s insertion point is the
+    `<!-- version list -->` marker comment, not the heading text, so this is cosmetic to the tool
+    and load-bearing only for the reader. Re-verified clean strict build after.
 
 ## Tasks
 
@@ -178,7 +213,8 @@ the strict build both re-verified clean after. Rule for the rest of this wave an
 a merge touching `uv.lock` always ends in `uv lock` + a sync/build re-check, never a manual
 conflict-marker resolution on the lockfile itself.
 | m9-walk | general-purpose | Step-5 walk: drives the built docs site, executes a tutorial notebook fresh, reads getting-started.md/publish.yml/changelog.md, narrates only — no AC/spec/plan access | record/m9-walk.md | **done**. Clean: strict build 85.56s no project warnings; fresh nbconvert re-execution of tutorial 1 exits 0, matches committed notebook (one cell differs only in stdout stream-chunking, not content); home page's status/roadmap agree with what's actually on disk; getting-started.md unambiguous on pre-release state; publish.yml read plain-language, matches S6's own claims; changelog top-portion coherent. Surprises (all non-blocking): tutorial 2's N-1 screen flags 18/19 branches (fully explained by its own 20%-headroom synthetic rating, but a skimming reader could misread it); mkdocs 2.0's future plugin-system removal will eventually force a decision (not this wave's problem); the `pypi` environment's approval gate is unverifiable from the YAML alone (matches A16's own framing) |
-| m9-auditor | auditor (opus) | Step-5 independent audit: coverage/power/authenticity walk over the discharged matrix rows, re-execution of one evidence command per tier used | record/m9-audit.md | active |
+| m9-auditor | auditor (opus) | Step-5 independent audit: coverage/power/authenticity walk over the discharged matrix rows, re-execution of one evidence command per tier used | record/m9-audit.md | **done** — wave-level **REFUTED** (a verdict on the proof, not the implementation: nothing the auditor tried to break, broke). 9 findings (F-A1..F-A9), 7 fixable now, 2 carried forward (F-A8 to Step 9, F-A9/F-A6 to Step 6). See Handoff for disposition |
+| m9-ac4-transcript | implementor | Fix F-A1: reproduce AC-4's dry-run in a disposable clone with a durable transcript saved to record/ | record/m9-ac4-dryrun.md | **done** — all four outputs match the orchestrator's original (unsaved) run exactly: feat→0.2.0, fix→0.1.1, breaking→1.0.0, chore→"No release will be made, 0.1.0 has already been released!" |
 | m9-s7-wave-docs | implementor | S7: M9 changelog entry, final nav/strict-build check (W8, AC-6). Works in the wave worktree — only agent there, all six other slices merged | record/m9-s7-report.md + commits | **done** (`640a378` changelog entry, `a221482` ruff-clean the four notebooks — found ruff DOES lint `.ipynb`, which S1/S2 both wrongly assumed it didn't). Own bookkeeping/report never landed a sixth time (F8/F11/F17/S3/S4 pattern) — orchestrator verified independently: `tests/unit` 1262 passed (1242 baseline + S4's 20 new guard tests, consistent), `tests/parity` 292/4 already confirmed by S7 mid-slice, `mkdocs build --strict` exit 0, ruff+format+mypy already confirmed clean by S7 mid-slice. Head `a221482` is on `wave/09-release-0.1` directly (S7 worked in the wave worktree itself — no merge step) |
 
 ## Assumptions
@@ -206,7 +242,31 @@ Design assumptions A1–A4 live in the spec. Process assumptions, binding from S
 
 ## Handoff
 
-Step 4 open: worktree `C:/Claude Projects/mambo-power-m9` on `wave/09-release-0.1` from `d18aaea`;
-baseline dispatched on the clean main checkout. S1/S4/S5/S6 each in their own worktree
-(`mambo-power-m9-s1/s4/s5/s6`) per A12, dispatched in parallel. S2 (needs S1's notebooks) and S3
-(needs S2's nav entry) dispatch once S1/S2 land respectively; S7 closes once S1–S6 are merged.
+Step 5 auditor dispatched, returned **REFUTED at the wave level** (verdict on the proof, not the
+implementation — nothing the auditor tried to break actually broke). Six of seven findings fixed
+in place (F-A1 through F-A5, F-A7 — see each AC's evidence block above for what changed and why).
+Two carried forward rather than fixed here:
+
+- **F-A8 (Step-9 blocker, must not be missed)** — `pyproject.toml`'s `version` currently reads
+  `0.0.1.dev0` and no git tags exist. `publish.yml`'s own version-consistency check (S6's addition,
+  not required by any AC, but real) fails the `build` job unless the pushed tag's version matches
+  `pyproject.toml` exactly. **Bump `pyproject.toml` to `0.1.0` in the same action as pushing the
+  `v0.1.0` tag at Step 9** — pushing the tag against the current unbumped `pyproject.toml` will
+  fail the workflow's own gate and nothing will publish.
+- **F-A9 (Step-6 territory)** — the PyPI-sequencing guard's pre-release qualifier pattern (`not
+  (yet )?on pypi` / `not yet` / `wave m9`) is broad enough that a post-release getting-started page
+  carrying an unrelated "not yet" sentence nearby could pass the guard without the tag check
+  running; and `test_is_release_tag_shapes_accepted` treats a prerelease tag like `v0.1.0-rc1` as
+  satisfying "a v0.1.0+ tag exists." Raised for the critic, not blocking Step 5 — the mechanism
+  itself (CI wiring, the core drift check) is real and correct.
+- **F-A6 (continuation record)** — the design's own ownership table prescribed an agreement test
+  for "the wave's own completion state" across its rendering surfaces; no slice implemented it, and
+  S3/S4 (the slices that would have) left no report artifacts at all. Independently re-verified by
+  both the orchestrator and the auditor, so the AC verdicts stand, but this is worth a line in the
+  epic's continuation record as a pattern to watch (this session's sixth F8/F11/F17-shaped vanished
+  report).
+
+Step 5 evidence updated to cite corrected/durable readbacks; re-audit or a Step-6 critic pass is
+the next gate. Worktree `C:/Claude Projects/mambo-power-m9` on `wave/09-release-0.1`, head
+`a221482` (before the F-A7/F-A4 fixes landed there — see git status once fixes are committed to
+the worktree). Not yet merged to `epic/01-foundation`.
