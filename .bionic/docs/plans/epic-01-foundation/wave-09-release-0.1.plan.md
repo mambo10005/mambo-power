@@ -1,6 +1,6 @@
 ---
 governing-skill: superpowers:writing-plans
-sdlc-step: 4
+sdlc-step: 5
 intent: build
 rigor: audited
 scale: wave
@@ -35,7 +35,7 @@ integration-branch: epic/01-foundation
 intent: build
 rigor: audited
 scale: wave
-current: 4
+current: 5
 
 - Step 0: prereqs: ok; configured 2026-08-30 via "confirm"; base 9012c43 (1539/4, CI green on
   all 8 matrix jobs)
@@ -48,6 +48,12 @@ current: 4
   in their own worktrees per A12. **Baseline on the clean main checkout at d18aaea, before any
   agent entered a worktree: 1539 passed / 4 skipped in 1949.56s** (scratchpad
   m9-baseline-d18aaea.log, 2026-08-31 03:13Z).
+- Step 5: cmd: `uv run pytest tests/unit -q` (wave head `a221482`); pass: 1262; total: 1262;
+  output: "1262 passed in 129.02s"; `tests/parity` 292 passed / 4 skipped (captured mid-slice by
+  S7). walk-artifact: record/m9-walk.md (dispatched independent of the spec/plan/ACs, clean —
+  zero AC-[0-9] occurrences, verified by grep). AC-1..AC-4 and AC-6 discharged with tier-run/
+  readback evidence (see matrix below); AC-5 blocked on A16's live pypi.org check, named
+  stop-and-wake, not waived. Auditor dispatched next.
 
 ## Slices
 
@@ -74,12 +80,12 @@ includes); a fresh CI push happens naturally at Step 9 when `epic/01-foundation`
 
 | AC | tier | status | evidence | auditor |
 |---|---|---|---|---|
-| AC-1 | T2 | pass | see AC-1 | orchestrator |
-| AC-2 | T1 | pass | see AC-2 | orchestrator |
-| AC-3 | T1 | pass | see AC-3 | orchestrator |
-| AC-4 | T2 | pass | see AC-4 | orchestrator |
-| AC-5 | T2 | partial — static half pass, live half blocked | see AC-5 | orchestrator |
-| AC-6 | T0 | pass | see AC-6 | orchestrator |
+| AC-1 | T2 | discharged | see AC-1 | |
+| AC-2 | T1 | discharged | see AC-2 | |
+| AC-3 | T1 | discharged | see AC-3 | |
+| AC-4 | T2 | discharged | see AC-4 | |
+| AC-5 | T2 | blocked | see AC-5 | |
+| AC-6 | T0 | discharged | see AC-6 | |
 
 Tier rationale: AC-1 is T2 — `nbmake` executes real notebooks against the real package in CI
 (the fixture-fidelity declaration is "the bundled MATPOWER cases, same as every example"); AC-4 is
@@ -171,6 +177,7 @@ the merged `pyproject.toml` — regenerates rather than merges. `uv sync --locke
 the strict build both re-verified clean after. Rule for the rest of this wave and any future one:
 a merge touching `uv.lock` always ends in `uv lock` + a sync/build re-check, never a manual
 conflict-marker resolution on the lockfile itself.
+| m9-walk | general-purpose | Step-5 walk: drives the built docs site, executes a tutorial notebook fresh, reads getting-started.md/publish.yml/changelog.md, narrates only — no AC/spec/plan access | record/m9-walk.md | **done**. Clean: strict build 85.56s no project warnings; fresh nbconvert re-execution of tutorial 1 exits 0, matches committed notebook (one cell differs only in stdout stream-chunking, not content); home page's status/roadmap agree with what's actually on disk; getting-started.md unambiguous on pre-release state; publish.yml read plain-language, matches S6's own claims; changelog top-portion coherent. Surprises (all non-blocking): tutorial 2's N-1 screen flags 18/19 branches (fully explained by its own 20%-headroom synthetic rating, but a skimming reader could misread it); mkdocs 2.0's future plugin-system removal will eventually force a decision (not this wave's problem); the `pypi` environment's approval gate is unverifiable from the YAML alone (matches A16's own framing) |
 | m9-s7-wave-docs | implementor | S7: M9 changelog entry, final nav/strict-build check (W8, AC-6). Works in the wave worktree — only agent there, all six other slices merged | record/m9-s7-report.md + commits | **done** (`640a378` changelog entry, `a221482` ruff-clean the four notebooks — found ruff DOES lint `.ipynb`, which S1/S2 both wrongly assumed it didn't). Own bookkeeping/report never landed a sixth time (F8/F11/F17/S3/S4 pattern) — orchestrator verified independently: `tests/unit` 1262 passed (1242 baseline + S4's 20 new guard tests, consistent), `tests/parity` 292/4 already confirmed by S7 mid-slice, `mkdocs build --strict` exit 0, ruff+format+mypy already confirmed clean by S7 mid-slice. Head `a221482` is on `wave/09-release-0.1` directly (S7 worked in the wave worktree itself — no merge step) |
 
 ## Assumptions
