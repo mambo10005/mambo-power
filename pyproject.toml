@@ -99,11 +99,13 @@ commit_parser = "conventional"
 allow_zero_version = true
 major_on_zero = true
 
-# This repo releases from `epic/01-foundation`, not `main`/`master` (the tool's own default
-# release-branch pattern) — until the epic itself merges to `main` (its own last, one-time act,
-# outside this wave), this is the only branch that should ever compute a version.
+# Releases were cut from `epic/01-foundation` through v0.1.0 (wave M9), before the epic itself
+# had merged to `main`. This commit is part of that merge (epic close, per epic.plan.md), so
+# `main` becomes where releases are cut from — per docs/contributing.md#cutting-a-release, this
+# match must move in the same change as the merge, or semantic-release will silently refuse to
+# compute a version on the new branch.
 [tool.semantic_release.branches.main]
-match = "epic/01-foundation"
+match = "main"
 prerelease = false
 
 [tool.semantic_release.commit_parser_options]

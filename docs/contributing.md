@@ -172,11 +172,10 @@ it is not idempotent against an untagged state; running it twice with no interve
 duplicates the generated section. `version` (above) is the only command that should touch this
 repo's changelog.
 
-**Before the epic merges to `main`** (a one-time, later event): `[tool.semantic_release
-.branches.main]`'s `match = "epic/01-foundation"` must be updated to match wherever releases
-are cut from next — today that's deliberately not `main`, because the epic hasn't merged yet, and
-semantic-release will silently refuse to compute a version on a branch it isn't configured to
-release from (R12).
+**The epic-close merge to `main`** moved `[tool.semantic_release.branches.main]`'s `match` from
+`epic/01-foundation` to `main` in the same commit as the merge (R12) — releases are cut from
+`main` from here on; semantic-release silently refuses to compute a version on a branch it isn't
+configured to release from, so this is not optional bookkeeping.
 
 **Prerequisite, checked automatically:** `scripts/check_pypi_sequencing.py` (CI job
 `pypi-sequencing`) fails if `docs/getting-started.md` claims PyPI availability without a matching
