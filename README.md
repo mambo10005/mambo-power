@@ -42,14 +42,24 @@ GitHub Pages, PyPI trusted publishing).
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
 | M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
 
-Not yet on PyPI — this changes in the same action as the `v0.1.0` tag; see
+On PyPI as of `v0.1.0`. See
 [Getting started](https://mambo10005.github.io/mambo-power/getting-started/) for the current
 install instructions, which is the live source of truth if this file is ever stale (this table
-is not covered by any automated freshness check — see the wave M9 continuation record if you're
-reading this after a release and it still says otherwise). Runtime dependencies are exactly
-`numpy`, `scipy`, `highspy`, `pydantic`; Python 3.11 or newer.
+is not covered by any automated freshness check — see the epic-close continuation record if
+you're reading this after a release and it still says otherwise; PyPI's own project page bakes
+in whatever this file said at the release that's currently `latest`, so a `README.md` fix here
+only reaches pypi.org on the *next* release, not retroactively). Runtime dependencies are
+exactly `numpy`, `scipy`, `highspy`, `pydantic`; Python 3.11 or newer.
 
-## Install from source
+## Install
+
+```bash
+pip install mambo-power
+# or: uv add mambo-power
+```
+
+The wheel ships only the package. The MATPOWER fixtures under `fixtures/` and the test suite
+are in the sdist and the repository, not in the wheel, so the examples below assume a clone:
 
 ```bash
 git clone https://github.com/mambo10005/mambo-power.git
