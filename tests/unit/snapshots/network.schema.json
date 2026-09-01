@@ -1,0 +1,779 @@
+{
+  "$defs": {
+    "Branch": {
+      "additionalProperties": false,
+      "description": "Line or transformer between two buses. Tap is on the ``from`` side (MATPOWER model).",
+      "properties": {
+        "id": {
+          "description": "Unique within branches.",
+          "title": "Id",
+          "type": "string"
+        },
+        "from_bus": {
+          "description": "Bus id of the from (tap) side.",
+          "title": "From Bus",
+          "type": "string"
+        },
+        "to_bus": {
+          "description": "Bus id of the to side.",
+          "title": "To Bus",
+          "type": "string"
+        },
+        "r": {
+          "description": "Series resistance, per unit on base_mva.",
+          "title": "R",
+          "type": "number"
+        },
+        "x": {
+          "description": "Series reactance, per unit on base_mva.",
+          "title": "X",
+          "type": "number"
+        },
+        "b": {
+          "description": "Total line charging susceptance, per unit on base_mva.",
+          "title": "B",
+          "type": "number"
+        },
+        "rating_mva": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Thermal rating, MVA; None = none.",
+          "title": "Rating Mva"
+        },
+        "tap_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Off-nominal tap; None = 1.0.",
+          "title": "Tap Ratio"
+        },
+        "shift_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Phase shift, degrees; None = 0.",
+          "title": "Shift Deg"
+        },
+        "in_service": {
+          "default": true,
+          "title": "In Service",
+          "type": "boolean"
+        },
+        "kind": {
+          "default": "line",
+          "description": "'line' or 'transformer'. Defaults to 'transformer' when tap_ratio is not None/1.0 or shift_deg is not None/0.0, else 'line'; an explicit 'transformer' at nominal tap is kept; an explicit 'line' with a tap or shift is promoted to 'transformer' at validation. Assignment after construction does not re-run this rule: exporters route on is_transformer, which reads the fields.",
+          "enum": [
+            "line",
+            "transformer"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "from_bus",
+        "to_bus",
+        "r",
+        "x",
+        "b"
+      ],
+      "title": "Branch",
+      "type": "object"
+    },
+    "Bus": {
+      "additionalProperties": false,
+      "description": "Electrical node. ``vm_pu``/``va_deg`` hold an initial or last-solved state, if any.",
+      "properties": {
+        "id": {
+          "description": "Unique within buses.",
+          "title": "Id",
+          "type": "string"
+        },
+        "base_kv": {
+          "description": "Nominal voltage, kV. Must be > 0.",
+          "title": "Base Kv",
+          "type": "number"
+        },
+        "type": {
+          "description": "Power-flow role: exactly one in-service slack per network.",
+          "enum": [
+            "slack",
+            "pv",
+            "pq"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "in_service": {
+          "default": true,
+          "title": "In Service",
+          "type": "boolean"
+        },
+        "vm_pu": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Voltage magnitude, per unit.",
+          "title": "Vm Pu"
+        },
+        "va_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Voltage angle, degrees.",
+          "title": "Va Deg"
+        },
+        "v_min_pu": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Lower voltage limit, per unit.",
+          "title": "V Min Pu"
+        },
+        "v_max_pu": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Upper voltage limit, per unit.",
+          "title": "V Max Pu"
+        },
+        "area": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Free-form area label (MATPOWER AREA).",
+          "title": "Area"
+        },
+        "zone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Zone id; must resolve to zones[].id.",
+          "title": "Zone"
+        },
+        "geo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Geo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "base_kv",
+        "type"
+      ],
+      "title": "Bus",
+      "type": "object"
+    },
+    "Generator": {
+      "additionalProperties": false,
+      "description": "Dispatchable injection. ``cost`` is model-present and solver-ignored until M3.",
+      "properties": {
+        "id": {
+          "description": "Unique within generators.",
+          "title": "Id",
+          "type": "string"
+        },
+        "bus": {
+          "description": "Bus id.",
+          "title": "Bus",
+          "type": "string"
+        },
+        "p_mw": {
+          "description": "Active power setpoint or dispatch, MW.",
+          "title": "P Mw",
+          "type": "number"
+        },
+        "q_mvar": {
+          "description": "Reactive power setpoint or dispatch, MVAr.",
+          "title": "Q Mvar",
+          "type": "number"
+        },
+        "p_min_mw": {
+          "description": "Lower active limit, MW; must be <= p_max_mw.",
+          "title": "P Min Mw",
+          "type": "number"
+        },
+        "p_max_mw": {
+          "description": "Upper active limit, MW.",
+          "title": "P Max Mw",
+          "type": "number"
+        },
+        "q_min_mvar": {
+          "description": "Lower reactive limit, MVAr; must be <= q_max_mvar.",
+          "title": "Q Min Mvar",
+          "type": "number"
+        },
+        "q_max_mvar": {
+          "description": "Upper reactive limit, MVAr.",
+          "title": "Q Max Mvar",
+          "type": "number"
+        },
+        "v_set_pu": {
+          "description": "Voltage setpoint, per unit.",
+          "title": "V Set Pu",
+          "type": "number"
+        },
+        "in_service": {
+          "default": true,
+          "title": "In Service",
+          "type": "boolean"
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "piecewise": "#/$defs/PiecewiseCost",
+                  "polynomial": "#/$defs/PolynomialCost"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/PolynomialCost"
+                },
+                {
+                  "$ref": "#/$defs/PiecewiseCost"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost"
+        },
+        "ramp_up_mw": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Max increase from the previous period, MW; None = none.",
+          "title": "Ramp Up Mw"
+        },
+        "ramp_down_mw": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Max decrease from the previous period, MW; None = none.",
+          "title": "Ramp Down Mw"
+        }
+      },
+      "required": [
+        "id",
+        "bus",
+        "p_mw",
+        "q_mvar",
+        "p_min_mw",
+        "p_max_mw",
+        "q_min_mvar",
+        "q_max_mvar",
+        "v_set_pu"
+      ],
+      "title": "Generator",
+      "type": "object"
+    },
+    "Geo": {
+      "additionalProperties": false,
+      "description": "Geographic position of a bus in decimal degrees (WGS 84).",
+      "properties": {
+        "lat": {
+          "description": "Latitude, decimal degrees.",
+          "title": "Lat",
+          "type": "number"
+        },
+        "lon": {
+          "description": "Longitude, decimal degrees.",
+          "title": "Lon",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "title": "Geo",
+      "type": "object"
+    },
+    "Load": {
+      "additionalProperties": false,
+      "description": "Demand at a bus, fixed or elastic. ``bid`` is read by ``market.nodal`` and\n``market.multiperiod``; ``opf.solve_dc_opf`` ignores it and serves ``p_mw`` in full.",
+      "properties": {
+        "id": {
+          "description": "Unique within loads.",
+          "title": "Id",
+          "type": "string"
+        },
+        "bus": {
+          "description": "Bus id.",
+          "title": "Bus",
+          "type": "string"
+        },
+        "p_mw": {
+          "description": "Active demand, MW. With a bid, this is the *maximum* quantity that can be served, and the bid decides where in [0, p_mw] the load actually clears; a Period override of it therefore moves that maximum too.",
+          "title": "P Mw",
+          "type": "number"
+        },
+        "q_mvar": {
+          "description": "Reactive demand, MVAr.",
+          "title": "Q Mvar",
+          "type": "number"
+        },
+        "in_service": {
+          "default": true,
+          "title": "In Service",
+          "type": "boolean"
+        },
+        "bid": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "piecewise": "#/$defs/PiecewiseBid",
+                  "polynomial": "#/$defs/PolynomialBid"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/PolynomialBid"
+                },
+                {
+                  "$ref": "#/$defs/PiecewiseBid"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Elastic-demand bid covering this Load's entire p_mw; market.nodal and market.multiperiod read it, opf.solve_dc_opf does not. There is no per-Load partial-capacity split -- bidding only part of a load's capacity, with the rest must-serve, means splitting it into two Load entities at the same bus (one bid=None fixed, one bid-carrying).",
+          "title": "Bid"
+        }
+      },
+      "required": [
+        "id",
+        "bus",
+        "p_mw",
+        "q_mvar"
+      ],
+      "title": "Load",
+      "type": "object"
+    },
+    "PiecewiseBid": {
+      "additionalProperties": false,
+      "description": "Demand-side mirror of :class:`PiecewiseCost`: piecewise-linear (p_mw, value) breakpoints.\n\nOnly the same structural checks :class:`PiecewiseCost` gets (at least two points,\nstrictly increasing ``p_mw``) apply here; the concavity *direction* of the value curve is\nchecked at solve time, not here (see :class:`PolynomialBid`).",
+      "properties": {
+        "kind": {
+          "const": "piecewise",
+          "default": "piecewise",
+          "title": "Kind",
+          "type": "string"
+        },
+        "points": {
+          "description": "(p_mw, value) breakpoints, at least two and at most 200 (each adds one hypograph row to opf.dc_opf's LP); p_mw must be strictly increasing.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "maxItems": 200,
+          "title": "Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "points"
+      ],
+      "title": "PiecewiseBid",
+      "type": "object"
+    },
+    "PiecewiseCost": {
+      "additionalProperties": false,
+      "description": "MATPOWER gencost MODEL 1: piecewise-linear (p_mw, cost) breakpoints, increasing in p.",
+      "properties": {
+        "kind": {
+          "const": "piecewise",
+          "default": "piecewise",
+          "title": "Kind",
+          "type": "string"
+        },
+        "points": {
+          "description": "(p_mw, cost) breakpoints, at least two and at most 200 (each adds one epigraph row to opf.dc_opf's LP); p_mw must be strictly increasing.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "maxItems": 200,
+          "title": "Points",
+          "type": "array"
+        },
+        "startup": {
+          "default": 0.0,
+          "description": "Startup cost.",
+          "title": "Startup",
+          "type": "number"
+        },
+        "shutdown": {
+          "default": 0.0,
+          "description": "Shutdown cost.",
+          "title": "Shutdown",
+          "type": "number"
+        }
+      },
+      "required": [
+        "points"
+      ],
+      "title": "PiecewiseCost",
+      "type": "object"
+    },
+    "PolynomialBid": {
+      "additionalProperties": false,
+      "description": "Demand-side mirror of :class:`PolynomialCost`: value(p_mw) = sum(c_k * p_mw**k).\n\nMarginal value must be non-increasing (concave value) for a valid market clearing; that\nconvexity-*direction* check is ``opf.dc_opf``'s job at solve time\n(:class:`~mambo_power.opf.NonConcaveBidError`), not construction-time here \u2014 mirrors how\n:class:`PolynomialCost` also has no construction-time convexity check.",
+      "properties": {
+        "kind": {
+          "const": "polynomial",
+          "default": "polynomial",
+          "title": "Kind",
+          "type": "string"
+        },
+        "coefficients": {
+          "description": "Polynomial coefficients (at least one), highest order first, value per hour.",
+          "items": {
+            "type": "number"
+          },
+          "title": "Coefficients",
+          "type": "array"
+        }
+      },
+      "required": [
+        "coefficients"
+      ],
+      "title": "PolynomialBid",
+      "type": "object"
+    },
+    "PolynomialCost": {
+      "additionalProperties": false,
+      "description": "MATPOWER gencost MODEL 2: cost(p_mw) = sum(c_k * p_mw**k), highest order first.",
+      "properties": {
+        "kind": {
+          "const": "polynomial",
+          "default": "polynomial",
+          "title": "Kind",
+          "type": "string"
+        },
+        "coefficients": {
+          "description": "Polynomial coefficients (at least one), highest order first, cost per hour.",
+          "items": {
+            "type": "number"
+          },
+          "title": "Coefficients",
+          "type": "array"
+        },
+        "startup": {
+          "default": 0.0,
+          "description": "Startup cost.",
+          "title": "Startup",
+          "type": "number"
+        },
+        "shutdown": {
+          "default": 0.0,
+          "description": "Shutdown cost.",
+          "title": "Shutdown",
+          "type": "number"
+        }
+      },
+      "required": [
+        "coefficients"
+      ],
+      "title": "PolynomialCost",
+      "type": "object"
+    },
+    "Shunt": {
+      "additionalProperties": false,
+      "description": "Fixed shunt at 1.0 pu voltage, MATPOWER GS/BS sign convention.",
+      "properties": {
+        "id": {
+          "description": "Unique within shunts.",
+          "title": "Id",
+          "type": "string"
+        },
+        "bus": {
+          "description": "Bus id.",
+          "title": "Bus",
+          "type": "string"
+        },
+        "g_mw": {
+          "description": "Conductance as MW consumed at 1.0 pu; positive consumes.",
+          "title": "G Mw",
+          "type": "number"
+        },
+        "b_mvar": {
+          "description": "Susceptance as MVAr injected at 1.0 pu; positive injects.",
+          "title": "B Mvar",
+          "type": "number"
+        },
+        "in_service": {
+          "default": true,
+          "title": "In Service",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "bus",
+        "g_mw",
+        "b_mvar"
+      ],
+      "title": "Shunt",
+      "type": "object"
+    },
+    "Storage": {
+      "additionalProperties": false,
+      "description": "Energy storage. Read by ``market.multiperiod``, which gives each unit a charge, a\ndischarge and a state-of-charge column per period; every other solver ignores it.",
+      "properties": {
+        "id": {
+          "description": "Unique within storage.",
+          "title": "Id",
+          "type": "string"
+        },
+        "bus": {
+          "description": "Bus id.",
+          "title": "Bus",
+          "type": "string"
+        },
+        "p_max_mw": {
+          "description": "Charge/discharge power limit, MW.",
+          "title": "P Max Mw",
+          "type": "number"
+        },
+        "energy_mwh": {
+          "description": "Energy capacity, MWh.",
+          "title": "Energy Mwh",
+          "type": "number"
+        },
+        "soc_initial": {
+          "description": "Initial state of charge, fraction of energy_mwh in [0, 1].",
+          "title": "Soc Initial",
+          "type": "number"
+        },
+        "efficiency_charge": {
+          "description": "Charging efficiency in (0, 1].",
+          "title": "Efficiency Charge",
+          "type": "number"
+        },
+        "efficiency_discharge": {
+          "description": "Discharging efficiency in (0, 1].",
+          "title": "Efficiency Discharge",
+          "type": "number"
+        },
+        "in_service": {
+          "default": true,
+          "title": "In Service",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "bus",
+        "p_max_mw",
+        "energy_mwh",
+        "soc_initial",
+        "efficiency_charge",
+        "efficiency_discharge"
+      ],
+      "title": "Storage",
+      "type": "object"
+    },
+    "Zone": {
+      "additionalProperties": false,
+      "description": "Named grouping of buses (MATPOWER loss zone, market zone, ...).",
+      "properties": {
+        "id": {
+          "description": "Unique within zones.",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Zone",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A complete power network. Construction validates every invariant in one pass.\n\nAny violation raises :class:`NetworkValidationError` listing every issue found. Mutating\na constructed network does not re-validate; call :func:`validate_network` to re-check.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "base_mva": {
+      "description": "System MVA base for all per-unit quantities. Must be > 0.",
+      "title": "Base Mva",
+      "type": "number"
+    },
+    "buses": {
+      "items": {
+        "$ref": "#/$defs/Bus"
+      },
+      "title": "Buses",
+      "type": "array"
+    },
+    "branches": {
+      "items": {
+        "$ref": "#/$defs/Branch"
+      },
+      "title": "Branches",
+      "type": "array"
+    },
+    "generators": {
+      "items": {
+        "$ref": "#/$defs/Generator"
+      },
+      "title": "Generators",
+      "type": "array"
+    },
+    "loads": {
+      "items": {
+        "$ref": "#/$defs/Load"
+      },
+      "title": "Loads",
+      "type": "array"
+    },
+    "shunts": {
+      "items": {
+        "$ref": "#/$defs/Shunt"
+      },
+      "title": "Shunts",
+      "type": "array"
+    },
+    "storage": {
+      "items": {
+        "$ref": "#/$defs/Storage"
+      },
+      "title": "Storage",
+      "type": "array"
+    },
+    "zones": {
+      "items": {
+        "$ref": "#/$defs/Zone"
+      },
+      "title": "Zones",
+      "type": "array"
+    }
+  },
+  "required": [
+    "base_mva"
+  ],
+  "title": "Network",
+  "type": "object"
+}

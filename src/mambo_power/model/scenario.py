@@ -1,0 +1,98 @@
+"""The :class:`Scenario` model — a self-contained market scenario, and its :class:`Period`s."""
+
+from typing import Self
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from mambo_power.model.network import Network
+
+MAX_PERIODS = 200
+"""Upper bound on ``Scenario.periods``' length: a wire-format decompression-bomb guard, not a
+solver limit. M5 measured a 33,997-byte ``SolveRequest`` expanding to 20,088,000 constraint-matrix
+nonzeros before HiGHS even starts (~7,000x, `continuation-m5.md` carry-over 3); nonzeros scale as
+``T * n_branch * n_gen``, so the ratio grows with the horizon length alone. `m6-research.md` §8
+sizes 200 as the largest horizon that keeps ``case300`` -- this repo's biggest fixture -- near
+~68 MB by that same linear estimate, while still covering 8x the epic's stated 24-period real use
+case (R7) and more than a full week of hourly periods (168)."""
+
+
+class Period(BaseModel):
+    """One period's load overrides within a multi-period :class:`Scenario`.
+
+    ``load_p_mw`` is an id-keyed **override** of each ``Load``'s ``p_mw`` for this period, not
+    a scale factor: a load id absent from the dict falls back unchanged to that ``Load``'s own
+    ``p_mw``. :func:`mambo_power.market.multiperiod.solve_multiperiod` resolves it into that
+    period's fixed load *and*, for a load carrying a ``bid``, the upper bound of its elastic
+    column — ``Load.p_mw`` means both, so an override of it moves both. Every key must resolve to
+    a real ``Load`` id in the scenario's network, checked by :class:`Scenario` rather than here,
+    since a bare ``Period`` has no network to check against.
+
+    The value range is exactly ``Load.p_mw``'s, deliberately: an override may not be narrower
+    than the field it overrides, or a horizon could not express a load the network itself is
+    allowed to carry. ``Load.p_mw`` has no lower bound and ``case300`` ships eight **negative**
+    loads (a net injection at a load bus), so a ``>= 0`` rule here would reject even the
+    *identity* profile ``{ld.id: ld.p_mw for ld in case300.loads}`` — a horizon that changes
+    nothing — on a network ``market.nodal`` clears without complaint. ``allow_inf_nan=False``
+    still holds: a non-finite override is meaningless in any period.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=False, allow_inf_nan=False)
+
+    load_p_mw: dict[str, float] = Field(
+        description="Per-load active-power override for this period, MW, keyed by Load id. The "
+        "same range as Load.p_mw, negatives included; must be finite."
+    )
+
+
+class Scenario(BaseModel):
+    """A market scenario to clear: the network to clear it against, and its periods, if any.
+
+    Embeds ``network: Network`` directly, mirroring ``jobs.models.SolveRequest``'s
+    self-contained pattern rather than an id/path cross-reference — no such resolution
+    mechanism exists anywhere else in this codebase.
+    ``Network``'s own ``model_validator(mode="after")`` runs while ``Scenario`` is being
+    constructed (it is a nested pydantic model field), so every invariant ``Network`` already
+    checks — including dangling references — is checked here too, with no separate pass needed.
+
+    ``periods: list[Period] | None = None`` — ``None`` means single-period: ``market.nodal``'s
+    existing behaviour is unaffected (AC-4, wave M5). No agent-strategy fields this wave: their
+    eventual shape is genuinely undesigned by M7, unlike ``Storage``'s successful M1 stub, which
+    had a full spec before it shipped (design interview 2026-08-24, ratified; wave spec Design
+    item 3).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=False, allow_inf_nan=False)
+
+    network: Network = Field(description="The network to clear; the scenario is self-contained.")
+    periods: list[Period] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_PERIODS,
+        description="Per-period load overrides; None = single-period, market.nodal semantics "
+        "unchanged. If given, must be non-empty and at most MAX_PERIODS (200) entries -- a "
+        "wire-format decompression-bomb guard: constraint-matrix nonzeros scale with horizon "
+        "length, and M5 measured a 33,997-byte request expanding to 20,088,000 of them.",
+    )
+
+    @model_validator(mode="after")
+    def _check_period_load_refs(self) -> Self:
+        # Period has no network to check its own load ids against; this is the one place that
+        # holds both the periods and the network at once, mirroring how Network's own
+        # validate_network() catches a dangling reference, but at the Scenario level since
+        # Period is scenario data, not a Network entity.
+        if self.periods is None:
+            return self
+        load_ids = {load.id for load in self.network.loads}
+        dangling = sorted(
+            {
+                load_id
+                for period in self.periods
+                for load_id in period.load_p_mw
+                if load_id not in load_ids
+            }
+        )
+        if dangling:
+            raise ValueError(
+                f"periods reference load id(s) not present in network.loads: {dangling}"
+            )
+        return self

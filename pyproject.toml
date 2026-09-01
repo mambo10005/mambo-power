@@ -1,0 +1,134 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mambo-power"
+version = "0.1.0"
+description = "Fundamental Python package for power system analysis and electricity market modelling"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+  "numpy",
+  "scipy",
+  "highspy",
+  "pydantic>=2",
+]
+
+[dependency-groups]
+dev = [
+  "pytest",
+  "hypothesis",
+  "pandapower",
+  "pypsa",
+  "ruff",
+  "mypy",
+  "nbmake",
+]
+docs = [
+  "mkdocs-material>=9.7",
+  "mkdocstrings[python]>=1.0",
+  "pymdown-extensions>=10.16",
+  "mkdocs-jupyter>=0.26",
+]
+release = [
+  "python-semantic-release>=10.6.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mambo_power"]
+
+[tool.hatch.build.targets.sdist]
+# Explicit allow-list: hatch's VCS default follows the machine-local `.bionic` symlink and
+# would ship planning docs, uv.lock and dotfiles. The sdist must carry tests/ and fixtures/
+# so a source install can run the parity suite; the wheel stays package-only.
+include = [
+  "/src/mambo_power",
+  "/tests",
+  "/fixtures",
+  "/README.md",
+  "/LICENSE",
+  "/pyproject.toml",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".bionic"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["pandapower.*", "pypsa.*", "highspy.*", "scipy.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Repository root on sys.path: test modules import shared helpers as `tests._fixtures` and
+# `tests.parity._mpc_reader` (PEP 420 namespace packages; no __init__.py needed).
+pythonpath = ["."]
+addopts = "-ra --strict-markers --import-mode=importlib"
+markers = [
+  "unit: fast, hermetic tests of our own code (tests/unit)",
+  "parity: tests comparing against the pandapower / PyPSA oracles (tests/parity)",
+  "property: hypothesis property-based tests (tests/property)",
+]
+
+# W6 (wave M9): computes 0.1.0+ version bumps and CHANGELOG entries from conventional-commit
+# messages on epic/01-foundation, starting from the v0.1.0 tag T2 cuts by hand at Step 9 —
+# never from the pre-semantic-release history (Not doing, m9-scope.md). `version_toml` writes
+# the computed version back into [project] above; `docs/changelog.md`'s own `<!-- version list
+# -->` marker (see that file) is where the generated section is inserted, coexisting with the
+# nine hand-written wave sections below it (S4 design ruling — never regenerated, never
+# reformatted). See `.bionic/docs/record/m9-s5-report.md` for the dry-run proof this
+# configuration was verified against, including this repo's own commit history shape.
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+tag_format = "v{version}"
+commit_parser = "conventional"
+# 0.1.0 is the deliberate starting point (T2); breaking changes still jump straight to 1.0.0
+# (matches AC-4's fixture: BREAKING CHANGE on a 0.x version -> major bump), since this repo's
+# stated plan is a single 0.1.0 release, not an extended pre-1.0 development series.
+allow_zero_version = true
+major_on_zero = true
+
+# Releases were cut from `epic/01-foundation` through v0.1.0 (wave M9), before the epic itself
+# had merged to `main`. This commit is part of that merge (epic close, per epic.plan.md), so
+# `main` becomes where releases are cut from — per docs/contributing.md#cutting-a-release, this
+# match must move in the same change as the merge, or semantic-release will silently refuse to
+# compute a version on the new branch.
+[tool.semantic_release.branches.main]
+match = "main"
+prerelease = false
+
+[tool.semantic_release.commit_parser_options]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
+# "merge" and "fixtures" are this repo's own non-standard conventional-commit types (grep of
+# epic/01-foundation: 15 `merge(...)` commits, 1 `fixtures(...)` commit) — added here so they
+# render, correctly non-bumping, in the generated changelog rather than being silently dropped
+# as unrecognized. Confirmed safe (A3): every `merge(...)`-labeled commit in this repo's real
+# history is an actual two-parent git merge, which `ignore_merge_commits` (below) excludes from
+# parsing outright, before this allow-list is even consulted.
+other_allowed_tags = ["build", "chore", "ci", "docs", "style", "refactor", "test", "merge", "fixtures"]
+allowed_tags = [
+  "feat", "fix", "perf",
+  "build", "chore", "ci", "docs", "style", "refactor", "test", "merge", "fixtures",
+]
+parse_squash_commits = true
+ignore_merge_commits = true
+
+[tool.semantic_release.changelog]
+mode = "update"
+insertion_flag = "<!-- version list -->"
+
+[tool.semantic_release.changelog.default_templates]
+changelog_file = "docs/changelog.md"
+output_format = "md"

@@ -1,0 +1,5 @@
+- 2026-08-30T01:04:20Z started; versions: pandapower 3.3.0, pypsa 1.2.4, linopy 0.9.1
+- 2026-08-30T01:06:31Z pandapower probes done (pp_probe.py, pp_probe2.py)
+- 2026-08-30T01:07:14Z pypsa probe done (pypsa_probe.py)
+- 2026-08-30T01:10:01Z pwl/json/custom-attr probes done (pp_probe3.py, pypsa_probe2.py)
+- 2026-08-30T01:14:05Z artifact written: .bionic/docs/record/m8-research.md (4 sections, field maps, model gaps G1-G11, fixture candidates); done

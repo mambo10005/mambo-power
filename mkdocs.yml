@@ -1,0 +1,161 @@
+site_name: mambo-power
+site_description: Fundamental Python package for power system analysis and electricity market modelling
+site_url: https://mambo10005.github.io/mambo-power/
+repo_url: https://github.com/mambo10005/mambo-power
+repo_name: mambo10005/mambo-power
+edit_uri: edit/epic/01-foundation/docs/
+copyright: MIT licence
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - autorefs
+  - mkdocs-jupyter:
+      # W3 (wave-09-release-0.1): the four tutorial notebooks were executed once via
+      # nbconvert when S1 authored them, and their SOURCE is re-executed fresh on every CI
+      # push by nbmake (.github/workflows/ci.yml's `tutorials` job) — nbmake proves the code
+      # still runs without raising, it does not diff or refresh the stored OUTPUTS. So
+      # `execute: false` (the plugin's own default) renders whatever outputs happen to be
+      # stored in the .ipynb files at `mkdocs build` time — the last authoring pass's numbers,
+      # not necessarily today's — instead of re-running solver code during a docs build, which
+      # would slow every build and duplicate work nbmake already does. Step-6 critic finding
+      # C4: don't describe stored outputs as "CI-verified" — CI verifies the code, not the
+      # numbers on this page. Keeping stored outputs in sync with source is a manual discipline
+      # (re-run + re-save when a tutorial's code changes), not a mechanically enforced one.
+      include: ["tutorials/*.ipynb"]
+      execute: false
+      include_source: false
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          options:
+            # Publishes pydantic ``Field(description=...)`` as attribute documentation, the way
+            # the ``opf`` dataclasses' PEP-257 attribute docstrings already are. Without it every
+            # pydantic result model renders as a bare class heading with no field list.
+            extensions:
+              - docs/hooks/pydantic_fields.py:PydanticFieldDescriptions
+            docstring_style: sphinx
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: true
+            members_order: source
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_signature_annotations: true
+            separate_signature: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            show_if_no_docstring: false
+            docstring_section_style: table
+            filters: ["!^_"]
+
+# Renders the reST roles used in the code's docstrings (:class:`X`) as cross-reference links.
+hooks:
+  - docs/hooks/rest_roles.py
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path: ["examples", "."]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3.2.2/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Tutorials:
+      - tutorials/index.md
+      - 1. Your first power flow: tutorials/01-first-power-flow.ipynb
+      - 2. DC-OPF and N-1 screening: tutorials/02-dc-opf-and-n1.ipynb
+      - 3. A nodal market: tutorials/03-nodal-market.ipynb
+      - 4. Where next: tutorials/04-where-next.ipynb
+  - Manual:
+      - Network model: manual/model.md
+      - File formats: manual/formats.md
+      - Numerics: manual/numerics.md
+      - Power flow: manual/power-flow.md
+      - DC-OPF: manual/opf.md
+      - N-1 screening: manual/n1.md
+      - Nodal market: manual/market.md
+      - Multiperiod market: manual/multiperiod.md
+      - Zonal market: manual/zonal.md
+      - Agent-based bidding: manual/agents.md
+      - Results: manual/results.md
+      - Jobs API: manual/jobs.md
+  - Examples: examples/index.md
+  - API reference:
+      - mambo_power.model: api/model.md
+      - mambo_power.io.csv_bundle: api/io-csv-bundle.md
+      - mambo_power.io.matpower: api/io-matpower.md
+      - mambo_power.io.native: api/io-native.md
+      - mambo_power.io.pandapower_json: api/io-pandapower-json.md
+      - mambo_power.io.psse_raw: api/io-psse-raw.md
+      - mambo_power.io.pypsa: api/io-pypsa.md
+      - mambo_power.io.report: api/io-report.md
+      - mambo_power.io.limitations: api/io-limitations.md
+      - mambo_power.numerics: api/numerics.md
+      - mambo_power.pf: api/pf.md
+      - mambo_power.opf: api/opf.md
+      - mambo_power.contingency: api/contingency.md
+      - mambo_power.market: api/market.md
+      - mambo_power.results: api/results.md
+      - mambo_power.jobs: api/jobs.md
+  - Design:
+      - Architecture: design/architecture.md
+      - Data model: design/data-model.md
+      - Decisions: design/decisions.md
+  - Changelog: changelog.md
+  - Contributing: contributing.md

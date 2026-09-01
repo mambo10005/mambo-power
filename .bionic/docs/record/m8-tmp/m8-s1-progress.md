@@ -1,0 +1,6 @@
+- 02:37 S1 start: context read (entities, report, matpower, snapshot test, formats.md)
+- 02:52 commit 1 Branch.kind 79a71ea; unit 935 passed; sabotage 4 failed/11 passed
+- 02:54 ExportReport green (16 passed); sabotage formats.md → test_every_registered_code_is_documented[io.matpower-GENCOST_REACTIVE_IGNORED] failed; restored
+- 02:57 commit 2 ExportReport 25e9bed; unit 951 passed; gates green
+- 03:07 commit 3 docs fix a51250f — commit 2's unit run actually had 1 failure (api docs coverage); now 951 passed in 173.05s (0:02:53)
+- 03:08 report written .bionic/docs/record/m8-s1-report.md; S1 done
