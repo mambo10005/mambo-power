@@ -2,14 +2,76 @@
 
 All notable changes to mambo-power are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
-[Semantic Versioning](https://semver.org/). Nothing has been released yet; the first release
-will be 0.1.0 on PyPI (wave M9).
+[Semantic Versioning](https://semver.org/). `python-semantic-release` inserts each new release
+directly below this line, computed from conventional-commit messages, starting from the
+`v0.1.0` tag (wave M9) — this preamble is deliberately written to stay true before *and* after
+that first release lands, so it can never repeat the contradiction a stale "nothing released
+yet" sentence caused here once (Step-6 critic finding C2: the tool writes below this exact
+line, permanently, so a release-state claim here has a shelf life of one release).
 
-## [Unreleased]
+<!-- version list -->
 
-One section per wave, newest first. Nothing on this page has been released. Which waves have
-merged to `epic/01-foundation` and which are still on their own branch is tracked in [the home
-page's roadmap table](index.md), not restated here, so this page cannot go stale about it.
+## Pre-release history
+
+One hand-written section per wave, newest first — written before any release existed, and before
+`python-semantic-release` (wave M9) started generating new entries above this heading from the
+`v0.1.0` tag forward, one per computed version, from conventional-commit messages. Nothing below
+this heading is a PyPI release; the heading says "history," not "Released," on purpose — see the
+preamble above. Which waves have merged to `epic/01-foundation` and which are still on their own
+branch is tracked in [the home page's roadmap table](index.md), not restated here, so this page
+cannot go stale about it.
+
+### Added — wave M9 (release-0.1)
+
+- **Four narrative tutorial notebooks.** `docs/tutorials/{01-first-power-flow, 02-dc-opf-and-n1,
+  03-nodal-market, 04-where-next}.ipynb`, difficulty-tiered (beginner through a shorter guided
+  fork) and prose-heavy — a different reader than `examples/*.py`'s terse scripts — each
+  self-contained and referencing the one before it: tutorial 1 loads `case14` and contrasts
+  `pf.solve_dc`/`solve_ac`; tutorial 2 runs `opf.solve_dc_opf` for dispatch and LMPs plus
+  `contingency.n1` screening; tutorial 3 runs `market.solve_nodal` with elastic demand and
+  narrates settlement/congestion rent; tutorial 4 is a guided fork between `market.agents`
+  (strategic bidding) and `io.*` (interop), one worked example of each. `docs/tutorials/index.md`
+  states the arc and each notebook's tier. Every code cell was proved twice before being
+  committed with its output baked in — once as a standalone script against the real package,
+  once via a full fresh-kernel `nbconvert --execute` pass.
+- **Notebooks execute in CI.** `nbmake` (new `dev`-group dependency) runs the four notebooks as a
+  dedicated `tutorials` CI job (`pytest --nbmake docs/tutorials/*.ipynb`, fresh kernel, fails on
+  any raised exception) — kept off the five-leg OS/Python test matrix, since a notebook run is
+  solver-heavy and re-running the same four notebooks five times would spend CI minutes for no
+  extra coverage.
+- **Notebooks render on the site.** `mkdocs-jupyter` (new `docs`-group dependency) renders the
+  four notebooks under a new top-level `Tutorials` nav section, between `Getting started` and
+  `Manual`; `execute: false` — the outputs `nbmake` already verified fresh in CI are what's
+  shown, not a second, slower re-execution at `mkdocs build` time. `Manual`'s own 12 entries are
+  untouched, in both content and order.
+- **Home page and roadmap.** `docs/index.md`'s status prose and roadmap table read `merged` for
+  every wave M1 through M9; the "where do I go" table gains a `Tutorials` row ahead of the
+  `Manual` rows.
+- **PyPI-sequencing drift guard.** `scripts/check_pypi_sequencing.py`, run in CI, asserts
+  `docs/getting-started.md`'s PyPI install instructions are never present without a matching
+  `v0.1.0`+ tag reachable from `HEAD` — the "not on PyPI yet" text this page carries through
+  Step 8's merge can only flip to `pip install mambo-power` in the same action as the tag push,
+  and any later wave that tried to jump the gun would fail this guard rather than drift silently.
+- **`python-semantic-release`**, configured in `pyproject.toml`'s new `[tool.semantic_release]`
+  table, computes the next version from conventional-commit messages on `epic/01-foundation`
+  (`feat`→minor, `fix`/`perf`→patch, a `BREAKING CHANGE:` footer→major), starting from a
+  manually-cut `v0.1.0` — never from this repo's full pre-semantic-release history. Its built-in
+  update mode inserts each new release's section directly below the `<!-- version list -->` flag
+  now at the top of this page; the nine wave sections that used to sit directly under
+  `## [Unreleased]` are unchanged, byte-for-byte, just relocated under `## Pre-release history`
+  below. Two operational notes for whoever runs a release: on Windows, a local
+  `semantic-release` invocation needs `PYTHONUTF8=1` set first, or this page's non-ASCII prose
+  crashes its default-codepage read (GitHub Actions' own UTF-8 locale is not expected to hit
+  this); and `semantic-release changelog` is not idempotent against an untagged state — running
+  it twice with no intervening tag duplicates the generated section, so a release always goes
+  through `semantic-release version` (which tags and moves the insertion boundary in the same
+  step), never the `changelog` subcommand repeated on its own.
+- **PyPI trusted publishing.** `.github/workflows/publish.yml` triggers only on a pushed `v*` tag
+  (never on a plain commit, a PR, or `workflow_dispatch`); builds the wheel and sdist and
+  publishes via `pypa/gh-action-pypi-publish` using OIDC — no token or secret anywhere in the
+  workflow file or repo settings; runs in a `pypi` GitHub environment (owner `mambo10005`, repo
+  `mambo-power`) that a required-reviewer rule on the environment gates as the manual-approval
+  step before anything actually publishes.
 
 ### Fixed — case30 redispatch/zonal dual degeneracy in CI (2026-08-31)
 
@@ -542,5 +604,3 @@ page's roadmap table](index.md), not restated here, so this page cannot go stale
   measured residual against the AC solver (8.5e-3 pu worst, 11 of 300 buses beyond 2e-3) and
   withdraws the earlier "0.107 pu" and "pandapower cannot converge with Q-limits" figures,
   which came from a tap-side defect in the research's oracle copy, not from the data.
-
-[Unreleased]: https://github.com/mambo10005/mambo-power/commits/epic/01-foundation

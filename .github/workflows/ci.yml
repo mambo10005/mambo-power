@@ -46,6 +46,20 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         run: uv run pytest tests/parity/test_ac_timing.py -q -s -p no:cacheprovider
 
+  pypi-sequencing:
+    # AC-3 (wave M9, W5): docs/getting-started.md may not claim PyPI availability before a
+    # matching v0.1.0+ tag exists. scripts/check_pypi_sequencing.py is stdlib-only (no `uv
+    # sync`, no project install) so this job stays a few seconds; fetch-depth: 0 is needed
+    # so the tag history it inspects is actually present.
+    name: pypi sequencing guard
+    runs-on: ubuntu-latest
+    needs: []
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python3 scripts/check_pypi_sequencing.py
+
   examples:
     # AC-9: every script under examples/ runs to completion against the installed package.
     # tests/unit/test_examples_run.py runs the same loop inside the test matrix; this job
@@ -70,6 +84,28 @@ jobs:
             uv run python "$f" || { echo "::error::$f failed"; exit 1; }
             echo "::endgroup::"
           done
+
+  tutorials:
+    # AC-1 (wave M9, W2): the four notebooks under docs/tutorials/ execute fresh under nbmake
+    # (fails on any raised exception or nonzero exit; no output-diffing, per the spec's S2
+    # ruling — this repo has hit false failures from solver float noise three times, so a
+    # snapshot-compare tool was rejected). One leg, not the full `test` matrix: a notebook run
+    # is solver-heavy, and re-running the same four notebooks on every OS/Python combination
+    # would be redundant CI time for no extra coverage — the `examples` and `docs` jobs make
+    # the same single-leg call for the same reason.
+    name: tutorials (nbmake)
+    runs-on: ubuntu-latest
+    needs: []
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --locked --all-groups
+      - run: uv run pytest --nbmake docs/tutorials/*.ipynb -q
 
   install-smoke:
     # AC-8: the built wheel installs into a clean venv (no project, no dev group) and is

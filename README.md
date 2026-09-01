@@ -11,16 +11,18 @@ Documentation: **https://mambo10005.github.io/mambo-power/**
 - A JSON-native network model (pydantic v2): `Network` with buses, branches, generators
   (with cost curves), loads, shunts, storage and zones; physical units, stable string ids,
   all-issues validation with named error codes, JSON schema generated from the model.
-- Importers that speak only the model: MATPOWER `.m` cases and the native JSON format today;
-  pandapower JSON, PyPSA, PSS/E RAW and CSV bundles later.
+- Importers that speak only the model: MATPOWER `.m` cases and the native JSON format, plus
+  pandapower JSON, PyPSA, PSS/E RAW and CSV bundles.
 - Network matrices over scipy.sparse: `NetworkArrays` (the single per-unit conversion site),
   Ybus, Bbus, PTDF, LODF with bridge detection.
-- Solvers: DC power flow now; AC Newton-Raphson with Q-limit enforcement in the current wave;
-  DC optimal power flow, N-1 contingency analysis and market clearing (nodal LMP, zonal with
-  redispatch, multi-period with storage, agent-based bidding) in later waves.
+- Solvers: DC power flow and AC Newton-Raphson with Q-limit enforcement; DC optimal power flow
+  with duals on HiGHS; N-1 contingency screening; market clearing (nodal LMP, multiperiod with
+  storage, zonal with redispatch, agent-based bidding).
 - Typed, id-keyed results stamped with provenance (engine version, solver, timings), never
   stored on the network; a stateless, JSON-serialisable `jobs.run(SolveRequest)` surface
   designed to sit behind a service.
+- Narrative tutorial notebooks (execution-tested in CI), an automated changelog, and PyPI
+  trusted publishing.
 
 Free in both senses: an open-source stack end to end with no paid solvers or licences, and
 built, tested, documented and published entirely on free infrastructure (GitHub Actions,
@@ -30,12 +32,22 @@ GitHub Pages, PyPI trusted publishing).
 
 | Wave | Scope | State |
 | --- | --- | --- |
-| M1 | Installable package, `Network` model, MATPOWER import, Ybus/Bbus/PTDF/LODF, CI on Linux/macOS/Windows | merged |
-| M2 | DC + AC power flow, typed results, `jobs` API, documentation site, runnable examples | in progress |
-| M3+ | DC-OPF, N-1, markets, interchange formats, PyPI 0.1.0 | planned |
+| M1 | Installable package, `Network` model, MATPOWER import, Ybus/Bbus/PTDF/LODF, CI matrix | merged |
+| M2 | DC + AC Newton-Raphson power flow, typed results, `jobs` API, docs site, examples | merged |
+| M3 | DC optimal power flow with duals on HiGHS, N-1 branch-contingency screening | merged |
+| M4 | Nodal market: elastic-demand DC-OPF, LMP clearing, settlement | merged |
+| M5 | Multiperiod market: 24-period horizon, ramp coupling, storage SoC, per-period settlement | merged |
+| M6 | Zonal market: zonal clearing, min-cost redispatch, nodal-vs-zonal comparison | merged |
+| M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
+| M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
+| M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
 
-Not yet on PyPI. Runtime dependencies are exactly `numpy`, `scipy`, `highspy`, `pydantic`;
-Python 3.11 or newer.
+Not yet on PyPI — this changes in the same action as the `v0.1.0` tag; see
+[Getting started](https://mambo10005.github.io/mambo-power/getting-started/) for the current
+install instructions, which is the live source of truth if this file is ever stale (this table
+is not covered by any automated freshness check — see the wave M9 continuation record if you're
+reading this after a release and it still says otherwise). Runtime dependencies are exactly
+`numpy`, `scipy`, `highspy`, `pydantic`; Python 3.11 or newer.
 
 ## Install from source
 
@@ -66,16 +78,27 @@ assert again == result
 Then: [Getting started](https://mambo10005.github.io/mambo-power/getting-started/) walks
 through loading, validating, solving and reading results with real output.
 
-## Manual
+## Tutorials and manual
+
+[Tutorials](https://mambo10005.github.io/mambo-power/tutorials/) are prose-heavy, narrative
+walkthroughs (a first power flow, DC-OPF + N-1, a nodal market, where to go next) — start there
+if you're new. The manual is the reference:
 
 - [Network model](https://mambo10005.github.io/mambo-power/manual/model/) — every entity,
   field, unit, and validation code
-- [File formats](https://mambo10005.github.io/mambo-power/manual/formats/) — native JSON and
-  the MATPOWER importer (column map, derived ids, warnings, limitations)
+- [File formats](https://mambo10005.github.io/mambo-power/manual/formats/) — native JSON,
+  MATPOWER, pandapower JSON, PyPSA, PSS/E RAW, CSV bundles
 - [Numerics](https://mambo10005.github.io/mambo-power/manual/numerics/) — `NetworkArrays`,
   Ybus, Bbus, PTDF, LODF and bridges
 - [Power flow](https://mambo10005.github.io/mambo-power/manual/power-flow/) — the DC
   formulation and the AC solver's contract
+- [DC-OPF](https://mambo10005.github.io/mambo-power/manual/opf/) and
+  [N-1 screening](https://mambo10005.github.io/mambo-power/manual/n1/)
+- Market clearing: [nodal](https://mambo10005.github.io/mambo-power/manual/market/),
+  [multiperiod](https://mambo10005.github.io/mambo-power/manual/multiperiod/),
+  [zonal](https://mambo10005.github.io/mambo-power/manual/zonal/)
+- [Agent-based bidding](https://mambo10005.github.io/mambo-power/manual/agents/) — strategies,
+  offered-vs-true cost, the fixed-point loop
 - [Results](https://mambo10005.github.io/mambo-power/manual/results/) — result tables,
   provenance, JSON round-trip, `to_arrays()`
 - [Jobs API](https://mambo10005.github.io/mambo-power/manual/jobs/) — the stateless

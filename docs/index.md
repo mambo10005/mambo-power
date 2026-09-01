@@ -15,27 +15,27 @@ print(result.branches[0].p_from_mw)
 ```
 
 !!! info "Status"
-    Wave **M1** (substrate: model, MATPOWER import, network matrices), wave **M2** (DC/AC
-    Newton-Raphson power flow, typed results, the stateless [jobs API](manual/jobs.md), this
-    documentation site), wave **M3** (DC optimal power flow with duals, N-1
-    branch-contingency screening), wave **M4** (nodal-market clearing: elastic demand,
-    LMP-based settlement — `market.solve_nodal`, see [Manual › Nodal
-    market](manual/market.md)) and wave **M5** (a whole horizon cleared as one coupled LP/QP
-    with generator ramp coupling, storage state of charge and a cyclic end-of-horizon
-    condition — `market.solve_multiperiod`, see [Manual › Multiperiod
-    market](manual/multiperiod.md)) and wave **M6** (a market cleared at zonal granularity,
-    a minimum-cost redispatch onto the real network and the comparison against the nodal
-    optimum — `market.solve_zonal`, see [Manual › Zonal market](manual/zonal.md)) and wave
-    **M7** (agent-based bidding: generators that *offer* through a `Strategy`, the market
-    clearing the offered curves round after round until they settle — `market.solve_agents`,
-    see [Manual › Agent-based bidding](manual/agents.md)) are all merged. Wave **M8**
-    (interchange) is in progress on its own wave branch, with everything below shipped there:
-    pandapower JSON in both directions, PyPSA export, a PSS/E RAW v33 importer and a bit-exact
-    CSV bundle, every conversion returning a report that names what it could not carry
-    (`io.pandapower_json`, `io.pypsa`, `io.psse_raw`, `io.csv_bundle`, see [Manual › File
-    formats](manual/formats.md)), `Branch.kind` telling a line from a transformer, and a new
-    [runnable example](examples/index.md#13-interop). Nothing is on PyPI yet — install from
-    source (see [Getting started](getting-started.md)).
+    All nine foundation waves are merged. **M1** laid the substrate — the network model,
+    MATPOWER import, Ybus/Bbus/PTDF/LODF matrices. **M2** shipped DC/AC Newton-Raphson power
+    flow, typed results, the stateless [jobs API](manual/jobs.md) and this documentation
+    site. **M3** added DC optimal power flow with duals and N-1 branch-contingency screening.
+    **M4**–**M6** shipped three market-clearing modes: nodal (elastic demand, LMP-based
+    settlement — `market.solve_nodal`, see [Manual › Nodal market](manual/market.md)),
+    multiperiod (a whole horizon as one coupled LP/QP with ramp coupling, storage state of
+    charge and a cyclic end condition — `market.solve_multiperiod`, see [Manual › Multiperiod
+    market](manual/multiperiod.md)), and zonal (zonal clearing, minimum-cost redispatch and
+    the comparison against the nodal optimum — `market.solve_zonal`, see [Manual › Zonal
+    market](manual/zonal.md)). **M7** added agent-based bidding — generators that *offer*
+    through a `Strategy`, the market clearing the offered curves round after round until they
+    settle (`market.solve_agents`, see [Manual › Agent-based bidding](manual/agents.md)).
+    **M8** shipped interchange — pandapower JSON in both directions, PyPSA export, a PSS/E RAW
+    v33 importer and a bit-exact CSV bundle, every conversion returning a report that names
+    what it could not carry (`io.pandapower_json`, `io.pypsa`, `io.psse_raw`,
+    `io.csv_bundle`, see [Manual › File formats](manual/formats.md)), and `Branch.kind`
+    telling a line from a transformer. **M9** closed the epic — narrative
+    [tutorials](tutorials/index.md), an automated changelog and the PyPI trusted-publishing
+    pipeline. Nothing is on PyPI yet — install from source (see [Getting
+    started](getting-started.md)).
 
 ## Three principles
 
@@ -103,6 +103,7 @@ flowchart LR
 | You want to… | Read |
 | --- | --- |
 | Install and run a first power flow | [Getting started](getting-started.md) |
+| Follow a guided walkthrough, start to finish | [Tutorials](tutorials/index.md) |
 | Understand the network model, its units and validation errors | [Manual › Network model](manual/model.md) |
 | Import a MATPOWER, pandapower or PSS/E RAW case; export to pandapower, PyPSA or a CSV bundle | [Manual › File formats](manual/formats.md) |
 | Build Ybus, Bbus, PTDF or LODF matrices | [Manual › Numerics](manual/numerics.md) |
@@ -130,7 +131,7 @@ flowchart LR
 | M5 | Multiperiod market: 24-period horizon, ramp coupling, storage SoC, per-period settlement | merged |
 | M6 | Zonal market: zonal clearing, min-cost redispatch, nodal-vs-zonal comparison | merged |
 | M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
-| M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | in progress |
-| M9 | PyPI 0.1.0 with trusted publishing and semantic-release | planned |
+| M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
+| M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
 
 mambo-power is MIT licensed. Source: [github.com/mambo10005/mambo-power](https://github.com/mambo10005/mambo-power).

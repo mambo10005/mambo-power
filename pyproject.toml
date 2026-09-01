@@ -25,11 +25,16 @@ dev = [
   "pypsa",
   "ruff",
   "mypy",
+  "nbmake",
 ]
 docs = [
   "mkdocs-material>=9.7",
   "mkdocstrings[python]>=1.0",
   "pymdown-extensions>=10.16",
+  "mkdocs-jupyter>=0.26",
+]
+release = [
+  "python-semantic-release>=10.6.2",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -75,3 +80,53 @@ markers = [
   "parity: tests comparing against the pandapower / PyPSA oracles (tests/parity)",
   "property: hypothesis property-based tests (tests/property)",
 ]
+
+# W6 (wave M9): computes 0.1.0+ version bumps and CHANGELOG entries from conventional-commit
+# messages on epic/01-foundation, starting from the v0.1.0 tag T2 cuts by hand at Step 9 —
+# never from the pre-semantic-release history (Not doing, m9-scope.md). `version_toml` writes
+# the computed version back into [project] above; `docs/changelog.md`'s own `<!-- version list
+# -->` marker (see that file) is where the generated section is inserted, coexisting with the
+# nine hand-written wave sections below it (S4 design ruling — never regenerated, never
+# reformatted). See `.bionic/docs/record/m9-s5-report.md` for the dry-run proof this
+# configuration was verified against, including this repo's own commit history shape.
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+tag_format = "v{version}"
+commit_parser = "conventional"
+# 0.1.0 is the deliberate starting point (T2); breaking changes still jump straight to 1.0.0
+# (matches AC-4's fixture: BREAKING CHANGE on a 0.x version -> major bump), since this repo's
+# stated plan is a single 0.1.0 release, not an extended pre-1.0 development series.
+allow_zero_version = true
+major_on_zero = true
+
+# This repo releases from `epic/01-foundation`, not `main`/`master` (the tool's own default
+# release-branch pattern) — until the epic itself merges to `main` (its own last, one-time act,
+# outside this wave), this is the only branch that should ever compute a version.
+[tool.semantic_release.branches.main]
+match = "epic/01-foundation"
+prerelease = false
+
+[tool.semantic_release.commit_parser_options]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
+# "merge" and "fixtures" are this repo's own non-standard conventional-commit types (grep of
+# epic/01-foundation: 15 `merge(...)` commits, 1 `fixtures(...)` commit) — added here so they
+# render, correctly non-bumping, in the generated changelog rather than being silently dropped
+# as unrecognized. Confirmed safe (A3): every `merge(...)`-labeled commit in this repo's real
+# history is an actual two-parent git merge, which `ignore_merge_commits` (below) excludes from
+# parsing outright, before this allow-list is even consulted.
+other_allowed_tags = ["build", "chore", "ci", "docs", "style", "refactor", "test", "merge", "fixtures"]
+allowed_tags = [
+  "feat", "fix", "perf",
+  "build", "chore", "ci", "docs", "style", "refactor", "test", "merge", "fixtures",
+]
+parse_squash_commits = true
+ignore_merge_commits = true
+
+[tool.semantic_release.changelog]
+mode = "update"
+insertion_flag = "<!-- version list -->"
+
+[tool.semantic_release.changelog.default_templates]
+changelog_file = "docs/changelog.md"
+output_format = "md"

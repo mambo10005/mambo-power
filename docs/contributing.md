@@ -43,6 +43,13 @@ so `uv run` provisions `dev` and nothing else, and the last line then fails with
 The `install-smoke` CI job additionally builds the wheel and sdist and installs each into a
 clean virtual environment.
 
+`getting-started.md`'s install instructions may not claim PyPI availability until a matching
+`v0.1.0`+ git tag exists — enforced by `scripts/check_pypi_sequencing.py` in the
+`pypi-sequencing` CI job. The page is meant to read "not on PyPI yet ... install from source"
+until the real `v0.1.0` tag is cut; if a future edit adds an unqualified `pip install
+mambo-power` / `uv add mambo-power` line ahead of that tag, this check fails the build rather
+than letting the live docs site claim a release that doesn't exist yet.
+
 ## Test tiers and markers
 
 Tests live under `tests/` in three directories; the matching marker is applied automatically
@@ -120,6 +127,59 @@ Pushes to `epic/01-foundation` and `main` deploy the site to
 - Commit messages follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`,
   `chore:`), because semantic-release will derive versions and the changelog from them at
   0.1.0.
-- Keep the [changelog](changelog.md) `Unreleased` section current for user-visible changes.
+- The changelog's `v0.1.0`-and-later sections are generated automatically by
+  `python-semantic-release` from conventional-commit messages at release time — there is no
+  `Unreleased` section to keep current by hand (that changed with wave M9; see
+  [Cutting a release](#cutting-a-release) below). Before `v0.1.0`, wave-scoped changes are
+  still hand-written under [`## Pre-release history`](changelog.md).
 - Documentation is a per-wave deliverable: a change that adds a public symbol adds its
   docstring, its manual section and, where useful, an example in the same change.
+
+## Cutting a release
+
+Wave M9 built three separate pieces of a release chain — `[tool.semantic_release]`'s config,
+`pyproject.toml`'s `version` field, and `.github/workflows/publish.yml`'s tag-vs-version
+consistency gate — without anywhere naming the procedure that connects them (Step-6 reviewer
+finding R11). This section is that procedure, and it is the one place a human should look before
+cutting any release, including the first (`v0.1.0`).
+
+**Use the tool, not a manual version edit.** `semantic-release version` bumps `pyproject.toml`,
+inserts the changelog section, commits, and tags — all in one atomic operation, on the same
+commit. A hand-edited `pyproject.toml` followed by a separately-pushed tag is the one order of
+operations that can make `publish.yml`'s own version-consistency gate fail the build (the tag's
+tree is what `actions/checkout@v4` sees, so the bump commit must exist *before* the tag, not just
+"in the same session").
+
+```bash
+git checkout epic/01-foundation && git pull
+PYTHONUTF8=1 uv run --group release semantic-release version   # Windows needs PYTHONUTF8=1;
+                                                                 # GitHub Actions' UTF-8 locale
+                                                                 # doesn't need it
+git push --follow-tags
+```
+
+That single command bumps the version, writes the new changelog section, commits, and tags —
+verify the printed version and the diff before it pushes anything if you want to sanity-check
+first (it prints "The next version is: X.Y.Z" before acting). `git push --follow-tags` pushes
+both the release commit and its tag; the tag push is what fires `publish.yml`.
+
+Then: approve the `pypi` GitHub environment's required-reviewer gate (repo Settings →
+Environments → `pypi`) when the `publish` job pauses for it — this is the manual-approval
+checkpoint between `build` finishing and the actual PyPI upload.
+
+**Do not run `semantic-release changelog` on its own** as a way to preview the changelog —
+it is not idempotent against an untagged state; running it twice with no intervening tag
+duplicates the generated section. `version` (above) is the only command that should touch this
+repo's changelog.
+
+**Before the epic merges to `main`** (a one-time, later event): `[tool.semantic_release
+.branches.main]`'s `match = "epic/01-foundation"` must be updated to match wherever releases
+are cut from next — today that's deliberately not `main`, because the epic hasn't merged yet, and
+semantic-release will silently refuse to compute a version on a branch it isn't configured to
+release from (R12).
+
+**Prerequisite, checked automatically:** `scripts/check_pypi_sequencing.py` (CI job
+`pypi-sequencing`) fails if `docs/getting-started.md` claims PyPI availability without a matching
+`v0.1.0`+ tag, or — since wave M9's Step-6 remediation — the reverse: a matching tag exists but
+the page still reads pre-release. Update `getting-started.md`'s install instructions in the same
+change as the release if the guard goes red.

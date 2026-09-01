@@ -1,0 +1,99 @@
+name: Publish to PyPI
+
+# W7/AC-5/T3: fires only on a pushed `v*`-shaped tag. Deliberately no `branches:` key under
+# `push`, no `pull_request:` trigger, no `workflow_dispatch:` — a manual-trigger escape hatch
+# was optional per the task; omitted so the publish job cannot fire from anything but the
+# human act of pushing a release tag (epic A10).
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # AC-5: builds the wheel + sdist and, before doing so, asserts the pushed tag matches
+    # pyproject.toml's [project].version — a cheap safety net that holds whether or not S5's
+    # semantic-release work has landed the version bump automatically by the time this runs.
+    name: build wheel + sdist
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      # Step-6 reviewer finding R13: this is the only workflow in the repo holding
+      # `id-token: write` and the authority to publish under this project's PyPI name, so
+      # every action here is pinned by commit SHA, not a mutable version tag (unlike ci.yml,
+      # which stays tag-pinned — it holds nothing worth stealing). Each SHA below was resolved
+      # from the named tag via `gh api repos/<owner>/<repo>/git/refs/tags/<tag>` (dereferencing
+      # through the tag object where GitHub returns an annotated tag) and independently
+      # confirmed real via `gh api repos/<owner>/<repo>/commits/<sha>` before being pasted here
+      # — never hand-typed (S6 caught itself fabricating a SHA once already; this is the fix
+      # for that pattern, not just this instance of it).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+
+      - name: Version consistency check (pushed tag vs pyproject.toml)
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            v*) tag_version="${tag#v}" ;;
+            *) echo "::error::ref ${GITHUB_REF} is not a v*-shaped tag"; exit 1 ;;
+          esac
+          pkg_version="$(uv run --no-project --python 3.12 python -c \
+            'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          echo "pushed tag version: ${tag_version}"
+          echo "pyproject.toml version: ${pkg_version}"
+          if [ "${tag_version}" != "${pkg_version}" ]; then
+            echo "::error::tag v${tag_version} does not match pyproject.toml version ${pkg_version}"
+            exit 1
+          fi
+
+      - run: uv build
+      - name: List artifacts
+        run: ls -la dist/
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  publish:
+    # T1: runs in the `pypi` GitHub environment, which is where a required-reviewer rule
+    # (configured in repo settings, see the Step-9 checklist note) becomes a manual-approval
+    # gate before this job is allowed to proceed — the environment doesn't need to exist yet
+    # in repo settings for this YAML to be valid.
+    name: publish to PyPI (trusted publishing)
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mambo-power
+    permissions:
+      # REQUIRED for OIDC trusted publishing: pypa/gh-action-pypi-publish exchanges this
+      # job's short-lived OIDC identity token for a scoped PyPI upload credential. This is
+      # the entire mechanism — no PyPI API token, password, or repo secret is stored or
+      # referenced anywhere in this file or in repo settings.
+      id-token: write
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        # SHA-pinned (R13 — see the top-of-job comment); the trailing comment names the
+        # release this SHA resolves to (v1.14.2, released 2026-07-29 — checked at
+        # implementation time via the action's GitHub releases page). Deliberately no
+        # `password:` / `api-token:` input — its absence is what puts the action into OIDC
+        # (trusted publishing) mode instead of token-based auth.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          print-hash: true
