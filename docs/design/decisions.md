@@ -532,6 +532,58 @@ teaches nothing to the next one, and case14's dormant group would have shipped u
 case30 for a non-degenerate replacement fixture (loses coverage of exactly the topology class real
 networks contain).
 
+## ADR-013 — Tutorial fixtures ship in the sdist, not the wheel; narrative tutorials require a clone
+
+**Status:** accepted 2026-08-31, wave M9, Step-6 critic finding C3.
+
+**Context.** M9 built four narrative tutorial notebooks (docs/tutorials/) that load bundled
+MATPOWER/PSS-E-RAW fixtures by relative path (`../../fixtures/matpower/case14.m`,
+`../../fixtures/case14_v33.raw`), the same fixtures `examples/*.py` and the test suite already
+use. `[tool.hatch.build.targets.wheel]` scopes the wheel to `packages = ["src/mambo_power"]`
+only — `fixtures/` ships in the sdist, never the wheel. So a reader who does exactly what M9's own
+headline deliverable (W7, PyPI trusted publishing) tells them to do — `pip install mambo-power` —
+gets a package with no `fixtures/` directory at all, and three of the four tutorials' first
+executable cell raises `FileNotFoundError`. The Step-6 independent critic found this by reading
+`pyproject.toml`'s wheel scope against the tutorials' own load calls; it was not caught by the
+walk, the auditor, or the 6-axis reviewer, none of whom traced a `pip install`-only install path
+end to end against what the tutorials actually load.
+
+**Decision.** Ship the tutorials as-is, requiring a repository clone, and say so explicitly in
+every tutorial that loads a fixture (tutorial 1 already had the caveat; 2 and 4 were missing it
+and now carry it too) rather than change what ships in the wheel. The tutorials are documentation
+that teaches the package by exercising real MATPOWER/PSS-E data — the same discipline
+`examples/*.py` already established (docs and the tested artifact are the same bytes) — and that
+discipline is worth more than making the wheel self-sufficient for a narrative walkthrough nobody
+runs from a `pip install`-only environment in practice (a reader following a tutorial is, by
+construction, engaging with the project past the point of a bare install).
+
+**Consequences.**
+
+1. **A permanent constraint, not a pre-release one.** Unlike getting-started.md's PyPI-install
+   text (AC-3's guard, sequenced to flip only at the `v0.1.0` tag), this caveat does not go away
+   once the package ships — `pip install mambo-power` will never carry `fixtures/`, at any
+   version, under this decision. Each of the three affected tutorials now states this as a
+   standing fact, not a pre-release note.
+2. **The gap is not covered by any guard.** AC-3's PyPI-sequencing script checks
+   getting-started.md's install claim, not whether the tutorials' own prerequisites are stated
+   correctly. A future tutorial that loads a fixture without the caveat would ship silently wrong
+   again; this ADR is the record for the next slice that adds one to check against, since no test
+   enforces it.
+3. **`examples/*.py` carries the identical constraint**, unremarked before now — every bundled
+   example already requires a clone for the same reason (`fixtures/matpower/case14.m`,
+   repo-root-relative). M9 did not introduce the underlying constraint, only a second convention
+   for stating it (notebook-dir-relative paths, vs. the examples' repo-root-relative ones — two
+   path conventions now coexist, documented in the tutorial cells but not unified).
+
+*Rejected:* bundling `fixtures/` into the wheel (`[tool.hatch.build.targets.wheel] packages`
+widened, or `include`) — grows every install's footprint for data only the tutorials and examples
+need, not the library itself, and reverses on a later wave if this repo ever ships a slimmer
+"library-only" install tier; rewriting the tutorials to synthesize small in-code networks instead
+of loading real MATPOWER cases — loses exactly what D1 (M9's own scope ruling) chose narrative
+tutorials for: real IEEE test cases, the ones the power-systems research community actually uses,
+not synthetic toy grids; a `pip`-installable "extras" data package — real option, but a bigger
+packaging decision than this wave's docs/CI/CD-only scope, deferred rather than decided here.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).
