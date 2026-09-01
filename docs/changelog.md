@@ -11,6 +11,10 @@ line, permanently, so a release-state claim here has a shelf life of one release
 
 <!-- version list -->
 
+## v0.1.0 (2026-09-01)
+
+- Initial Release
+
 ## Pre-release history
 
 One hand-written section per wave, newest first — written before any release existed, and before
