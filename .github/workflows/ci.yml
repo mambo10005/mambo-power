@@ -29,7 +29,16 @@ jobs:
       # Overrides .python-version so the 3.11 / 3.13 legs really run on their interpreter.
       UV_PYTHON: ${{ matrix.python }}
     steps:
+      # fetch-depth: 0 — tests/unit/test_pypi_sequencing_guard.py's
+      # test_guard_passes_against_real_getting_started calls the real
+      # matching_tag_exists() against this checkout's own git history; a shallow clone
+      # (the actions/checkout@v4 default) has no tags, so once a real vN.N.N tag existed
+      # the guard would (correctly) find it missing here even though origin has it, and
+      # fail the exact test meant to catch this class of drift. Same reasoning as the
+      # pypi-sequencing job below, just not noticed until v0.1.0 actually shipped.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
