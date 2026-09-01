@@ -48,16 +48,14 @@ current: 5
   in their own worktrees per A12. **Baseline on the clean main checkout at d18aaea, before any
   agent entered a worktree: 1539 passed / 4 skipped in 1949.56s** (scratchpad
   m9-baseline-d18aaea.log, 2026-08-31 03:13Z).
-- Step 5: cmd: `uv run pytest tests/unit -q` (wave head `a221482`); pass: 1262; total: 1262;
-  output: "1262 passed in 129.02s"; `tests/parity` 292 passed / 4 skipped (captured mid-slice by
-  S7). walk-artifact: record/m9-walk.md (dispatched independent of the spec/plan/ACs, clean —
-  zero AC-[0-9] occurrences, verified by grep). AC-1..AC-4 and AC-6 discharged with tier-run/
-  readback evidence (see matrix below); AC-5 blocked on A16's live pypi.org check, named
-  stop-and-wake, not waived. auditor: round 1 REFUTED at wave level (proof gaps, not
-  implementation — see `record/m9-audit.md`); 7 of 9 findings fixed (F-A1..F-A5,F-A7), 2 carried
-  forward honestly (F-A8 to Step 9, F-A6/F-A9 to Step 6 — see Handoff); round 2 re-check
-  **CONFIRMED** at wave level, all six targeted findings independently re-verified by the auditor
-  (`record/m9-audit.md` §6). Step 5 closes here.
+- Step 5:
+  cmd: `uv run pytest tests/unit -q` (wave head `a221482`, before the Step-6 fix batch)
+  pass: 1262
+  total: 1262
+  output: "1262 passed in 129.02s"
+  walk-artifact: record/m9-walk.md
+  auditor: round 1 REFUTED at wave level (proof gaps, not implementation, see `record/m9-audit.md`); 7 of 9 findings fixed (F-A1..F-A5,F-A7), 2 carried forward honestly (F-A8 to Step 9, F-A6/F-A9 to Step 6, see Handoff); round 2 re-check CONFIRMED at wave level, all six targeted findings independently re-verified by the auditor (`record/m9-audit.md` §6)
+  note: `tests/parity` 292 passed / 4 skipped (captured mid-slice by S7); re-verified at wave head `a0b6233` (post Step-6 fix batch) with 1266 passed — the same 1262 plus 4 new tests the fix batch itself added, see that commit message; walk dispatched independent of the spec/plan/ACs, clean, zero AC-[0-9] occurrences verified by grep; AC-1..AC-4 and AC-6 discharged with tier-run/readback evidence (see matrix below); AC-5 blocked on A16's live pypi.org check, named stop-and-wake, not waived. Step 5 closes here.
 
 ## Slices
 
@@ -223,6 +221,7 @@ conflict-marker resolution on the lockfile itself.
 | m9-reviewer | code-reviewer (opus) | Step-6 6-axis self-review (correctness/readability/architecture/security/performance/duplication) over the full wave diff | record/m9-review.md | active |
 | m9-critic | general-purpose (opus) | Step-6 independent adversarial critic — scope creep, silent assumptions, missing edge cases, fabricated evidence | record/m9-critic.md | active |
 | m9-c-fixes-verify | implementor | Full verification of the Step-6 critic-remediation batch (uv sync/lock, unit suite, ruff/mypy, nbmake, strict build, README/changelog spot-checks) | none (verify-only) | active |
+| m9-final-verify | implementor | Final verification of the R-series reviewer-finding fixes (R1,R2,R3,R6,R7,R11-runbook,R13-SHA-pins) on top of the already-verified C-batch | none (verify-only) | active |
 | m9-s7-wave-docs | implementor | S7: M9 changelog entry, final nav/strict-build check (W8, AC-6). Works in the wave worktree — only agent there, all six other slices merged | record/m9-s7-report.md + commits | **done** (`640a378` changelog entry, `a221482` ruff-clean the four notebooks — found ruff DOES lint `.ipynb`, which S1/S2 both wrongly assumed it didn't). Own bookkeeping/report never landed a sixth time (F8/F11/F17/S3/S4 pattern) — orchestrator verified independently: `tests/unit` 1262 passed (1242 baseline + S4's 20 new guard tests, consistent), `tests/parity` 292/4 already confirmed by S7 mid-slice, `mkdocs build --strict` exit 0, ruff+format+mypy already confirmed clean by S7 mid-slice. Head `a221482` is on `wave/09-release-0.1` directly (S7 worked in the wave worktree itself — no merge step) |
 
 ## Assumptions
