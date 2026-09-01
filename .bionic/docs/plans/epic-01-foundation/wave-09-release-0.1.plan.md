@@ -1,6 +1,6 @@
 ---
 governing-skill: superpowers:writing-plans
-sdlc-step: 8
+sdlc-step: 9
 intent: build
 rigor: audited
 scale: wave
@@ -35,7 +35,7 @@ integration-branch: epic/01-foundation
 intent: build
 rigor: audited
 scale: wave
-current: 8
+current: 9
 
 - Step 0: prereqs: ok; configured 2026-08-30 via "confirm"; base 9012c43 (1539/4, CI green on
   all 8 matrix jobs)
@@ -66,6 +66,10 @@ current: 8
   cleanup: wave-owned tmp ephemera removed (`.bionic/tmp/m9-s*-progress.md`, `.bionic/tmp/case30-t*-progress.md` -- content already captured in `record/` reports); a stray disposable clone directory (`.scratch-c2b`) removed; session-infrastructure state files (`context-spend.state`, `preflight-*.state`, `roster-*.state`) deliberately left alone -- active session machinery, not wave evidence, and this session is still running
   tmp-wiped: wave-scoped entries only (see cleanup above); `.bionic/tmp/` is not fully empty by design (see cleanup note)
   tasks-completed: all rows in this plan's dispatch ledger read done; zero active/pending rows remain (verified via grep before this commit)
+- Step 9:
+  deploy: user-authorized `git push origin epic/01-foundation` (`9012c43..eda3a9d`) -- the epic's own final push, since M9 is its last wave. Real GitHub Actions CI triggered: `gh run view 33475672236` -- all 10 jobs green (the wave's own two new jobs, `tutorials (nbmake)` and `pypi sequencing guard`, included), zero failures, only unrelated upstream Node.js-20-deprecation annotations. Docs (GitHub Pages) workflow `gh run view 33475672282` -- both jobs green, site deployed live.
+  verified-at: `https://mambo10005.github.io/mambo-power/tutorials/` -- fetched live (T3, cold client, real surface) and confirmed all four tutorial titles/links render (Your first power flow, DC-OPF and N-1 screening, A nodal market, Where next), matching what the wave built.
+  monitor: n/a for this push -- GitHub Actions' own status checks are the monitoring surface (repo already alerts on a red run), and there is nothing this wave adds that needs a bespoke alert. **PyPI publish itself is explicitly NOT part of this evidence** -- deploy_target: pypi names the wave's eventual target, but per epic A10 and this wave's own scope note ("the first tag is a human act"), cutting `v0.1.0` and triggering `publish.yml` is a deliberate, separate action the user takes on their own schedule, not something this SDLC run performs autonomously. See Handoff for the exact procedure (docs/contributing.md's "Cutting a release").
 
 ## Slices
 
