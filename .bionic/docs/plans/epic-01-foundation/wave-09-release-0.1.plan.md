@@ -53,7 +53,11 @@ current: 5
   S7). walk-artifact: record/m9-walk.md (dispatched independent of the spec/plan/ACs, clean —
   zero AC-[0-9] occurrences, verified by grep). AC-1..AC-4 and AC-6 discharged with tier-run/
   readback evidence (see matrix below); AC-5 blocked on A16's live pypi.org check, named
-  stop-and-wake, not waived. Auditor dispatched next.
+  stop-and-wake, not waived. auditor: round 1 REFUTED at wave level (proof gaps, not
+  implementation — see `record/m9-audit.md`); 7 of 9 findings fixed (F-A1..F-A5,F-A7), 2 carried
+  forward honestly (F-A8 to Step 9, F-A6/F-A9 to Step 6 — see Handoff); round 2 re-check
+  **CONFIRMED** at wave level, all six targeted findings independently re-verified by the auditor
+  (`record/m9-audit.md` §6). Step 5 closes here.
 
 ## Slices
 
@@ -80,12 +84,12 @@ includes); a fresh CI push happens naturally at Step 9 when `epic/01-foundation`
 
 | AC | tier | status | evidence | auditor |
 |---|---|---|---|---|
-| AC-1 | T2 | discharged | see AC-1 | |
-| AC-2 | T1 | discharged | see AC-2 | |
-| AC-3 | T1 | discharged | see AC-3 | |
-| AC-4 | T2 | discharged | see AC-4 | |
-| AC-5 | T2 | blocked | see AC-5 | |
-| AC-6 | T0 | discharged | see AC-6 | |
+| AC-1 | T2 | discharged | see AC-1 | CONFIRMED |
+| AC-2 | T1 | discharged | see AC-2 | CONFIRMED |
+| AC-3 | T1 | discharged | see AC-3 | CONFIRMED |
+| AC-4 | T2 | discharged | see AC-4 | CONFIRMED |
+| AC-5 | T2 | blocked | see AC-5 | UNVERIFIABLE — correctly so (A16 stop-and-wake) |
+| AC-6 | T0 | discharged | see AC-6 | CONFIRMED |
 
 Tier rationale: AC-1 is T2 — `nbmake` executes real notebooks against the real package in CI
 (the fixture-fidelity declaration is "the bundled MATPOWER cases, same as every example"); AC-4 is
@@ -215,6 +219,7 @@ conflict-marker resolution on the lockfile itself.
 | m9-walk | general-purpose | Step-5 walk: drives the built docs site, executes a tutorial notebook fresh, reads getting-started.md/publish.yml/changelog.md, narrates only — no AC/spec/plan access | record/m9-walk.md | **done**. Clean: strict build 85.56s no project warnings; fresh nbconvert re-execution of tutorial 1 exits 0, matches committed notebook (one cell differs only in stdout stream-chunking, not content); home page's status/roadmap agree with what's actually on disk; getting-started.md unambiguous on pre-release state; publish.yml read plain-language, matches S6's own claims; changelog top-portion coherent. Surprises (all non-blocking): tutorial 2's N-1 screen flags 18/19 branches (fully explained by its own 20%-headroom synthetic rating, but a skimming reader could misread it); mkdocs 2.0's future plugin-system removal will eventually force a decision (not this wave's problem); the `pypi` environment's approval gate is unverifiable from the YAML alone (matches A16's own framing) |
 | m9-auditor | auditor (opus) | Step-5 independent audit: coverage/power/authenticity walk over the discharged matrix rows, re-execution of one evidence command per tier used | record/m9-audit.md | **done** — wave-level **REFUTED** (a verdict on the proof, not the implementation: nothing the auditor tried to break, broke). 9 findings (F-A1..F-A9), 7 fixable now, 2 carried forward (F-A8 to Step 9, F-A9/F-A6 to Step 6). See Handoff for disposition |
 | m9-ac4-transcript | implementor | Fix F-A1: reproduce AC-4's dry-run in a disposable clone with a durable transcript saved to record/ | record/m9-ac4-dryrun.md | **done** — all four outputs match the orchestrator's original (unsaved) run exactly: feat→0.2.0, fix→0.1.1, breaking→1.0.0, chore→"No release will be made, 0.1.0 has already been released!" |
+| m9-auditor-2 | auditor (opus) | Independent re-check of F-A1..F-A5,F-A7 remediation; confirm F-A6/F-A8/F-A9 honestly carried forward | record/m9-audit.md (appended §6) | **done** — wave-level **CONFIRMED**, all six targeted findings independently re-executed (not trusted from description); AC-5 unchanged, correctly blocked; F-A6/F-A8/F-A9 confirmed honestly carried forward, none dropped |
 | m9-s7-wave-docs | implementor | S7: M9 changelog entry, final nav/strict-build check (W8, AC-6). Works in the wave worktree — only agent there, all six other slices merged | record/m9-s7-report.md + commits | **done** (`640a378` changelog entry, `a221482` ruff-clean the four notebooks — found ruff DOES lint `.ipynb`, which S1/S2 both wrongly assumed it didn't). Own bookkeeping/report never landed a sixth time (F8/F11/F17/S3/S4 pattern) — orchestrator verified independently: `tests/unit` 1262 passed (1242 baseline + S4's 20 new guard tests, consistent), `tests/parity` 292/4 already confirmed by S7 mid-slice, `mkdocs build --strict` exit 0, ruff+format+mypy already confirmed clean by S7 mid-slice. Head `a221482` is on `wave/09-release-0.1` directly (S7 worked in the wave worktree itself — no merge step) |
 
 ## Assumptions

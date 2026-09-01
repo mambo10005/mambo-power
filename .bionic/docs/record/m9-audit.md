@@ -431,3 +431,178 @@ rule failed to prevent a reader-visible contradiction now committed in `docs/cha
 
 F-A6 and F-A9 are recorded for the Step-6 critic and the epic's continuation record rather than as
 blockers on this gate.
+
+---
+
+## 6. Re-check of remediation (round 2)
+
+Independent re-audit, second dispatch, not a continuation of the round-1 process context — every
+command below was re-run by me, not trusted from the orchestrator's description. Plan read at
+`C:/Claude Projects/mambo-power` (commit `7170989`); worktree checked at
+`C:/Claude Projects/mambo-power-m9`, head `d5724cb` (one commit past the `a221482` I audited in
+round 1 — `d5724cb` is F-A7's changelog fix). `git status --short` in the worktree was empty before
+I touched anything and empty again when I finished (verified explicitly below, around my own
+revert-and-watch).
+
+### F-A1 — durable AC-4 transcript
+
+`.bionic/docs/record/m9-ac4-dryrun.md` exists (main repo) and is not a stub: full method
+description (disposable clone off `wave/09-release-0.1`, checked out as branch
+`epic/01-foundation` — the tool's configured release branch — tagged `v0.1.0`, each fixture applied
+in isolation via `git reset --hard v0.1.0` before the next, not cumulatively) plus a verbatim
+four-fixture transcript, each with a real commit (`git commit --allow-empty`, real-shaped short
+hashes `1db20d4`/`afc5742`/`7d62acf`/`f22bf29`), the real `semantic-release --noop version --print`
+invocation, its actual banner (`🛡 You are running in no-operation mode...`) and its actual
+`WARNING Token value is missing!` line with four distinct timestamps 19:09:11 → 19:10:37 —
+internally consistent with four separate live tool invocations, not four retyped numbers. Outputs:
+`feat`→**0.2.0**, `fix`→**0.1.1**, `feat`+`BREAKING CHANGE:`→**1.0.0**, `chore`→"No release will be
+made, 0.1.0 has already been released!" — all four computed from the same `v0.1.0` baseline (matches
+the isolated-reset method), and all four are the textbook-correct semantic-release classification
+(feat=minor, fix=patch, breaking=major, chore=no-release). Cross-checked against the plan's own
+citation of this file (`plan.md:137-146`) and the task ledger's `m9-ac4-transcript` row
+(`plan.md:217`) — both quote these same four numbers verbatim, no drift between the transcript, its
+citation, and the ledger.
+
+**Verdict: FIXED.** A durable, internally-consistent, correctly-classified record now exists where
+round 1 found none.
+
+### F-A2 — AC-4 readback states the real exception plainly
+
+Plan's AC-4 readback (`plan.md:147-154`) now reads: *"the preserved region is NOT byte-identical: one
+line changed, a stale reference-link definition `[Unreleased]: https://...` became
+`[Released]: https://...`"* — matching my round-1 diff exactly, not narrowed to the `###`
+subsections this time. I independently re-diffed the preserved region against the pre-wave baseline
+myself in this round (below, folded into F-A7's check since the same line is now the subject of
+F-A7's fix) and confirm no other content in the region moved.
+
+**Verdict: FIXED.**
+
+### F-A3 — AC-2 roadmap readback, re-run myself
+
+```
+$ cd "C:/Claude Projects/mambo-power-m9" && grep -n '^| M[0-9]' docs/index.md
+127:| M1 | Installable package, `Network` model, MATPOWER import, Ybus/Bbus/PTDF/LODF, CI matrix | merged |
+128:| M2 | DC + AC Newton-Raphson power flow, typed results, `jobs` API, docs site, examples | merged |
+129:| M3 | DC optimal power flow with duals on HiGHS, N-1 branch-contingency screening | merged |
+130:| M4 | Nodal market: elastic-demand DC-OPF, LMP clearing, settlement | merged |
+131:| M5 | Multiperiod market: 24-period horizon, ramp coupling, storage SoC, per-period settlement | merged |
+132:| M6 | Zonal market: zonal clearing, min-cost redispatch, nodal-vs-zonal comparison | merged |
+133:| M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
+134:| M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
+135:| M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
+```
+
+All nine rows read `merged`, exactly as the plan now claims — a positive readback with real power to
+detect a deleted/blanked table, unlike round 1's zero-grep.
+
+**Verdict: FIXED.**
+
+### F-A4 — revert-and-watch, performed by me with a different fixture
+
+Not trusted from the orchestrator's description — I ran my own revert-and-watch, deliberately using
+a *different* injected defect than the one in the plan's evidence block (`docs/index.md`'s
+dangling link), to confirm the strict-mode check is robust and not a fluke of one specific fixture.
+
+```
+$ git status --short                     # before: empty
+$ printf '\n[nonexistent auditor link](nonexistent-audit-check.md)\n' >> docs/getting-started.md
+$ uv run mkdocs build --strict
+WARNING -  Doc file 'getting-started.md' contains a link 'nonexistent-audit-check.md', but the
+           target is not found among documentation files.
+Aborted with 1 warnings in strict mode!
+BUILD_EXIT=1
+
+$ git checkout -- docs/getting-started.md
+$ uv run mkdocs build --strict
+INFO    -  Documentation built in 58.66 seconds
+BUILD_EXIT=0
+
+$ git status --short                     # after: empty
+```
+
+Red on the injected defect, green again after revert, working tree clean before and after (`site/`
+is gitignored — `git check-ignore -v site` confirms — so the build itself leaves no trace either).
+
+**Verdict: FIXED.**
+
+### F-A5 — AC-1 render readback, both commands re-run myself
+
+```
+$ uv run mkdocs build --strict            # site/ didn't exist yet this round; built fresh, exit 0
+$ grep -o 'AC active losses: 13.393 MW' site/tutorials/01-first-power-flow/index.html
+AC active losses: 13.393 MW
+$ grep -o 'climbed offer \$60.00/MWh, cleared 400.00 MW, markup \$15,999.97/h' \
+    site/tutorials/04-where-next/index.html
+climbed offer $60.00/MWh, cleared 400.00 MW, markup $15,999.97/h
+```
+
+Both match exactly. The plan's readback now cites these two commands (`plan.md:105-111`) in place
+of the round-1 line-vs-element-count confusion.
+
+**Verdict: FIXED.**
+
+### F-A7 — the changelog contradiction, read fresh
+
+```
+$ sed -n '1,10p' docs/changelog.md
+# Changelog
+...
+[Semantic Versioning](https://semver.org/). Nothing has been released yet; the first release
+will be 0.1.0 on PyPI (wave M9).
+
+<!-- version list -->
+
+## Pre-release history
+```
+
+The heading directly below the "nothing has been released yet" sentence is now **`## Pre-release
+history`**, not `## Released` — the contradiction round 1 flagged is gone. `grep -n '^## '` over the
+whole file confirms `Pre-release history` is the *only* H2 in the file (no stray `## Released`
+survives elsewhere). semantic-release's real insertion point, `<!-- version list -->`, is still at
+line 8, untouched — confirmed by grep and by the file's own prose at line 55 describing that this is
+where new releases get inserted. The now-orphaned `[Released]:` link-reference definition is gone
+(`grep -n '\[Released\]'` → zero hits, no dangling inline use either); the pre-existing
+`[Unreleased]` I found is prose describing the heading `` `## [Unreleased]` `` verbatim from the
+Keep-a-Changelog convention, not a broken reference link. `mkdocs build --strict` (run twice this
+round, once clean and once after my F-A4 revert) exits 0 both times.
+
+**Verdict: FIXED.**
+
+### F-A6, F-A8, F-A9 — carried forward, checked only for honest disclosure
+
+Per this round's scope, not re-verified for substance. The plan's `## Handoff`
+(`plan.md:244-268`) names all three plainly, none dropped:
+
+- **F-A8**, labeled *"Step-9 blocker, must not be missed"* — states the exact defect
+  (`pyproject.toml` reads `0.0.1.dev0`, no tags exist, `publish.yml`'s version-consistency gate will
+  fail the tag push unless the version is bumped in the same action) and the exact required fix.
+- **F-A9**, labeled *"Step-6 territory"* — states the guard's qualifier-pattern breadth and the
+  prerelease-tag-shape gap, "raised for the critic, not blocking Step 5."
+- **F-A6**, labeled *"continuation record"* — states the design's ownership-table agreement test was
+  never implemented, names the two slices with no report artifact (S3, S4), and that both AC verdicts
+  stand only because the orchestrator and the auditor each independently re-verified the underlying
+  claims by hand.
+
+None of the three is silently dropped or reframed as fixed. This matches what round 1's own "what
+would flip this to CONFIRMED" list asked for on F-A8 specifically (item 7: "add to the Step-9
+checklist") — satisfied.
+
+### Updated verdicts
+
+| Row | Round-1 verdict | Round-2 verdict |
+|---|---|---|
+| AC-1 | CONFIRMED (F-A5 noted) | **CONFIRMED** — F-A5 corrected and re-verified |
+| AC-2 | CONFIRMED on auditor-supplied evidence (F-A3) | **CONFIRMED on the plan's own evidence** — F-A3 corrected and re-verified |
+| AC-3 | CONFIRMED | **CONFIRMED**, unchanged |
+| AC-4 | REFUTED (F-A1, F-A2) | **CONFIRMED** — F-A1 now has a durable, internally-consistent transcript; F-A2's readback states the real exception plainly |
+| AC-5 | UNVERIFIABLE — correctly so (blocked, named stop-and-wake) | **unchanged** — still correctly blocked, not re-checked this round (out of scope) |
+| AC-6 | CONFIRMED on auditor-supplied evidence (F-A4) | **CONFIRMED on the plan's own evidence** — F-A4's revert-and-watch independently reproduced by me with a different fixture; F-A7's contradiction confirmed fixed |
+
+**Wave-level verdict: CONFIRMED**, with AC-5 remaining correctly `blocked` on the live pypi.org
+check (named stop-and-wake, not a defect) and F-A6/F-A8/F-A9 carried forward honestly to Step 6 and
+Step 9 rather than fixed at this gate — none of the three is a Step-5 blocker, and the Handoff names
+each plainly enough that they cannot be lost.
+
+All six round-1 findings targeted for fixing this round (F-A1, F-A2, F-A3, F-A4, F-A5, F-A7) are
+**FIXED**, each re-verified by my own re-execution rather than by trusting the plan's description of
+the fix. No finding is NOT FIXED or PARTIALLY FIXED.
