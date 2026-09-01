@@ -56,6 +56,7 @@ current: 5
   walk-artifact: record/m9-walk.md
   auditor: round 1 REFUTED at wave level (proof gaps, not implementation, see `record/m9-audit.md`); 7 of 9 findings fixed (F-A1..F-A5,F-A7), 2 carried forward honestly (F-A8 to Step 9, F-A6/F-A9 to Step 6, see Handoff); round 2 re-check CONFIRMED at wave level, all six targeted findings independently re-verified by the auditor (`record/m9-audit.md` §6)
   note: `tests/parity` 292 passed / 4 skipped (captured mid-slice by S7); re-verified at wave head `a0b6233` (post Step-6 fix batch) with 1266 passed — the same 1262 plus 4 new tests the fix batch itself added, see that commit message; walk dispatched independent of the spec/plan/ACs, clean, zero AC-[0-9] occurrences verified by grep; AC-1..AC-4 and AC-6 discharged with tier-run/readback evidence (see matrix below); AC-5 blocked on A16's live pypi.org check, named stop-and-wake, not waived. Step 5 closes here.
+- Step 6 (blocked from `current:` advance, work done): 6-axis self-review at `record/m9-review.md` (16 findings R1-R16: FLAG on correctness/readability/architecture/security/duplication, PASS on performance — no functional defect, no security leak, no functional regression found by either the review or the independent critic); independent critic at `record/m9-critic.md` (7 findings C1-C7, three "would not merge without": C1/C2/C3). All findings proportionate to Step 6 fixed in wave-worktree commit `dc677f8` (14 files) — see that commit message and the Handoff section for the full disposition, including what was deliberately deferred to the continuation record rather than fixed here. Two independent post-fix verification dispatches both clean (tests/unit 1266 passed, ruff/mypy clean, nbmake 4/4, mkdocs build --strict exit 0, publish.yml's 5 SHA pins independently re-resolved via `gh api` and confirmed exact). **`current:` held at 5, not bumped to 6**: the evidence gate correctly refuses the advance while AC-5's matrix row reads `UNVERIFIABLE` (A16's live pypi.org check) — closing over a non-CONFIRMED row is a user-only Waiver Protocol move (`waiver: <user> <date> <reason>`), never the orchestrator's to self-authorize. Genuine stop-and-wake; see Handoff.
 
 ## Slices
 
@@ -218,10 +219,10 @@ conflict-marker resolution on the lockfile itself.
 | m9-auditor | auditor (opus) | Step-5 independent audit: coverage/power/authenticity walk over the discharged matrix rows, re-execution of one evidence command per tier used | record/m9-audit.md | **done** — wave-level **REFUTED** (a verdict on the proof, not the implementation: nothing the auditor tried to break, broke). 9 findings (F-A1..F-A9), 7 fixable now, 2 carried forward (F-A8 to Step 9, F-A9/F-A6 to Step 6). See Handoff for disposition |
 | m9-ac4-transcript | implementor | Fix F-A1: reproduce AC-4's dry-run in a disposable clone with a durable transcript saved to record/ | record/m9-ac4-dryrun.md | **done** — all four outputs match the orchestrator's original (unsaved) run exactly: feat→0.2.0, fix→0.1.1, breaking→1.0.0, chore→"No release will be made, 0.1.0 has already been released!" |
 | m9-auditor-2 | auditor (opus) | Independent re-check of F-A1..F-A5,F-A7 remediation; confirm F-A6/F-A8/F-A9 honestly carried forward | record/m9-audit.md (appended §6) | **done** — wave-level **CONFIRMED**, all six targeted findings independently re-executed (not trusted from description); AC-5 unchanged, correctly blocked; F-A6/F-A8/F-A9 confirmed honestly carried forward, none dropped |
-| m9-reviewer | code-reviewer (opus) | Step-6 6-axis self-review (correctness/readability/architecture/security/performance/duplication) over the full wave diff | record/m9-review.md | active |
-| m9-critic | general-purpose (opus) | Step-6 independent adversarial critic — scope creep, silent assumptions, missing edge cases, fabricated evidence | record/m9-critic.md | active |
-| m9-c-fixes-verify | implementor | Full verification of the Step-6 critic-remediation batch (uv sync/lock, unit suite, ruff/mypy, nbmake, strict build, README/changelog spot-checks) | none (verify-only) | active |
-| m9-final-verify | implementor | Final verification of the R-series reviewer-finding fixes (R1,R2,R3,R6,R7,R11-runbook,R13-SHA-pins) on top of the already-verified C-batch | none (verify-only) | active |
+| m9-reviewer | code-reviewer (opus) | Step-6 6-axis self-review (correctness/readability/architecture/security/performance/duplication) over the full wave diff | record/m9-review.md | **done** — 16 findings R1-R16; FLAG on 5 axes, PASS on performance; central finding R11 (release chain has no callsite) fixed via `docs/contributing.md`'s new `## Cutting a release` |
+| m9-critic | general-purpose (opus) | Step-6 independent adversarial critic — scope creep, silent assumptions, missing edge cases, fabricated evidence | record/m9-critic.md | **done** — 7 findings C1-C7, 3 "would not merge without" (C1/C2/C3), all fixed |
+| m9-c-fixes-verify | implementor | Full verification of the Step-6 critic-remediation batch (uv sync/lock, unit suite, ruff/mypy, nbmake, strict build, README/changelog spot-checks) | none (verify-only) | **done** — all 8 checks pass, tests/unit 1263 passed at that point |
+| m9-final-verify | implementor | Final verification of the R-series reviewer-finding fixes (R1,R2,R3,R6,R7,R11-runbook,R13-SHA-pins) on top of the already-verified C-batch | none (verify-only) | **done** — all 10 checks pass, tests/unit 1266 passed, all 5 publish.yml SHA pins independently re-resolved via `gh api` and confirmed exact |
 | m9-s7-wave-docs | implementor | S7: M9 changelog entry, final nav/strict-build check (W8, AC-6). Works in the wave worktree — only agent there, all six other slices merged | record/m9-s7-report.md + commits | **done** (`640a378` changelog entry, `a221482` ruff-clean the four notebooks — found ruff DOES lint `.ipynb`, which S1/S2 both wrongly assumed it didn't). Own bookkeeping/report never landed a sixth time (F8/F11/F17/S3/S4 pattern) — orchestrator verified independently: `tests/unit` 1262 passed (1242 baseline + S4's 20 new guard tests, consistent), `tests/parity` 292/4 already confirmed by S7 mid-slice, `mkdocs build --strict` exit 0, ruff+format+mypy already confirmed clean by S7 mid-slice. Head `a221482` is on `wave/09-release-0.1` directly (S7 worked in the wave worktree itself — no merge step) |
 
 ## Assumptions
@@ -303,8 +304,31 @@ critic's own throwaway-clone dry run) — this bumps `pyproject.toml`, inserts t
 section, commits, and tags in one atomic action, so `publish.yml`'s tag-vs-`pyproject.toml` check
 cannot fail. Push the resulting commit and tag; `publish.yml` fires on the tag push.
 
-Worktree `C:/Claude Projects/mambo-power-m9` on `wave/09-release-0.1`. Not yet merged to
-`epic/01-foundation`. Once the C1-C5/C7 fix batch is committed and independently re-verified,
-Step 6 closes and Step 7 (Document) evaluates whether any of these findings rise to ADR
-significance (candidates: the coexisting-changelog insertion-point fragility C2 exposed; the
+Worktree `C:/Claude Projects/mambo-power-m9` on `wave/09-release-0.1`, head `dc677f8`. Not yet
+merged to `epic/01-foundation`. The C1-C5/C7 and R-series fix batch is committed and
+independently re-verified twice, clean (see the Step 6 evidence line above). Step 7 (Document)
+should evaluate whether any of these findings rise to ADR significance once Step 6 actually
+closes (candidates: the coexisting-changelog insertion-point fragility C2 exposed; the
 wheel-vs-sdist fixture gap C3 exposed) before Step 8 merges to `epic/01-foundation`.
+
+## Wake Note (2026-08-31)
+
+**Blocked on the user, not on any remaining work.** All Step-6 fix work is done, committed
+(`dc677f8`), and independently re-verified twice. The evidence gate correctly refuses to advance
+`current:` past 5 while AC-5's matrix row reads `UNVERIFIABLE — correctly so (A16 stop-and-wake)`
+— per the Waiver Protocol, closing over a non-CONFIRMED row is a move only the user can make
+(`waiver: <user> <date> <reason>`), never the orchestrator's to self-authorize, and I have no way
+to check the user's own pypi.org account to resolve it independently either.
+
+**What's needed:** the user confirms whether the PyPI trusted-publisher configuration (owner/repo
+`mambo10005/mambo-power`, workflow `publish.yml`, environment `pypi`) is actually complete on
+pypi.org. Two paths from there:
+- **If complete**: record `waiver: <user> <date> "trusted-publisher config confirmed complete by
+  user, live pypi.org check not independently verifiable by the orchestrator"` on AC-5's matrix
+  row, bump `current: 6`, and proceed — the static half (which the orchestrator CAN and did
+  verify) already passed cleanly.
+- **If not yet complete, or the user wants to defer**: same waiver, but naming that the live check
+  is deferred to Step 9 (when the real `v0.1.0` tag push gives CI itself the live answer) — either
+  way this is not a reason to stall the rest of the wave, since nothing else depends on it.
+
+Nothing else in this wave is waiting on anything. All other AC rows are CONFIRMED.
