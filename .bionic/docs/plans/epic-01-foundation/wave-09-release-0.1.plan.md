@@ -222,6 +222,7 @@ conflict-marker resolution on the lockfile itself.
 | m9-auditor-2 | auditor (opus) | Independent re-check of F-A1..F-A5,F-A7 remediation; confirm F-A6/F-A8/F-A9 honestly carried forward | record/m9-audit.md (appended §6) | **done** — wave-level **CONFIRMED**, all six targeted findings independently re-executed (not trusted from description); AC-5 unchanged, correctly blocked; F-A6/F-A8/F-A9 confirmed honestly carried forward, none dropped |
 | m9-reviewer | code-reviewer (opus) | Step-6 6-axis self-review (correctness/readability/architecture/security/performance/duplication) over the full wave diff | record/m9-review.md | active |
 | m9-critic | general-purpose (opus) | Step-6 independent adversarial critic — scope creep, silent assumptions, missing edge cases, fabricated evidence | record/m9-critic.md | active |
+| m9-c-fixes-verify | implementor | Full verification of the Step-6 critic-remediation batch (uv sync/lock, unit suite, ruff/mypy, nbmake, strict build, README/changelog spot-checks) | none (verify-only) | active |
 | m9-s7-wave-docs | implementor | S7: M9 changelog entry, final nav/strict-build check (W8, AC-6). Works in the wave worktree — only agent there, all six other slices merged | record/m9-s7-report.md + commits | **done** (`640a378` changelog entry, `a221482` ruff-clean the four notebooks — found ruff DOES lint `.ipynb`, which S1/S2 both wrongly assumed it didn't). Own bookkeeping/report never landed a sixth time (F8/F11/F17/S3/S4 pattern) — orchestrator verified independently: `tests/unit` 1262 passed (1242 baseline + S4's 20 new guard tests, consistent), `tests/parity` 292/4 already confirmed by S7 mid-slice, `mkdocs build --strict` exit 0, ruff+format+mypy already confirmed clean by S7 mid-slice. Head `a221482` is on `wave/09-release-0.1` directly (S7 worked in the wave worktree itself — no merge step) |
 
 ## Assumptions
@@ -249,31 +250,62 @@ Design assumptions A1–A4 live in the spec. Process assumptions, binding from S
 
 ## Handoff
 
-Step 5 auditor dispatched, returned **REFUTED at the wave level** (verdict on the proof, not the
-implementation — nothing the auditor tried to break actually broke). Six of seven findings fixed
-in place (F-A1 through F-A5, F-A7 — see each AC's evidence block above for what changed and why).
-Two carried forward rather than fixed here:
+**Step 5**: auditor round 1 REFUTED at wave level (proof gaps, not implementation), round 2
+CONFIRMED after six findings fixed (F-A1..F-A5, F-A7). Closed 2026-08-31.
 
-- **F-A8 (Step-9 blocker, must not be missed)** — `pyproject.toml`'s `version` currently reads
-  `0.0.1.dev0` and no git tags exist. `publish.yml`'s own version-consistency check (S6's addition,
-  not required by any AC, but real) fails the `build` job unless the pushed tag's version matches
-  `pyproject.toml` exactly. **Bump `pyproject.toml` to `0.1.0` in the same action as pushing the
-  `v0.1.0` tag at Step 9** — pushing the tag against the current unbumped `pyproject.toml` will
-  fail the workflow's own gate and nothing will publish.
-- **F-A9 (Step-6 territory)** — the PyPI-sequencing guard's pre-release qualifier pattern (`not
-  (yet )?on pypi` / `not yet` / `wave m9`) is broad enough that a post-release getting-started page
-  carrying an unrelated "not yet" sentence nearby could pass the guard without the tag check
-  running; and `test_is_release_tag_shapes_accepted` treats a prerelease tag like `v0.1.0-rc1` as
-  satisfying "a v0.1.0+ tag exists." Raised for the critic, not blocking Step 5 — the mechanism
-  itself (CI wiring, the core drift check) is real and correct.
-- **F-A6 (continuation record)** — the design's own ownership table prescribed an agreement test
-  for "the wave's own completion state" across its rendering surfaces; no slice implemented it, and
-  S3/S4 (the slices that would have) left no report artifacts at all. Independently re-verified by
-  both the orchestrator and the auditor, so the AC verdicts stand, but this is worth a line in the
-  epic's continuation record as a pattern to watch (this session's sixth F8/F11/F17-shaped vanished
-  report).
+**Step 6**: 6-axis self-review dispatched (`m9-reviewer`); independent critic dispatched
+(`m9-critic`) found six more findings, three "would not merge without" (C1, C2, C3). Fixed in the
+wave worktree (uncommitted as of this note, verification dispatched):
 
-Step 5 evidence updated to cite corrected/durable readbacks; re-audit or a Step-6 critic pass is
-the next gate. Worktree `C:/Claude Projects/mambo-power-m9` on `wave/09-release-0.1`, head
-`a221482` (before the F-A7/F-A4 fixes landed there — see git status once fixes are committed to
-the worktree). Not yet merged to `epic/01-foundation`.
+- **C1** — `README.md` (PyPI's own project-description page, immutable once published) was stale
+  to wave M2 ("in progress" / "planned" for work that's long merged). Rewrote its Status table and
+  feature list to match reality; expanded the Manual link list (several pages were missing
+  entirely); the "Not yet on PyPI" line now points at Getting started as the live source of truth
+  and names that this table itself has no automated freshness check.
+- **C2** — the F-A7 fix renamed `## Released` to `## Pre-release history` but left the preamble
+  sentence ("Nothing has been released yet...") that actually caused the contradiction — reproduced
+  live: running `semantic-release version` inserts `## v0.1.0` directly below that sentence,
+  permanently, every future release. Reworded the preamble to be release-state-neutral so it can
+  never repeat this.
+- **C3** — tutorials 1, 2 and 4 load bundled MATPOWER/RAW fixtures by relative path; those fixtures
+  ship in the sdist, not the wheel, so a reader who does exactly what W7 tells them
+  (`pip install mambo-power`) gets `FileNotFoundError` on the tutorial's first line. Added the
+  clone-prerequisite notice (tutorial 1 already had one) to tutorials 2 and 4; this is a permanent
+  packaging constraint, not just a pre-release one — noted as such in all three.
+- **C4** — `docs/tutorials/index.md` and `mkdocs.yml`'s own comment both claimed the rendered
+  numbers are "CI-verified" — false: `nbmake` proves the *code* still runs, `execute: false` means
+  the *displayed numbers* are whatever was stored at the last authoring pass, and nothing diffs the
+  two. Reworded both to the true, weaker claim.
+- **C5** — `check_pypi_sequencing.py` (AC-3's guard) was one-directional: it only ever asserted
+  "unqualified PyPI text ⇒ tag exists," never the reverse, so post-release it would print "OK
+  ... (pre-release state)" and exit 0 forever against an unmodified, now-stale
+  `getting-started.md`. Made bidirectional — a reachable `v0.1.0`+ tag with no unqualified install
+  text now fails too. 21/21 tests (1 new), re-verified against the real page.
+- **C7 (minor)** — `mkdocs-jupyter` had no version floor while its three sibling `docs`-group deps
+  did; pinned `>=0.26` (matching the resolved `uv.lock` version), `uv lock` regenerated per F1.
+
+**Carried forward, not fixed here** (all now consolidated into one Step-9 checklist, see below):
+F-A8 (pyproject.toml version bump), C6 (which release mechanism Step 9 actually uses — **resolved
+by decision**, see below), F-A9 (guard qualifier-pattern breadth — genuinely low-stakes, real
+mechanism intact, left for a future wave unless it actually bites), F-A6 (deferred design
+agreement-test, S3/S4's missing reports — continuation-record item, not a Step-9 item).
+
+**C6 resolved: Step 9 uses the `python-semantic-release` tool, not a manual bump.** The critic
+found two undocumented, contradictory procedures could both plausibly be "Step 9": F-A8's manual
+`pyproject.toml` edit-then-tag, or running the installed `semantic-release version` command
+(which the critic ran live and confirmed does the whole thing atomically — version bump, changelog
+insertion, a release commit, and the tag landing *on* that commit — in one operation). The manual
+path is strictly worse: it is the only path that can trip `publish.yml`'s own version-consistency
+gate (wrong edit order, tag pushed before the bump commits, etc.), a risk the tool's atomicity
+removes by construction. **Canonical Step 9 procedure, superseding F-A8's manual instruction:**
+from a clean `epic/01-foundation` checkout, run `PYTHONUTF8=1 uv run --group release
+semantic-release version` (drop `--no-push`/`--no-vcs-release` — those flags were only for the
+critic's own throwaway-clone dry run) — this bumps `pyproject.toml`, inserts the changelog
+section, commits, and tags in one atomic action, so `publish.yml`'s tag-vs-`pyproject.toml` check
+cannot fail. Push the resulting commit and tag; `publish.yml` fires on the tag push.
+
+Worktree `C:/Claude Projects/mambo-power-m9` on `wave/09-release-0.1`. Not yet merged to
+`epic/01-foundation`. Once the C1-C5/C7 fix batch is committed and independently re-verified,
+Step 6 closes and Step 7 (Document) evaluates whether any of these findings rise to ADR
+significance (candidates: the coexisting-changelog insertion-point fragility C2 exposed; the
+wheel-vs-sdist fixture gap C3 exposed) before Step 8 merges to `epic/01-foundation`.
