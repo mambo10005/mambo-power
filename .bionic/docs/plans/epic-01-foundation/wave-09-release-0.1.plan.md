@@ -1,6 +1,6 @@
 ---
 governing-skill: superpowers:writing-plans
-sdlc-step: 7
+sdlc-step: 8
 intent: build
 rigor: audited
 scale: wave
@@ -35,7 +35,7 @@ integration-branch: epic/01-foundation
 intent: build
 rigor: audited
 scale: wave
-current: 7
+current: 8
 
 - Step 0: prereqs: ok; configured 2026-08-30 via "confirm"; base 9012c43 (1539/4, CI green on
   all 8 matrix jobs)
@@ -60,6 +60,12 @@ current: 7
 - Step 7:
   adr: `docs/design/decisions.md` ADR-013 (wave worktree commit `ce381d9`) -- tutorial fixtures ship in the sdist, not the wheel, a permanent constraint Step-6 critic finding C3 exposed; rejected alternatives recorded (widening the wheel, rewriting tutorials to synthesize data, a separate extras data package)
   note: C2 (changelog insertion-point fragility) evaluated and NOT given an ADR -- an operational gotcha with one clear fix, no real alternatives weighed, already captured in its own commit message and `docs/contributing.md`'s new release runbook; does not meet the momentous/shapes-later-waves bar C3 does. Re-verified `mkdocs build --strict` exit 0 after the ADR landed.
+- Step 8:
+  merge: `f993cda` merge(m9): wave 09-release-0.1 into epic/01-foundation, no-ff, zero conflicts (`git merge-tree` dry run confirmed clean before the real merge)
+  worktree-removed: `C:/Claude Projects/mambo-power-m9` removed via the established safe pattern (`git worktree remove --force` timed out at 60s as it has all wave; `git worktree prune -v` cleared the stale registration; PowerShell junction-check found zero reparse points; Bash `rm -rf` then safe) — `git worktree list` now shows only the main checkout
+  cleanup: wave-owned tmp ephemera removed (`.bionic/tmp/m9-s*-progress.md`, `.bionic/tmp/case30-t*-progress.md` -- content already captured in `record/` reports); a stray disposable clone directory (`.scratch-c2b`) removed; session-infrastructure state files (`context-spend.state`, `preflight-*.state`, `roster-*.state`) deliberately left alone -- active session machinery, not wave evidence, and this session is still running
+  tmp-wiped: wave-scoped entries only (see cleanup above); `.bionic/tmp/` is not fully empty by design (see cleanup note)
+  tasks-completed: all rows in this plan's dispatch ledger read done; zero active/pending rows remain (verified via grep before this commit)
 
 ## Slices
 
@@ -233,7 +239,7 @@ conflict-marker resolution on the lockfile itself.
 | m9-critic | general-purpose (opus) | Step-6 independent adversarial critic — scope creep, silent assumptions, missing edge cases, fabricated evidence | record/m9-critic.md | **done** — 7 findings C1-C7, 3 "would not merge without" (C1/C2/C3), all fixed |
 | m9-c-fixes-verify | implementor | Full verification of the Step-6 critic-remediation batch (uv sync/lock, unit suite, ruff/mypy, nbmake, strict build, README/changelog spot-checks) | none (verify-only) | **done** — all 8 checks pass, tests/unit 1263 passed at that point |
 | m9-final-verify | implementor | Final verification of the R-series reviewer-finding fixes (R1,R2,R3,R6,R7,R11-runbook,R13-SHA-pins) on top of the already-verified C-batch | none (verify-only) | **done** — all 10 checks pass, tests/unit 1266 passed, all 5 publish.yml SHA pins independently re-resolved via `gh api` and confirmed exact |
-| m9-merge-verify | implementor | Post-merge verification of the merged epic/01-foundation tree (uv sync/lock, full unit+parity suites, ruff/mypy, nbmake, strict build, guard) | none (verify-only) | active |
+| m9-merge-verify | implementor | Post-merge verification of the merged epic/01-foundation tree (uv sync/lock, full unit+parity suites, ruff/mypy, nbmake, strict build, guard) | none (verify-only) | **done** — an accidental duplicate dispatch (m9-merge-verify-2, same brief, orchestrator error re-invoking Agent instead of SendMessage on an idle agent) completed all 9 checks clean before the original: uv sync/lock consistent, tests/unit 1266 passed, tests/parity 292/4, ruff/mypy clean, nbmake 4/4, mkdocs build --strict exit 0, guard 24 passed. One real finding: `uv sync --all-extras` is wrong for this repo (docs/release are PEP 735 dependency-groups, not extras) — `--all-groups` is correct; noted for future sessions. Original agent stopped once superseded (idle, fresh observation taken first) |
 | m9-s7-wave-docs | implementor | S7: M9 changelog entry, final nav/strict-build check (W8, AC-6). Works in the wave worktree — only agent there, all six other slices merged | record/m9-s7-report.md + commits | **done** (`640a378` changelog entry, `a221482` ruff-clean the four notebooks — found ruff DOES lint `.ipynb`, which S1/S2 both wrongly assumed it didn't). Own bookkeeping/report never landed a sixth time (F8/F11/F17/S3/S4 pattern) — orchestrator verified independently: `tests/unit` 1262 passed (1242 baseline + S4's 20 new guard tests, consistent), `tests/parity` 292/4 already confirmed by S7 mid-slice, `mkdocs build --strict` exit 0, ruff+format+mypy already confirmed clean by S7 mid-slice. Head `a221482` is on `wave/09-release-0.1` directly (S7 worked in the wave worktree itself — no merge step) |
 
 ## Assumptions
