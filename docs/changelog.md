@@ -11,6 +11,25 @@ line, permanently, so a release-state claim here has a shelf life of one release
 
 <!-- version list -->
 
+## v0.1.1 (2026-09-01)
+
+### Bug Fixes
+
+- **ci**: Test job needs fetch-depth: 0 to see the real v0.1.0 tag
+  ([`46c9440`](https://github.com/mambo10005/mambo-power/commit/46c9440abd9c64129c34833580784473dfb45bbe))
+
+- **readme**: Flip Install section to live PyPI text, drop stale caveat
+  ([`f4df694`](https://github.com/mambo10005/mambo-power/commit/f4df694df4324cf4c4e6a4bf3e3b918b842c080b))
+
+- **release**: Getting-started.md PyPI text + uv.lock version, post-v0.1.0
+  ([`270bc15`](https://github.com/mambo10005/mambo-power/commit/270bc15b02c922c164d8a04b0568159ca319d20c))
+
+### Chores
+
+- **epic-01**: Move semantic-release's release branch to main, record epic close
+  ([`43f7aea`](https://github.com/mambo10005/mambo-power/commit/43f7aea506c9c834a26b6d9e6161ca5bb09b55b5))
+
+
 ## v0.1.0 (2026-09-01)
 
 - Initial Release
