@@ -1,0 +1,51 @@
+version: 1
+agents:
+  claude-fable:
+    adapter: claude-cli
+    model: fable
+  claude-sonnet:
+    adapter: claude-cli
+    model: sonnet
+  claude-opus:
+    adapter: claude-cli
+    model: opus
+  codex:
+    adapter: codex-cli
+    sandbox: workspace-write
+routing:
+  assistant: claude-opus
+  planner: claude-fable
+  implementer: claude-opus
+  verifier: claude-opus
+  reviewer: claude-opus
+  escalate: claude-fable
+# Measured 2026-09-13 on the dev machine: ruff 5 s, format 1 s, mypy 50 s, nbmake tutorials 53 s,
+# mkdocs --strict 226 s with a warm notebook cache, full pytest 13-22 min. Codewright's default
+# gate limit is 10 minutes, so the slow gates carry timeoutMin (needs Codewright plugin >= 0.7.4).
+gates:
+  lint: [uv, run, ruff, check, .]
+  format: [uv, run, ruff, format, --check, .]
+  typecheck: [uv, run, mypy]
+  tutorials: [uv, run, pytest, --nbmake, docs/tutorials, -q, -p, no:cacheprovider]
+  docs:
+    argv: [uv, run, mkdocs, build, --strict]
+    timeoutMin: 20
+  test:
+    argv: [uv, run, pytest]
+    timeoutMin: 45
+leases:
+  sharedWritable: []
+limits:
+  # Two, not three: each task's test gate is a 15-20 minute CPU-bound suite.
+  maxParallelTasks: 2
+  attemptDeadlineMin: 30
+  stallTimeoutMin: 10
+  maxTurnsPerAttempt: 60
+  pauseWhenUsageAbove: 90
+  maxAttemptsPerTask: 3
+worktree:
+  include: []
+  # --all-groups: the dev group has pytest/ruff/mypy/nbmake, the docs group has mkdocs.
+  setup: [uv, sync, --frozen, --all-groups]
+runbook: .cw/runbook.md
+showEstimatedCost: true
