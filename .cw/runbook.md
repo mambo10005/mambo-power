@@ -10,7 +10,7 @@ Epic 01 (waves M1–M9) was built with the bionic canonical-sdlc process; its re
 
 ## The run loop
 
-Inside `claude`, started in this repository: `/codewright:runbook` lists the steps and which have run; `/codewright:next` starts the first one nobody has started and parks at the plan. Approve a plan only if every task names a test file and what it asserts, has a specific lease that overlaps no other task's, and is one sitting's work; otherwise say no with a reason. The work lands on `cw/integration/<runId>`; review it, then `git merge --ff-only cw/integration/<runId>`.
+Inside `claude`, started in this repository: `/codewright:runbook` lists the steps and which have run; `/codewright:next` starts the first one nobody has started and parks at the plan. Approve a plan only if every task names a test file and what it asserts, has a specific lease that overlaps no other task's, and is one sitting's work; otherwise say no with a reason. The work lands on `cw/integration/<runId>`; review it, then land it as **one squash commit with a Conventional Commit subject** — `git merge --squash cw/integration/<runId>` and `git commit -m "feat(cases): ..."` — never `--ff-only`: Codewright's task commits are titled `codewright: T1 <attemptId>`, and python-semantic-release computes the next version from the subjects that reach `main`.
 
 A step's text is how Codewright recognises it: edit a blockquote freely before its run starts, never after.
 

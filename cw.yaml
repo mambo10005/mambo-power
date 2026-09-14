@@ -23,15 +23,15 @@ routing:
 # mkdocs --strict 226 s with a warm notebook cache, full pytest 13-22 min. Codewright's default
 # gate limit is 10 minutes, so the slow gates carry timeoutMin (needs Codewright plugin >= 0.7.4).
 gates:
-  lint: [uv, run, ruff, check, .]
-  format: [uv, run, ruff, format, --check, .]
-  typecheck: [uv, run, mypy]
-  tutorials: [uv, run, pytest, --nbmake, docs/tutorials, -q, -p, no:cacheprovider]
+  lint: [uv, run, --frozen, ruff, check, .]
+  format: [uv, run, --frozen, ruff, format, --check, .]
+  typecheck: [uv, run, --frozen, mypy]
+  tutorials: [uv, run, --frozen, pytest, --nbmake, docs/tutorials, -q, -p, no:cacheprovider]
   docs:
-    argv: [uv, run, mkdocs, build, --strict]
+    argv: [uv, run, --frozen, mkdocs, build, --strict]
     timeoutMin: 20
   test:
-    argv: [uv, run, pytest]
+    argv: [uv, run, --frozen, pytest]
     timeoutMin: 45
 leases:
   sharedWritable: []

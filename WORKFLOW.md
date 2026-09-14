@@ -19,7 +19,8 @@ This file is prepended to every agent prompt in this repository. Keep it short; 
 
 - Tiers: `tests/unit` (marker `unit`), `tests/parity` (`parity`, against pandapower/PyPSA/MATPOWER), `tests/property` (`property`, hypothesis). The marker comes from the directory.
 - **The full suite takes 15–20 minutes.** While working, run only the test files you touched: `uv run pytest tests/unit/test_x.py -q`. Codewright's gates run the whole suite after you finish; do not run it yourself more than once.
-- Before done: `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy`, and the test files for everything you changed. If you touched `docs/` or `mkdocs.yml`: `uv run mkdocs build --strict`. If you touched a notebook: `uv run pytest --nbmake docs/tutorials -q`.
+- **Always `uv run --frozen ...`.** A plain `uv run` may rewrite `uv.lock`, which is outside every task's lease and fails the lease gate. If `uv.lock` shows in `git status` and you did not change a dependency, `git checkout uv.lock`.
+- Before done: `uv run --frozen ruff check .`, `uv run --frozen ruff format --check .`, `uv run --frozen mypy`, and the test files for everything you changed. If you touched `docs/` or `mkdocs.yml`: `uv run mkdocs build --strict`. If you touched a notebook: `uv run pytest --nbmake docs/tutorials -q`.
 - A feature is not done without a test that would fail if it were removed. Never loosen a parity tolerance or skip a test to get green; say what is wrong instead.
 
 ## Style
