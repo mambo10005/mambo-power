@@ -11,6 +11,42 @@ line, permanently, so a release-state claim here has a shelf life of one release
 
 <!-- version list -->
 
+## v0.2.0 (2026-09-14)
+
+### Chores
+
+- Onboard the repository to Codewright
+  ([`dc22dcf`](https://github.com/mambo10005/mambo-power/commit/dc22dcfd016787bdacfcb5572c542f59cfda36d7))
+
+- **cw**: Frozen uv runs, squash landing
+  ([`609c750`](https://github.com/mambo10005/mambo-power/commit/609c7500c21a60e6c8276e429464095bc4089342))
+
+- **cw**: Runbook step 2 finishes the bundled-cases move
+  ([`2fef9e1`](https://github.com/mambo10005/mambo-power/commit/2fef9e14ed0eb177c9b4fdc8fb1144b71cd23044))
+
+- **cw**: Runbook step 2 names 13_interop's extra dependencies
+  ([`e5ccdc2`](https://github.com/mambo10005/mambo-power/commit/e5ccdc204a0c01e784543cbef6033d38ac328f90))
+
+### Documentation
+
+- Point readers at the bundled cases, not a clone
+  ([`cfd52ba`](https://github.com/mambo10005/mambo-power/commit/cfd52bac3a494bb180c7ac8a93395979749eb5c4))
+
+- **adr**: ADR-014 ships the bundled cases in the wheel, superseding ADR-013
+  ([`7f8400b`](https://github.com/mambo10005/mambo-power/commit/7f8400ba0dcc1bba0d65d3141ae1e6369bb749af))
+
+### Features
+
+- **cases**: Bundle the reference cases in the package with a cases API
+  ([`ebb5863`](https://github.com/mambo10005/mambo-power/commit/ebb5863cb7bb1cdd5f8a634d90637c919ee2c51d))
+
+- **cases**: The packaged cases are the only copy; fixtures/ is gone
+  ([`40f2607`](https://github.com/mambo10005/mambo-power/commit/40f26079b6d8b257a295c02d3afb118482818928))
+
+- **examples**: Examples and tutorials load cases through the package
+  ([`db47fa1`](https://github.com/mambo10005/mambo-power/commit/db47fa1f6e17433bc9309a40b527b1094d4990d6))
+
+
 ## v0.1.1 (2026-09-01)
 
 ### Bug Fixes
