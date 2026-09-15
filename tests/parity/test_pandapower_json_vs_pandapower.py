@@ -1,10 +1,11 @@
 """AC-2: pandapower's own solvers agree with mambo's on the network ``io.pandapower_json``
 exports, and the export re-imports (A6/A16 measurement).
 
-Oracle path: ``io.matpower.load(fixtures/<case>.m)`` -> ``io.pandapower_json.dumps`` ->
-``pp.from_json_string`` -> ``pp.rundcpp`` / ``pp.runpp(init="flat", trafo_model="pi")``. Ours is
-``pf.solve_dc`` / ``pf.solve_ac(AcOptions(init="flat", q_limits=False))`` on the *original*
-``Network`` (the M8 invariant: the oracle runs the converted network, mambo the original).
+Oracle path: ``io.matpower.load(mambo_power/cases/data/<case>.m)`` ->
+``io.pandapower_json.dumps`` -> ``pp.from_json_string`` -> ``pp.rundcpp`` /
+``pp.runpp(init="flat", trafo_model="pi")``. Ours is ``pf.solve_dc`` /
+``pf.solve_ac(AcOptions(init="flat", q_limits=False))`` on the *original* ``Network`` (the M8
+invariant: the oracle runs the converted network, mambo the original).
 
 Alignment rules (convention differences, not tolerances): angles are compared after
 subtracting the oracle's slack angle; the exporter writes lines in mambo branch order into

@@ -1,6 +1,6 @@
 function mpc = case14_roles
 %CASE14_ROLES    SYNTHETIC variant of case14 for the mambo-power test suite (AC-4, W3 effective bus roles).
-%   NOT upstream data. Derived from fixtures/matpower/case14.m (verbatim MATPOWER
+%   NOT upstream data. Derived from mambo_power/cases/data/case14.m (verbatim MATPOWER
 %   file, sha256 recorded in ../PROVENANCE.md) by editing exactly the cells listed
 %   below; every other byte of the mpc matrices is unchanged. Row numbers are
 %   1-based positions in the matrix; column names are the MATPOWER idx_* names.

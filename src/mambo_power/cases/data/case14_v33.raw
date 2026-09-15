@@ -1,4 +1,4 @@
-0,   100.00, 33, 0, 0, 60.00     / hand-authored from fixtures/matpower/case14.m (see fixtures/PROVENANCE-raw.md)
+0,   100.00, 33, 0, 0, 60.00     / hand-authored from mambo_power/cases/data/case14.m (see PROVENANCE-raw.md)
 IEEE 14 BUS TEST CASE -- transcription of MATPOWER case14.m, PSS/E RAW v33 layout
 mambo-power fixture; BASKV 0 kept as in the source; no cost data exists in RAW
      1,'Bus 1     HV',     0.0000,3,   1,   1,   1,1.06000,   0.0000,1.06000,0.94000,1.06000,0.94000

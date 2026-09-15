@@ -35,7 +35,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import mambo_power
-from mambo_power import jobs
+from mambo_power import cases, jobs
 from mambo_power.contingency import N1Options
 from mambo_power.io import matpower, psse_raw
 from mambo_power.jobs import (
@@ -1637,7 +1637,7 @@ def test_costless_generators_fail_as_validation_under_every_pricing_kind(kind: s
     (the caller's data, not an engine bug -- never ``INTERNAL``, the 5xx-and-pager verdict),
     with no ``issues`` list because a missing cost is legal *model* data that only the pricing
     kinds refuse. ``pf.dc`` on the same network still solves: the refusal is the OPF's."""
-    net = psse_raw.load(FIXTURES_DIR.parent / "case14_v33.raw")
+    net = psse_raw.load(cases.path("case14_v33.raw"))
     assert all(g.cost is None for g in net.generators)
     assert run(SolveRequest(kind="pf.dc", network=net)).status == "ok"
 

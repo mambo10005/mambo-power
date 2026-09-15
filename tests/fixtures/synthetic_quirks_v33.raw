@@ -1,4 +1,4 @@
-0, 100.00, 33, 0, 0, 50.00 / synthetic 4-bus case exercising RAW v33 quirks (fixtures/PROVENANCE-raw.md)
+0, 100.00, 33, 0, 0, 50.00 / synthetic 4-bus case exercising RAW v33 quirks (mambo_power/cases/data/PROVENANCE-raw.md)
 SYNTHETIC QUIRKS CASE -- CZ=2/3, CW=2/3, CM=2, neutral tap, parallel circuits, ZIP load, short records
 not a real system; every expected value is hand-derived in the provenance note
 1,'HV SLACK', 138.0, 3, 1, 1, 1, 1.00000, 0.0000, 1.10000, 0.90000, 1.10000, 0.90000

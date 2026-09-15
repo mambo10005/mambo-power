@@ -1,4 +1,4 @@
-"""AC-4 / AC-5 fixtures under ``fixtures/matpower/derived/``: synthetic case14 variants.
+"""AC-4 / AC-5 fixtures under ``mambo_power/cases/data/derived/``: synthetic case14 variants.
 
 Each derived file is case14 with a documented cell-level edit (``derived/PROVENANCE.md`` and
 each file's header). Two things are checked here:

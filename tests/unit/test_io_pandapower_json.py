@@ -2,7 +2,7 @@
 own ``case14``/``case30`` and hand-built networks.
 
 AC-1: pandapower's ``case14``/``case30`` (``pp.networks`` -> ``to_json`` -> ``loads``) agree
-with ``io.matpower.load(fixtures/case14.m|case30.m)`` on every bus base kV, branch ``r/x/b``,
+with ``cases.load("case14"|"case30")`` on every bus base kV, branch ``r/x/b``,
 ``tap_ratio``, ``shift_deg``, ``kind``, generator limits and cost coefficients to 1e-9 — except
 the deviations pandapower's own case files carry, listed in :data:`KNOWN_DEVIATIONS` and
 asserted *present* (so a silently vanishing deviation is noticed too).

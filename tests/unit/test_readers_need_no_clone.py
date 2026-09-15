@@ -1,8 +1,9 @@
 """Reader-facing executables load data through ``mambo_power.cases``, never a repository path.
 
-The examples and tutorials are what a reader runs after ``pip install mambo-power``, where the
-repository's ``fixtures/`` tree does not exist. A path into it would work in a clone and fail
-everywhere else, so the string itself is banned from both trees.
+The examples and tutorials are what a reader runs after ``pip install mambo-power``, where no
+repository tree exists. The cases once lived in a top-level fixtures tree (ADR-014 moved them
+into the package); a path into a tree like that works in a clone and fails everywhere else, so
+the string is banned from both reader trees.
 """
 
 from __future__ import annotations

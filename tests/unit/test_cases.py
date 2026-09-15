@@ -34,22 +34,6 @@ EXPECTED_NAMES = [
 
 PROVENANCE_RECORDS = ["PROVENANCE.md", "SOURCES.md", "PROVENANCE-raw.md", "derived/PROVENANCE.md"]
 
-REPO_FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
-
-
-def _fixture_counterpart(name: str) -> Path:
-    if name in ("case14_v33.raw", "PROVENANCE-raw.md"):
-        return REPO_FIXTURES / name
-    return REPO_FIXTURES / "matpower" / name
-
-
-def _reference_bytes(file: Path) -> bytes:
-    data = file.read_bytes()
-    # .gitattributes marks *.m as -text; only the markdown and RAW files get smudged to CRLF.
-    if file.suffix == ".m":
-        return data
-    return data.replace(b"\r\n", b"\n")
-
 
 def test_available_lists_exactly_the_case_files_sorted() -> None:
     names = cases.available()
@@ -72,14 +56,6 @@ def test_provenance_records_ship_next_to_the_cases() -> None:
     root = cases.path("case14.m").parent
     for record in PROVENANCE_RECORDS:
         assert (root / record).is_file(), record
-
-
-# The repository copy under fixtures/ is the reference while it exists.
-@pytest.mark.skipif(not REPO_FIXTURES.is_dir(), reason="fixtures/ no longer in the repository")
-@pytest.mark.parametrize("name", [*EXPECTED_NAMES, *PROVENANCE_RECORDS])
-def test_bundled_file_matches_its_fixtures_counterpart(name: str) -> None:
-    bundled = cases.path("case14.m").parent / name
-    assert _reference_bytes(bundled) == _reference_bytes(_fixture_counterpart(name))
 
 
 @pytest.mark.parametrize(("name", "buses"), TOP_LEVEL_BUS_COUNTS.items())

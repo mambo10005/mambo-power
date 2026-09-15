@@ -19,8 +19,8 @@ GNE, induction machine — each closed by a line whose first field is `0`, and
 
 ## case14_v33.raw — transcription of `matpower/case14.m`
 
-Authored 2026-08-29 field by field from `fixtures/matpower/case14.m` (the
-verbatim MATPOWER file; its own provenance is in `fixtures/matpower/PROVENANCE.md`).
+Authored 2026-08-29 field by field from `mambo_power/cases/data/case14.m` (the
+verbatim MATPOWER file; its own provenance is in `mambo_power/cases/data/PROVENANCE.md`).
 `io.psse_raw.load(case14_v33.raw)` must equal `io.matpower.load(case14.m)` on
 every bus, branch (including `kind`), generator-limit and load field to 1e-9
 (AC-4). Every field of every record is one of: a `case14.m` cell (mapping

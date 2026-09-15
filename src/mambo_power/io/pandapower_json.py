@@ -15,7 +15,7 @@ export names every other bus that had one (``FIELD_DROPPED``). Every other non-e
 (``trafo3w``, ``switch``, ``impedance``, ``ward``, ``xward``, ``dcline``, ``storage``, ...) is
 dropped row by row with ``ELEMENT_DROPPED``.
 
-Unit conventions (measured on pandapower 3.3.0 against ``fixtures/matpower/case14.m``,
+Unit conventions (measured on pandapower 3.3.0 against ``cases.load("case14")``,
 ``record/m8-research.md`` §1; ``Zb = vn_kv(from)² / sn_mva``):
 
 * line: ``r = r_ohm_per_km · length / parallel / Zb`` (same for ``x``);

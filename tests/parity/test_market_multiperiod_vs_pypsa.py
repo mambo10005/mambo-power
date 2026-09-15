@@ -218,8 +218,8 @@ def _run_pypsa_oracle(
     # ``marginal_cost_quadratic`` only), so our own convention -- gencost's ``c0`` is a cost per
     # *hour*, charged once in every period (``objective_cost``, verified directly at T in
     # {1, 2, 5, 24}) -- has to be added back here, ``len(periods)`` times and not once.
-    # Currently inert either way: every gencost file in ``fixtures/`` carries ``c0 == 0.0``
-    # exactly on all 5 OPF cases (measured), so this multiplication is what a future
+    # Currently inert either way: every bundled case's gencost in ``cases/data`` carries
+    # ``c0 == 0.0`` exactly on all 5 OPF cases (measured), so this multiplication is what a future
     # ``c0``-bearing fixture needs rather than something this fixture exercises.
     obj = float(n.objective) + len(periods) * c0_sum if status == "ok" else float("nan")
     return n, status, cond, obj

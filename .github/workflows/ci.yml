@@ -134,23 +134,28 @@ jobs:
       - name: List artifacts
         run: ls -la dist/
 
-      - name: Wheel ships py.typed and nothing from fixtures/ or tests/
+      - name: Wheel ships py.typed and the bundled cases, and nothing from tests/
         run: |
           set -euo pipefail
           listing="$(uv run --no-project --python 3.12 python -m zipfile -l dist/*.whl)"
           echo "$listing"
           grep -Eq '(^|/)py\.typed[[:space:]]' <<<"$listing" \
             || { echo "::error::py.typed missing from wheel"; exit 1; }
-          if grep -E '(^|/)(fixtures|tests)/' <<<"$listing"; then
-            echo "::error::wheel bundles fixtures/ or tests/"; exit 1
+          for required in mambo_power/cases/data/case14.m mambo_power/cases/data/PROVENANCE.md; do
+            grep -Eq "^${required}[[:space:]]" <<<"$listing" \
+              || { echo "::error::wheel is missing ${required}"; exit 1; }
+          done
+          if grep -E '(^|/)tests/' <<<"$listing"; then
+            echo "::error::wheel bundles tests/"; exit 1
           fi
 
-      - name: Sdist carries src, tests, fixtures and nothing machine-local
+      - name: Sdist carries src with the bundled cases, tests and nothing machine-local
         run: |
           set -euo pipefail
           listing="$(tar -tzf dist/*.tar.gz)"
           echo "$listing"
-          for required in src/mambo_power/py.typed tests/conftest.py fixtures/matpower/case14.m \
+          for required in src/mambo_power/py.typed tests/conftest.py \
+                          src/mambo_power/cases/data/case14.m \
                           README.md LICENSE pyproject.toml; do
             grep -Eq "^[^/]+/${required}\$" <<<"$listing" \
               || { echo "::error::sdist is missing ${required}"; exit 1; }
@@ -159,13 +164,16 @@ jobs:
             echo "::error::sdist bundles machine-local or CI files"; exit 1
           fi
 
-      - name: Install wheel into a clean venv (no dev group) and load case14
+      - name: Install wheel into a clean venv (no dev group) and solve case14 outside the checkout
         run: |
           set -euo pipefail
           uv venv .smoke --python 3.12
           uv pip install --python .smoke dist/*.whl
           uv pip list --python .smoke
-          .smoke/bin/python -c "import mambo_power; from mambo_power.io import matpower; n = matpower.load('fixtures/matpower/case14.m'); print(mambo_power.__version__, len(n.buses))"
+          smoke_python="$PWD/.smoke/bin/python"
+          # Outside the checkout, so the cases can only come from the installed wheel.
+          cd "$(mktemp -d)"
+          "$smoke_python" -c 'from mambo_power import cases, pf; print(pf.solve_dc(cases.load("case14")).generators[0].p_mw)'
 
       - name: Install sdist into a second clean venv and import
         run: |

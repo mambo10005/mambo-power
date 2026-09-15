@@ -42,12 +42,12 @@ packages = ["src/mambo_power"]
 
 [tool.hatch.build.targets.sdist]
 # Explicit allow-list: hatch's VCS default follows the machine-local `.bionic` symlink and
-# would ship planning docs, uv.lock and dotfiles. The sdist must carry tests/ and fixtures/
-# so a source install can run the parity suite; the wheel stays package-only.
+# would ship planning docs, uv.lock and dotfiles. The sdist carries tests/ so a source install
+# can run the suite. The wheel needs no include: hatch ships non-Python files under the package,
+# so the bundled cases in src/mambo_power/cases/data/** travel with it (ADR-014).
 include = [
   "/src/mambo_power",
   "/tests",
-  "/fixtures",
   "/README.md",
   "/LICENSE",
   "/pyproject.toml",

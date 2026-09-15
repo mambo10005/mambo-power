@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from mambo_power import cases
 from mambo_power.io import matpower, psse_raw
 from mambo_power.io.psse_raw import RawImportError
 
-FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
-CASE14_RAW = FIXTURES / "case14_v33.raw"
-CASE14_M = FIXTURES / "matpower" / "case14.m"
-QUIRKS_RAW = FIXTURES / "synthetic_quirks_v33.raw"
+CASE14_RAW = cases.path("case14_v33.raw")
+CASE14_M = cases.path("case14.m")
+QUIRKS_RAW = Path(__file__).resolve().parents[1] / "fixtures" / "synthetic_quirks_v33.raw"
 
 TOL = 1e-9
 

@@ -1,6 +1,6 @@
 function mpc = case14_pwl
 %CASE14_PWL    SYNTHETIC variant of case14 for the mambo-power test suite (AC-5, W4 convex PWL costs).
-%   NOT upstream data. Derived from fixtures/matpower/case14.m (verbatim MATPOWER
+%   NOT upstream data. Derived from mambo_power/cases/data/case14.m (verbatim MATPOWER
 %   file, sha256 recorded in ../PROVENANCE.md) by editing exactly mpc.gencost as
 %   listed below; every other byte of the mpc matrices — bus, gen, branch — is
 %   unchanged. Row numbers are 1-based positions in the matrix. See

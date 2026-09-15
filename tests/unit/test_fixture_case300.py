@@ -1,7 +1,7 @@
-"""W7 / AC-7 (fixture): ``fixtures/matpower/case300.m`` is the verbatim MATPOWER file.
+"""W7 / AC-7 (fixture): ``mambo_power/cases/data/case300.m`` is the verbatim MATPOWER file.
 
 The bytes are pinned by sha256 so "verbatim" is checkable, not asserted: the digest recorded
-in ``fixtures/matpower/PROVENANCE.md`` (and in ``record/m2-research.md`` §4) is the one
+in ``mambo_power/cases/data/PROVENANCE.md`` (and in ``record/m2-research.md`` §4) is the one
 computed over MATPOWER's ``data/case300.m`` at git blob ``004203b8``. The counts below were
 taken from the file itself (``awk`` over the three matrices); the importer must reproduce
 them and the native round-trip must be identity, as for the five M1 fixtures.
