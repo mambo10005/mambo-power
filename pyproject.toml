@@ -91,6 +91,15 @@ markers = [
 # configuration was verified against, including this repo's own commit history shape.
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
+# The version bump also changes uv.lock (its own `mambo-power` entry), and CI installs with
+# `uv sync --locked`, so a release commit without a refreshed lock fails every job that installs
+# dependencies — it did on v0.1.0, v0.1.1 and v0.2.0. build_command runs after the version is
+# written and before the release commit; `assets` adds its output to that commit.
+# `|| uv.exe lock`: on Windows semantic-release starts the command as a bare `bash`, which
+# resolves to WSL's bash.exe in System32; WSL finds Windows programs only by their `.exe`
+# name. Linux, Git Bash, PowerShell and cmd all succeed on the first half.
+build_command = "uv lock || uv.exe lock"
+assets = ["uv.lock"]
 tag_format = "v{version}"
 commit_parser = "conventional"
 # 0.1.0 is the deliberate starting point (T2); breaking changes still jump straight to 1.0.0

@@ -151,21 +151,28 @@ tree is what `actions/checkout@v4` sees, so the bump commit must exist *before* 
 "in the same session").
 
 ```bash
-git checkout epic/01-foundation && git pull
-PYTHONUTF8=1 uv run --group release semantic-release version   # Windows needs PYTHONUTF8=1;
-                                                                 # GitHub Actions' UTF-8 locale
-                                                                 # doesn't need it
-git push --follow-tags
+git checkout main && git pull            # CI green on this commit first
+PYTHONUTF8=1 uv run --group release semantic-release version --no-push
+                                         # Windows needs PYTHONUTF8=1; GitHub Actions'
+                                         # UTF-8 locale doesn't need it
+git show --stat HEAD                     # expect pyproject.toml, docs/changelog.md, uv.lock
+python scripts/check_pypi_sequencing.py  # the tag now exists; the guard must still pass
+git push origin main --follow-tags       # this push publishes
 ```
 
-That single command bumps the version, writes the new changelog section, commits, and tags —
-verify the printed version and the diff before it pushes anything if you want to sanity-check
-first (it prints "The next version is: X.Y.Z" before acting). `git push --follow-tags` pushes
-both the release commit and its tag; the tag push is what fires `publish.yml`.
+That single `version` command prints "The next version is: X.Y.Z", bumps `pyproject.toml`,
+writes the new changelog section, runs `uv lock` (the `build_command` in
+`[tool.semantic_release]`, so the release commit carries a lock that matches the new version —
+without it every CI job that runs `uv sync --locked` fails on the tag), commits, and tags. Pass
+`--no-push`: semantic-release pushes by default, and the two checks above belong between making
+the release and publishing it. Until the push nothing has left your machine — to abandon a
+release, `git tag -d vX.Y.Z && git reset --hard HEAD~1`.
 
-Then: approve the `pypi` GitHub environment's required-reviewer gate (repo Settings →
-Environments → `pypi`) when the `publish` job pauses for it — this is the manual-approval
-checkpoint between `build` finishing and the actual PyPI upload.
+`git push origin main --follow-tags` pushes the release commit and its tag; the tag push is what
+fires `publish.yml`, which builds and uploads to PyPI with no further step. To pause for a manual
+approval between build and upload, add a required reviewer to the `pypi` GitHub environment (repo
+Settings → Environments → `pypi`); none is configured today, so as things stand the tag push
+publishes immediately.
 
 **Do not run `semantic-release changelog` on its own** as a way to preview the changelog —
 it is not idempotent against an untagged state; running it twice with no intervening tag
