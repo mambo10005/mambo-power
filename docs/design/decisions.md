@@ -534,7 +534,8 @@ networks contain).
 
 ## ADR-013 — Tutorial fixtures ship in the sdist, not the wheel; narrative tutorials require a clone
 
-**Status:** accepted 2026-08-31, wave M9, Step-6 critic finding C3.
+**Status:** superseded by ADR-014 (2026-09-13). Originally accepted 2026-08-31, wave M9, Step-6
+critic finding C3; the text below is kept as history.
 
 **Context.** M9 built four narrative tutorial notebooks (docs/tutorials/) that load bundled
 MATPOWER/PSS-E-RAW fixtures by relative path (`../../fixtures/matpower/case14.m`,
@@ -583,6 +584,62 @@ of loading real MATPOWER cases — loses exactly what D1 (M9's own scope ruling)
 tutorials for: real IEEE test cases, the ones the power-systems research community actually uses,
 not synthetic toy grids; a `pip`-installable "extras" data package — real option, but a bigger
 packaging decision than this wave's docs/CI/CD-only scope, deferred rather than decided here.
+
+## ADR-014 — Bundled cases ship in the wheel as package data; tutorials and examples need only pip install
+
+**Status:** accepted 2026-09-13. Supersedes ADR-013.
+
+**Context.** ADR-013 kept `fixtures/` in the sdist only, so every narrative tutorial under
+`docs/tutorials/` and every `examples/*.py` script required a repository clone: a reader who ran
+`pip install mambo-power` and then the first cell of a tutorial, or `python examples/<name>.py`,
+got `FileNotFoundError`. ADR-013 recorded that as a permanent constraint and admitted no guard
+enforced even the caveat. With the package live on PyPI, the install path the README and
+getting-started page advertise is exactly the one that could not run the project's own teaching
+material.
+
+**Decision.** Move the bundled cases into the package and expose them through a public module.
+
+1. **The data moves to `src/mambo_power/cases/data/`.** The six MATPOWER cases, the four derived
+   case14 variants and `case14_v33.raw` — about 200 KB of text, the same redistribution the sdist
+   already made — ship in the wheel as package data. Their provenance travels with them:
+   `PROVENANCE.md`, `SOURCES.md`, `derived/PROVENANCE.md` and `PROVENANCE-raw.md`.
+2. **`mambo_power.cases` is the access surface**, stdlib-only (no runtime dependency added):
+   `available()` lists the bundled case names, `path()` returns the file on disk and `load()`
+   returns a `Network`. Tutorials and examples load through it instead of a relative path, so
+   `pip install mambo-power` is enough to run every tutorial and every `examples/*.py`.
+3. **Test-only data stays out of the wheel.** `synthetic_quirks_v33.raw` exists to exercise the
+   RAW importer's edge cases, teaches a reader nothing, and moves to `tests/fixtures/`.
+4. **Exactly one copy of each file exists.** The test suite reads the packaged copy, so the bytes a
+   parity test validates are the bytes a user loads; there is no `fixtures/` mirror to drift.
+5. **Guards, not caveats.** CI's install-smoke job asserts the built wheel carries
+   `cases/data/case14.m` and `PROVENANCE.md`, and solves case14 from a working directory outside
+   the checkout, so a wheel that silently drops the data fails before release. A unit test fails on
+   any `fixtures/` string under `examples/` or `docs/tutorials/`, so a repo-relative load path
+   cannot creep back in.
+
+**Consequences.**
+
+1. **Every install pays the wheel-size cost.** About 200 KB of case text ships to users who only
+   want the solvers. Accepted: it is small next to the numpy/scipy/highspy install it rides on, and
+   a self-sufficient install is worth more than the bytes.
+2. **ADR-013's packaging alternatives are settled.** The hypothetical "library-only" install tier
+   ADR-013 cited against bundling is rejected — nothing asks for it, and designing around it cost
+   every reader a clone. The separate "extras" data package ADR-013 deferred stays deferred
+   indefinitely in favour of the simplest packaging: one wheel, one copy of the data.
+3. **ADR-013's constraint and its two path conventions are gone.** The tutorial caveats requiring a
+   clone no longer apply, and notebook-dir-relative versus repo-root-relative paths collapse into
+   one `mambo_power.cases` call.
+4. **Examples run with a temporary working directory.** Because nothing resolves against the
+   repository root any more, the example tests execute each script from a scratch directory, which
+   is what proves a script needs no checkout.
+
+*Rejected:* keeping ADR-013 and strengthening its caveats — documents the failure instead of
+removing it, and the PyPI install stays unable to run the teaching material; a separate
+`mambo-power-cases` data distribution or `[cases]` extra — a second package to version, publish
+and keep in step for 200 KB of text; downloading cases on first use — adds a network dependency
+and a failure mode to a tutorial's first cell, and the files are small enough to ship; keeping a
+`fixtures/` copy for the tests alongside the packaged one — two copies drift, and the test suite
+would stop validating what users actually load.
 
 ## Wave M2 semantic decisions
 
