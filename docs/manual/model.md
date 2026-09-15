@@ -300,10 +300,10 @@ Models are mutable and mutation never re-validates. `validate_network(net)` runs
 invariant pass and **returns** the issue list (empty means valid) instead of raising:
 
 ```python
-from mambo_power.io import matpower
+from mambo_power import cases
 from mambo_power.model import validate_network
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 net.buses[0].base_kv = 0.0
 issues = validate_network(net)
 assert issues and issues[0].code == "BAD_BASE"
@@ -352,10 +352,10 @@ form, `repair_islands_entities(buses, branches, generators, loads, shunts, stora
 importers call before they construct the `Network`.
 
 ```python
-from mambo_power.io import matpower
+from mambo_power import cases
 from mambo_power.model import repair_islands
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 net.branches[13].in_service = False  # branch-14 (7-8) is case14's only bridge: bus-8 islands
 repaired, issues = repair_islands(net)
 print([(i.code, i.bus_ids, i.element_ids) for i in issues])

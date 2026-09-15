@@ -80,9 +80,9 @@ is only valid for convex costs. This is deliberately an `opf`-local check:
 **Oracle limitation, found verifying this against pandapower.** pandapower's `rundcopp` genuinely
 supports PWL costs, but its own `make_objective._init_gencost` refuses to mix quadratic and
 piecewise-linear costs anywhere in one network — a network-wide check, not per-generator. The
-wave's own PWL fixture (`fixtures/matpower/derived/case14_pwl.m`, two of case14's five generators
-converted to convex PWL, the rest keeping their real quadratic coefficients) therefore cannot be
-oracled by pandapower at all; verification fell back to an independent lambda-iteration
+wave's own PWL case (the bundled `derived/case14_pwl.m`, loaded with
+`cases.load("derived/case14_pwl")`: two of case14's five generators converted to convex PWL, the
+rest keeping their real quadratic coefficients) therefore cannot be oracled by pandapower at all; verification fell back to an independent lambda-iteration
 economic-dispatch solver, since case14 carries no rated branch and DC-OPF with none collapses to
 classic equal-marginal-cost dispatch. That derivation also produced a genuine LP degeneracy: two
 of the fixture's breakpoints tie in marginal cost, so the LP has multiple optima for how the two
@@ -163,10 +163,9 @@ never-raise-on-non-convergence convention. Through the [jobs API](jobs.md), a no
 ## Using it
 
 ```python
-from mambo_power import opf
-from mambo_power.io import matpower
+from mambo_power import cases, opf
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 result = opf.solve_dc_opf(net)
 print(result.provenance.kind, result.provenance.solver, result.status)
 print(result.objective_cost, result.balance_dual)

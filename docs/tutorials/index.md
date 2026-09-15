@@ -32,7 +32,7 @@ Every code cell in every notebook actually runs — they're executed fresh in CI
 hand-typed illustration. The numbers rendered on this site are what running that code printed
 the last time someone re-executed and saved the notebook file, not something recomputed on every
 site build — CI proves the code doesn't break, it doesn't re-render this page's output. If you
-want fresh numbers, clone the repository and run the notebook yourself.
+want fresh numbers, `pip install mambo-power`, download the notebook and run it.
 
 Prefer a faster, terser reference once the narrative isn't needed anymore? See
 [Examples](../examples/index.md) (thirteen short scripts, one concept each) or the

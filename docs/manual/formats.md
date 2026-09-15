@@ -180,9 +180,10 @@ Conditions that are repaired rather than rejected are reported by `load_with_rep
 `load` / `loads` apply the same repairs and discard the report.
 
 ```python
+from mambo_power import cases
 from mambo_power.io import matpower
 
-net, report = matpower.load_with_report("fixtures/matpower/derived/case14_island.m")
+net, report = matpower.load_with_report(cases.path("derived/case14_island.m"))
 print(sorted(report.codes), len(report.warnings))
 island = next(w for w in report.warnings if w.code == "ISLAND_DEACTIVATED")
 print(island.bus_ids, island.element_ids)
@@ -240,9 +241,10 @@ is left to `Network` validation and raises `NetworkValidationError`
 ### Example
 
 ```python
+from mambo_power import cases
 from mambo_power.io import matpower
 
-net, warnings = matpower.load_with_warnings("fixtures/matpower/case14.m")
+net, warnings = matpower.load_with_warnings(cases.path("case14.m"))
 print(len(net.buses), len(warnings), warnings[0])
 ```
 
@@ -468,9 +470,10 @@ Every issue names the element id and the field. The exporter raises nothing of i
 ### Example
 
 ```python
-from mambo_power.io import matpower, pypsa
+from mambo_power import cases
+from mambo_power.io import pypsa
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 n, report = pypsa.to_network_with_report(net)
 print(sorted(report.codes), len(report.warnings))
 print(n.generators[["p_nom", "marginal_cost", "marginal_cost_quadratic"]].head(2))
@@ -601,9 +604,10 @@ Anything wrong with the **network** raises `NetworkValidationError`, as for ever
 ### Example
 
 ```python
+from mambo_power import cases
 from mambo_power.io import psse_raw
 
-net, report = psse_raw.load_with_report("fixtures/case14_v33.raw")
+net, report = psse_raw.load_with_report(cases.path("case14_v33.raw"))
 print(len(net.buses), len(net.branches), sorted(report.codes), len(report.warnings))
 print([b.id for b in net.branches if b.kind == "transformer"])
 print(next(str(w) for w in report.warnings if w.code == "RAW_NO_COSTS"))
@@ -615,9 +619,9 @@ print(next(str(w) for w in report.warnings if w.code == "RAW_NO_COSTS"))
 RAW_NO_COSTS: RAW carries no cost data; all 5 generators imported with cost=None
 ```
 
-`fixtures/case14_v33.raw` is IEEE case14 re-spelled as a RAW file (provenance in
-`fixtures/PROVENANCE-raw.md`); `fixtures/synthetic_quirks_v33.raw` exercises every fold and
-skip above.
+The bundled `case14_v33.raw` is IEEE case14 re-spelled as a RAW file; its provenance,
+`PROVENANCE-raw.md`, ships beside it in the package. The repository's
+`tests/fixtures/synthetic_quirks_v33.raw` exercises every fold and skip above.
 
 ## CSV bundle
 
@@ -712,9 +716,10 @@ and raise `NetworkValidationError`, exactly as for the native format.
 import tempfile
 from pathlib import Path
 
-from mambo_power.io import csv_bundle, matpower
+from mambo_power import cases
+from mambo_power.io import csv_bundle
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 with tempfile.TemporaryDirectory() as directory:
     csv_bundle.dump(net, directory)
     print(sorted(p.name for p in Path(directory).iterdir()))
@@ -728,10 +733,40 @@ with tempfile.TemporaryDirectory() as directory:
 True
 ```
 
-## Bundled fixtures
+## Bundled cases
 
-The repository ships MATPOWER cases under `fixtures/matpower/` with their provenance recorded
-in `PROVENANCE.md` / `SOURCES.md`: `case14`, `case30`, `case_ieee30`, `case57`, `case118` and
-`case300` (verbatim bytes with recorded sha256), plus derived variants under `derived/` that
-exercise effective-role and island handling. These are public IEEE test data as distributed
-by MATPOWER; see the provenance files for the exact wording.
+The package ships test cases under `mambo_power/cases/data/`, inside the wheel, so a bare
+`pip install mambo-power` can load them: the MATPOWER cases `case14`, `case30`, `case_ieee30`,
+`case57`, `case118` and `case300` (verbatim bytes with recorded sha256), derived case14 variants
+under `derived/` that exercise effective-role, island, missing-slack-generator and
+piecewise-cost handling, and `case14_v33.raw`, case14 transcribed to PSS/E RAW. Their provenance
+travels with them in `PROVENANCE.md`, `SOURCES.md`, `derived/PROVENANCE.md` and
+`PROVENANCE-raw.md`. The MATPOWER cases are public IEEE test data as distributed by MATPOWER;
+see the provenance files for the exact wording.
+
+[`mambo_power.cases`](../api/cases.md) is the access surface:
+
+| Function | Does |
+| --- | --- |
+| `cases.available() -> list[str]` | The sorted names of every bundled `.m` and `.raw` file, as relative POSIX paths; provenance files are not listed. |
+| `cases.path(name) -> Path` | The absolute on-disk path of a bundled file, for any reader that takes a path (`load_with_report`, `psse_raw.load`); `ValueError` listing the names if `name` is unknown. |
+| `cases.load(name) -> Network` | `matpower.load` on a bundled `.m` case; the suffix is optional (`"case14"`, `"derived/case14_pwl"`). A `.raw` name is refused with a `ValueError` pointing at `psse_raw.load(cases.path(...))`. |
+
+```python
+from mambo_power import cases
+from mambo_power.io import psse_raw
+
+print(cases.available())
+print(cases.path("case14.m").name, cases.path("case14.m").is_file())
+net = cases.load("case14")
+print(len(net.buses), len(net.branches), len(net.generators))
+raw = psse_raw.load(cases.path("case14_v33.raw"))
+print(len(raw.buses), len(raw.branches))
+```
+
+```text
+['case118.m', 'case14.m', 'case14_v33.raw', 'case30.m', 'case300.m', 'case57.m', 'case_ieee30.m', 'derived/case14_island.m', 'derived/case14_noslackgen.m', 'derived/case14_pwl.m', 'derived/case14_roles.m']
+case14.m True
+14 20 5
+14 20
+```

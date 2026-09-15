@@ -6,10 +6,9 @@ power flow today, DC optimal power flow, N-1 contingency analysis and four marke
 modes on the roadmap — on top of numpy, scipy and HiGHS.
 
 ```python
-from mambo_power.io import matpower
-from mambo_power import pf
+from mambo_power import cases, pf
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 result = pf.solve_dc(net)
 print(result.branches[0].p_from_mw)
 ```
@@ -34,7 +33,7 @@ print(result.branches[0].p_from_mw)
     `io.csv_bundle`, see [Manual › File formats](manual/formats.md)), and `Branch.kind`
     telling a line from a transformer. **M9** closed the epic — narrative
     [tutorials](tutorials/index.md), an automated changelog and the PyPI trusted-publishing
-    pipeline. Nothing is on PyPI yet — install from source (see [Getting
+    pipeline. Install it from PyPI with `pip install mambo-power` (see [Getting
     started](getting-started.md)).
 
 ## Three principles

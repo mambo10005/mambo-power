@@ -160,10 +160,9 @@ The runner for `pf.dc` is `pf.solve_dc`; for `pf.ac` it is `pf.solve_ac` with th
 A request on case14, the result, its provenance:
 
 ```python
-from mambo_power import jobs
-from mambo_power.io import matpower
+from mambo_power import cases, jobs
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 request = jobs.SolveRequest(kind="pf.dc", network=net, job_id="demo-1")
 outcome = jobs.run(request)
 print(outcome.status, outcome.kind, outcome.job_id, type(outcome.result).__name__)
@@ -261,7 +260,7 @@ doc["network"]["branches"][0]["to_bus"] = "bus-999"  # a dangling reference in t
 broken = jobs.SolveResult.model_validate_json(jobs.run_json(json.dumps(doc)))
 print(broken.status, broken.error.code, "|", [str(i) for i in broken.error.issues])
 
-noslack_net = matpower.load("fixtures/matpower/derived/case14_noslackgen.m")
+noslack_net = cases.load("derived/case14_noslackgen")
 noslack = jobs.run(jobs.SolveRequest(kind="pf.ac", network=noslack_net))
 print(noslack.status, noslack.error.code, "|", noslack.error.message)
 ```
@@ -279,7 +278,7 @@ On the derived fixture where two in-service generators at bus 2 disagree on thei
 `pf.solve_ac` warns; `jobs.run` attaches the warning instead:
 
 ```python
-roles_net = matpower.load("fixtures/matpower/derived/case14_roles.m")
+roles_net = cases.load("derived/case14_roles")
 roles = jobs.run(jobs.SolveRequest(kind="pf.ac", network=roles_net))
 print(roles.status, roles.result.converged, roles.warnings)
 

@@ -25,8 +25,8 @@ Every conversion is *best effort + report*: an empty report means lossless; anyt
 approximated or repaired is an issue naming the element id and the field. Nothing is logged or
 printed by the converters themselves.
 
-pandapower and PyPSA are development extras (``uv sync`` installs them); the core package never
-imports either.
+pandapower and PyPSA are not dependencies of mambo-power: on top of ``pip install mambo-power``
+this script needs ``pip install pandapower pypsa``. The core package never imports either.
 
 Runs from any directory, with no repository clone: ``python 13_interop.py``.
 """

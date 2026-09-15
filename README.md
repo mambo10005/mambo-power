@@ -58,24 +58,15 @@ pip install mambo-power
 # or: uv add mambo-power
 ```
 
-The wheel ships only the package. The MATPOWER fixtures under `fixtures/` and the test suite
-are in the sdist and the repository, not in the wheel, so the examples below assume a clone:
-
-```bash
-git clone https://github.com/mambo10005/mambo-power.git
-cd mambo-power
-uv sync                    # runtime deps only; add --all-groups for dev + docs tooling
-```
-
-Without [uv](https://docs.astral.sh/uv/): `pip install -e .` in any Python >= 3.11 environment.
+The bundled IEEE test cases ship inside the package (`mambo_power.cases`), so the quick start
+below, the examples and the tutorials run straight after the install.
 
 ## Quick start
 
 ```python
-from mambo_power import pf
-from mambo_power.io import matpower
+from mambo_power import cases, pf
 
-net = matpower.load("fixtures/matpower/case14.m")  # validated Network, physical units
+net = cases.load("case14")  # validated Network, physical units
 result = pf.solve_dc(net)  # typed result keyed by ids, MW
 print(result.generators[0].p_mw)  # 219.0 -- slack generator balance
 print(result.branches[0].p_from_mw)  # 147.84 -- flow bus-1 -> bus-2
@@ -120,6 +111,16 @@ if you're new. The manual is the reference:
 
 ## Development
 
+To work on mambo-power itself, clone the repository and sync the environment:
+
+```bash
+git clone https://github.com/mambo10005/mambo-power.git
+cd mambo-power
+uv sync                    # runtime deps only; add --all-groups for dev + docs tooling
+```
+
+Without [uv](https://docs.astral.sh/uv/): `pip install -e .` in any Python >= 3.11 environment.
+
 ```bash
 uv sync --all-groups
 uv run ruff check . && uv run ruff format --check . && uv run mypy
@@ -134,5 +135,6 @@ pushes to `epic/01-foundation` and `main`.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE). Bundled MATPOWER cases under `fixtures/matpower/` are public
-IEEE test data as distributed by MATPOWER; see `fixtures/matpower/PROVENANCE.md`.
+MIT — see [LICENSE](LICENSE). The bundled MATPOWER cases ship inside the package under
+`mambo_power/cases/data/` and are public IEEE test data as distributed by MATPOWER; see the
+`PROVENANCE.md` beside them.

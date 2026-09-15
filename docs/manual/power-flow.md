@@ -82,10 +82,9 @@ slipped past validation. Through the [jobs API](jobs.md) these become structured
 [effective role](#effective-bus-roles) of each bus. See [Results](results.md).
 
 ```python
-from mambo_power import pf
-from mambo_power.io import matpower
+from mambo_power import cases, pf
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 result = pf.solve_dc(net)
 print(result.provenance.kind, result.provenance.solver, result.converged)
 print(result.buses[1].va_deg, result.branches[0].p_from_mw, result.generators[0].p_mw)
@@ -121,10 +120,9 @@ second.
 ### API
 
 ```python
-from mambo_power import pf
-from mambo_power.io import matpower
+from mambo_power import cases, pf
 
-net = matpower.load("fixtures/matpower/case118.m")
+net = cases.load("case118")
 result = pf.solve_ac(net, options=pf.AcOptions(init="flat"))
 print(result.converged, result.iterations, result.q_limit_rounds, f"{result.max_mismatch_mva:.1e}")
 print([(g.bus, g.q_limited) for g in result.generators if g.q_limited != "none"])

@@ -45,10 +45,10 @@ way out. The agreement test that guards this is the Ybus parity against pandapow
 `makeYbus` on the IEEE fixtures, which fails if the conversion drifts.
 
 ```python
-from mambo_power.io import matpower
+from mambo_power import cases
 from mambo_power.numerics import NetworkArrays
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 arr = NetworkArrays.from_network(net)
 print(arr.n_bus, arr.n_branch, arr.slack, arr.bus_ids[:3], arr.bus_index["bus-5"])
 ```
@@ -212,10 +212,10 @@ In case14, `branch-14` (bus-7 to bus-8) is the only bridge: bus-8 hangs off it r
 ## Putting it together
 
 ```python
-from mambo_power.io import matpower
+from mambo_power import cases
 from mambo_power.numerics import NetworkArrays, bbus, bf, lodf, ptdf, ybus
 
-net = matpower.load("fixtures/matpower/case118.m")
+net = cases.load("case118")
 arr = NetworkArrays.from_network(net)
 
 Y = ybus(arr)  # complex sparse, AC

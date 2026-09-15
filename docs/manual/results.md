@@ -187,11 +187,10 @@ alone](zonal.md#settlement-from-the-result-object-alone).
 Results serialise with the standard pydantic surface and come back equal:
 
 ```python
-from mambo_power import pf
-from mambo_power.io import matpower
+from mambo_power import cases, pf
 from mambo_power.results import DcPowerFlowResult
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 result = pf.solve_dc(net)
 
 text = result.model_dump_json()  # one JSON document, ~6 kB for case14

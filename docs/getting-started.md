@@ -13,13 +13,11 @@ pip install mambo-power
 # or: uv add mambo-power
 ```
 
-!!! note "What gets installed"
-    The wheel ships only the package and its `py.typed` marker. The MATPOWER fixtures under
-    `fixtures/` and the test suite are in the sdist and the repository, not in the wheel, so
-    the examples below — and the [tutorials](tutorials/index.md) — assume you are in a clone of
-    the repository, not just a `pip install`.
+That is all you need. The IEEE test cases this page loads ship inside the package as
+[`mambo_power.cases`](api/cases.md), so every snippet below — and every
+[tutorial](tutorials/index.md) and [example](examples/index.md) — runs from any directory.
 
-To work from a clone (required for the examples on this page, and for the tutorials):
+A clone is optional, for developing mambo-power itself:
 
 ```bash
 git clone https://github.com/mambo10005/mambo-power.git
@@ -29,20 +27,15 @@ uv run python -c "import mambo_power; print(mambo_power.__version__)"
 ```
 
 Add `--all-groups` to `uv sync` if you also want the development tools (pytest, hypothesis,
-ruff, mypy, the pandapower/PyPSA oracles) and the documentation toolchain.
-
-Without uv, any Python ≥ 3.11 environment works:
-
-```bash
-pip install -e .        # or: pip install .
-```
+ruff, mypy, the pandapower/PyPSA oracles) and the documentation toolchain. Without uv, run
+`pip install -e .` inside the clone in any Python ≥ 3.11 environment.
 
 ## Load a MATPOWER case
 
 ```python
-from mambo_power.io import matpower
+from mambo_power import cases
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 print(len(net.buses), len(net.branches), len(net.generators), len(net.loads), len(net.shunts))
 ```
 
@@ -64,10 +57,13 @@ id='branch-1' from_bus='bus-1' to_bus='bus-2' r=0.01938 x=0.05917 b=0.0528 ratin
 ```
 
 Some files need small repairs on the way in (case14 stores `baseKV = 0`, which becomes
-`1.0`). `load` applies them silently; `load_with_warnings` tells you what it did:
+`1.0`). `cases.load` applies them silently; `matpower.load_with_warnings` on the case's file
+tells you what it did:
 
 ```python
-net, warnings = matpower.load_with_warnings("fixtures/matpower/case14.m")
+from mambo_power.io import matpower
+
+net, warnings = matpower.load_with_warnings(cases.path("case14.m"))
 print(len(warnings))
 print(warnings[0])
 ```
@@ -81,7 +77,7 @@ See [File formats](manual/formats.md) for the full column map and every warning.
 
 ## Validate
 
-Construction already validated the network: `matpower.load` cannot return an invalid
+Construction already validated the network: `cases.load` cannot return an invalid
 `Network`. Validation checks **every** invariant in one pass and reports all failures at once,
 so you fix a bad file in one round trip rather than one error at a time:
 
