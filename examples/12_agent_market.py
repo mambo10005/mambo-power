@@ -18,12 +18,12 @@ What this shows:
   iteration cap, where the result says ``iteration_cap`` rather than pretending to have settled.
 * Through ``jobs``: the ``StrategyConfig`` union crossing as JSON data, never a callable.
 
-The synthetic networks are built here rather than imported from ``fixtures/``: a markup agent
-needs a **linear** cost, and every one of the 147 generators in the six bundled MATPOWER cases
-carries a quadratic one. The price-taker section below does use ``case14``, because a price-taker
-offers whatever shape its true cost is.
+The synthetic networks are built here rather than loaded from ``mambo_power.cases``: a markup
+agent needs a **linear** cost, and every one of the 147 generators in the six bundled MATPOWER
+cases carries a quadratic one. The price-taker section below does use ``case14``, because a
+price-taker offers whatever shape its true cost is.
 
-Run from the repository root: ``uv run python examples/12_agent_market.py``.
+Runs from any directory, with no repository clone: ``python 12_agent_market.py``.
 """
 
 from __future__ import annotations
@@ -32,8 +32,7 @@ import json
 
 import numpy as np
 
-from mambo_power import jobs, market
-from mambo_power.io import matpower
+from mambo_power import cases, jobs, market
 from mambo_power.market.agents import MarketAgentsOptions, solve_agents
 from mambo_power.model import (
     Branch,
@@ -99,7 +98,7 @@ def price(result) -> float:  # noqa: ANN001 - any market result carrying `buses`
 # Every generator on case14 offers its own true cost, unchanged.  This is an ordinary run of the
 # loop -- the offer map is built, the overlay is handed to the array builder, the clearing comes
 # back and is compared -- and it agrees with `market.solve_nodal` bitwise, not to a tolerance.
-case14 = matpower.load("fixtures/matpower/case14.m")
+case14 = cases.load("case14")
 scenario14 = Scenario(network=case14)
 
 taker_options = MarketAgentsOptions(

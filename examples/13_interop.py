@@ -12,7 +12,7 @@ What this shows:
 * ``io.pypsa.to_network_with_report`` then PyPSA ``optimize()``: the DC-OPF objective agrees
   with ``opf.solve_dc_opf`` (the constant cost term travels beside PyPSA's objective in the
   ``marginal_cost_constant`` column, since ``n.objective`` excludes constants).
-* ``io.psse_raw.load_with_report`` on ``fixtures/case14_v33.raw``: the same IEEE case14 spelled
+* ``io.psse_raw.load_with_report`` on the bundled ``case14_v33.raw``: the same IEEE case14 spelled
   as a RAW file; RAW carries no costs, and the report says so with ``RAW_NO_COSTS`` rather than
   the importer inventing any.
 * ``io.csv_bundle.dump`` / ``load`` through a temporary directory: ``load(dump(net)) == net``,
@@ -28,7 +28,7 @@ printed by the converters themselves.
 pandapower and PyPSA are development extras (``uv sync`` installs them); the core package never
 imports either.
 
-Run from the repository root: ``uv run python examples/13_interop.py``.
+Runs from any directory, with no repository clone: ``python 13_interop.py``.
 """
 
 from __future__ import annotations
@@ -42,8 +42,8 @@ import numpy as np
 import pandapower as pp
 import pandapower.networks as pn
 
-from mambo_power import opf, pf
-from mambo_power.io import csv_bundle, matpower, pandapower_json, psse_raw, pypsa
+from mambo_power import cases, opf, pf
+from mambo_power.io import csv_bundle, pandapower_json, psse_raw, pypsa
 from mambo_power.model import PiecewiseCost
 
 # The third-party libraries log freely (numba advice, PyPSA consistency notes, solver banners);
@@ -51,7 +51,7 @@ from mambo_power.model import PiecewiseCost
 for name in ("pandapower", "pypsa", "linopy"):
     logging.getLogger(name).setLevel(logging.ERROR)
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 print(f"case14: {len(net.buses)} buses, {len(net.branches)} branches, {len(net.generators)} gens")
 
 # --- 1. pandapower JSON export, solved by pandapower itself ----------------------------------
@@ -99,7 +99,7 @@ print(f"   opf.solve_dc_opf {dc_opf.status}: objective {dc_opf.objective_cost:.4
 print(f"   relative difference {rel:.1e}")
 
 # --- 4. PSS/E RAW v33 import ------------------------------------------------------------------
-raw_net, raw_report = psse_raw.load_with_report("fixtures/case14_v33.raw")
+raw_net, raw_report = psse_raw.load_with_report(cases.path("case14_v33.raw"))
 print(f"\nRAW import: {len(raw_net.buses)} buses, {len(raw_net.branches)} branches")
 print(f"   report codes {sorted(raw_report.codes)} ({len(raw_report.warnings)} issues)")
 print("  ", next(str(w) for w in raw_report.warnings if w.code == "RAW_NO_COSTS"))

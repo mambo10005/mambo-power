@@ -14,15 +14,14 @@ What this shows:
   case14 with synthetic ratings (case14 as shipped has none). One outage's screened estimate
   and DC-re-solve-confirmed flow, side by side, on a branch the screen correctly flagged.
 
-Run from the repository root: ``uv run python examples/08_opf_and_n1.py``.
+Runs from any directory, with no repository clone: ``python 08_opf_and_n1.py``.
 """
 
 from __future__ import annotations
 
-from mambo_power import contingency, opf, pf
-from mambo_power.io import matpower
+from mambo_power import cases, contingency, opf, pf
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 
 # --- 1. DC-OPF dispatch, duals, and the AC-feasibility check --------------------------------
 result = opf.solve_dc_opf(net, options=opf.OpfDcOptions(ac_check=True))

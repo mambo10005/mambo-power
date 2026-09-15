@@ -19,15 +19,14 @@ What this shows:
 * The degenerate case: a ``Scenario`` with ``periods=None`` clears one period and reproduces
   ``market.solve_nodal`` exactly -- the same dispatch and the same LMPs, not merely close.
 
-Run from the repository root: ``uv run python examples/10_multiperiod_market.py``.
+Runs from any directory, with no repository clone: ``python 10_multiperiod_market.py``.
 """
 
 from __future__ import annotations
 
 import math
 
-from mambo_power import market, pf
-from mambo_power.io import matpower
+from mambo_power import cases, market, pf
 from mambo_power.model import Period, Scenario, Storage
 
 # --- 1. Build the 24-period scenario ----------------------------------------------------------
@@ -35,7 +34,7 @@ from mambo_power.model import Period, Scenario, Storage
 # column reads 0, the format's "unpopulated" convention), so all three are derived here from the
 # fixture's own committed numbers -- the same test-time-transformation discipline the test suite
 # uses, and the same 20%-headroom rating rule as `08_opf_and_n1.py`.
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 base_flow_mw = {b.id: abs(b.p_from_mw) for b in pf.solve_dc(net).branches}
 for br in net.branches:
     if br.id in base_flow_mw:
@@ -160,7 +159,7 @@ print(" type does not carry; tests/unit/test_market_multiperiod.py computes it f
 print(" array-level solve and proves the equality period by period)")
 
 # --- 5. Degeneracy: one period is the nodal clearing, exactly ----------------------------------
-plain = matpower.load("fixtures/matpower/case14.m")
+plain = cases.load("case14")
 nodal = market.solve_nodal(Scenario(network=plain))
 single = market.solve_multiperiod(Scenario(network=plain))  # periods=None -> a one-period horizon
 print(f"\nperiods=None -> n_periods {single.n_periods}, status {single.status}")

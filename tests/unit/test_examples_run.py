@@ -1,11 +1,12 @@
-"""AC-9: every script under ``examples/`` runs to completion from the repository root.
+"""AC-9: every script under ``examples/`` runs to completion from an empty directory.
 
 The scripts are the documentation's executed code — ``docs/examples/index.md`` embeds them
 byte-for-byte with ``pymdownx.snippets`` — so a script that stops running is a docs page that
-lies. Each one is run in a fresh interpreter (as a reader would run it), with the repository
-root as the working directory (they read ``fixtures/``), and must exit 0, print something, and
-finish inside a generous budget. The CI ``examples`` job runs the same loop for visibility;
-this test is what the local floor covers.
+lies. Each one is run in a fresh interpreter (as a reader would run it), with a fresh temporary
+directory as the working directory — they load data only through ``mambo_power.cases``, so they
+need no repository clone — and must exit 0, print something, and finish inside a generous
+budget. The CI ``examples`` job runs the same loop for visibility; this test is what the local
+floor covers.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES_DIR = REPO_ROOT / "examples"
 EXAMPLES = sorted(EXAMPLES_DIR.glob("*.py"))
-BUDGET_S = 60.0  # each script is ~1 s locally; the budget only guards against a hang
+BUDGET_S = 180.0  # each script is ~1 s alone; a hang guard, and 60 s tripped under parallel load
 # Scripts whose whole point is running an external engine pay that engine's cold import: example 13
 # imports pandapower (~13 s) and PyPSA (~6 s) and runs pp.rundcpp, pp.networks.case14() and a
 # PyPSA optimize -- ~50 s in-process on the Windows dev machine, more on a cold CI runner. The
@@ -42,12 +43,12 @@ def test_every_example_is_embedded_in_the_docs() -> None:
 
 
 @pytest.mark.parametrize("script", EXAMPLES, ids=[p.stem for p in EXAMPLES])
-def test_example_runs_to_completion(script: Path) -> None:
+def test_example_runs_to_completion(script: Path, tmp_path: Path) -> None:
     budget = BUDGETS_S.get(script.stem, BUDGET_S)
     started = time.perf_counter()
     proc = subprocess.run(
         [sys.executable, str(script)],
-        cwd=REPO_ROOT,
+        cwd=tmp_path,
         capture_output=True,
         text=True,
         timeout=budget,

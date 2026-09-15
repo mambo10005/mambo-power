@@ -12,17 +12,16 @@ What this shows:
 * Warnings raised during the solve (here a ``SetpointConflictWarning`` on the case14 variant
   with two generators at different setpoints) are captured on the result, not printed.
 
-Run from the repository root: ``uv run python examples/04_jobs_api.py``.
+Runs from any directory, with no repository clone: ``python 04_jobs_api.py``.
 """
 
 from __future__ import annotations
 
 import json
 
-from mambo_power import jobs
-from mambo_power.io import matpower
+from mambo_power import cases, jobs
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 
 # --- 1. Run pf.ac and pf.dc through the same entry point ----------------------------------
 print("registered kinds:", jobs.kinds())
@@ -69,7 +68,7 @@ print("invalid network ->", invalid.status, invalid.error.code, "|", end=" ")
 print([(i.code, i.path) for i in invalid.error.issues])
 
 # --- 4. Warnings travel with the result ----------------------------------------------------
-roles = matpower.load("fixtures/matpower/derived/case14_roles.m")
+roles = cases.load("derived/case14_roles")
 outcome = jobs.run(jobs.SolveRequest(kind="pf.ac", network=roles, options={"init": "flat"}))
 assert outcome.result is not None
 print("\ncase14_roles ->", outcome.status, "converged", outcome.result.converged)

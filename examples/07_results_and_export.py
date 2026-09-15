@@ -11,7 +11,7 @@ What this shows:
 * Exporting the bus and branch tables to CSV needs nothing beyond the standard library:
   every row is a pydantic model, so ``model_dump()`` feeds ``csv.DictWriter`` directly.
 
-Run from the repository root: ``uv run python examples/07_results_and_export.py``.
+Runs from any directory, with no repository clone: ``python 07_results_and_export.py``.
 """
 
 from __future__ import annotations
@@ -23,11 +23,10 @@ from pathlib import Path
 
 import numpy as np
 
-from mambo_power import pf
-from mambo_power.io import matpower
+from mambo_power import cases, pf
 from mambo_power.results import AcPowerFlowResult
 
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 result = pf.solve_ac(net, options=pf.AcOptions(init="flat"))
 
 # --- 1. JSON round trip --------------------------------------------------------------------

@@ -10,17 +10,16 @@ What this shows:
   close on most branches and off by tens of MW on a few, and it knows nothing about the
   AC losses.
 
-Run from the repository root: ``uv run python examples/03_dc_power_flow.py``.
+Runs from any directory, with no repository clone: ``python 03_dc_power_flow.py``.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from mambo_power import pf
-from mambo_power.io import matpower
+from mambo_power import cases, pf
 
-net = matpower.load("fixtures/matpower/case300.m")
+net = cases.load("case300")
 dc = pf.solve_dc(net)
 print("case300 DC:", dc.provenance.kind, dc.provenance.solver, "converged =", dc.converged)
 

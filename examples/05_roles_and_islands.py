@@ -12,14 +12,14 @@ What this shows:
   the main island. The model itself stays strict: constructing the same ``Network`` with the
   island switched back on raises ``DISCONNECTED_BUS``.
 
-Run from the repository root: ``uv run python examples/05_roles_and_islands.py``.
+Runs from any directory, with no repository clone: ``python 05_roles_and_islands.py``.
 """
 
 from __future__ import annotations
 
 import warnings
 
-from mambo_power import pf
+from mambo_power import cases, pf
 from mambo_power.io import matpower
 from mambo_power.model import Network, NetworkValidationError
 from mambo_power.numerics import (
@@ -32,7 +32,7 @@ from mambo_power.numerics import (
 ROLE = {1: "pq", 2: "pv", 3: "slack"}
 
 # --- 1. Effective roles on case14_roles ----------------------------------------------------
-net = matpower.load("fixtures/matpower/derived/case14_roles.m")
+net = cases.load("derived/case14_roles")
 arr = NetworkArrays.from_network(net)
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always")
@@ -58,14 +58,14 @@ print(f"solved: bus-6 role_effective={bus6.role_effective} vm={bus6.vm_pu:.4f} p
 print(f"bus-2 vm={bus2.vm_pu:.4f} pu (the last generator's setpoint)")
 
 # --- 2. Slack without a generator --------------------------------------------------------
-noslack = matpower.load("fixtures/matpower/derived/case14_noslackgen.m")
+noslack = cases.load("derived/case14_noslackgen")
 try:
     pf.solve_ac(noslack)
 except NoSlackGeneratorError as err:
     print(f"\ncase14_noslackgen: NoSlackGeneratorError for {err.bus_id}: {err}")
 
 # --- 3. Island repair by the importer ------------------------------------------------------
-island, report = matpower.load_with_report("fixtures/matpower/derived/case14_island.m")
+island, report = matpower.load_with_report(cases.path("derived/case14_island.m"))
 issue = next(w for w in report.warnings if w.code == "ISLAND_DEACTIVATED")
 print("\ncase14_island:", issue.code, "| buses", issue.bus_ids, "| elements", issue.element_ids)
 print("  message:", issue.message)

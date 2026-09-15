@@ -10,11 +10,12 @@ What this shows:
   ``ValidationIssue`` (code, path, message) per problem, never just the first one.
 * ``validate_network`` re-checks a mutated network and returns the issues instead of raising.
 
-Run from the repository root: ``uv run python examples/01_load_and_validate.py``.
+Runs from any directory, with no repository clone: ``python 01_load_and_validate.py``.
 """
 
 from __future__ import annotations
 
+from mambo_power import cases
 from mambo_power.io import matpower
 from mambo_power.model import (
     Branch,
@@ -27,7 +28,7 @@ from mambo_power.model import (
 )
 
 # --- 1. Load a case with its import report -------------------------------------------------
-net, report = matpower.load_with_report("fixtures/matpower/case14.m")
+net, report = matpower.load_with_report(cases.path("case14.m"))
 print("case14:", len(net.buses), "buses,", len(net.branches), "branches,", end=" ")
 print(len(net.generators), "generators,", len(net.loads), "loads,", len(net.shunts), "shunts")
 print("base_mva:", net.base_mva, "| slack:", [b.id for b in net.buses if b.type == "slack"])

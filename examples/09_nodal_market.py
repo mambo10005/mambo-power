@@ -13,7 +13,7 @@ What this shows:
 * The settlement identity: total load payment minus total generator receipts equals the
   congestion rent, which equals ``-sum(mu_k * flow_k)`` over the binding branches.
 
-Run from the repository root: ``uv run python examples/09_nodal_market.py``.
+Runs from any directory, with no repository clone: ``python 09_nodal_market.py``.
 """
 
 from __future__ import annotations

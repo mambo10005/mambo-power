@@ -11,21 +11,21 @@ What this shows:
   because outaging a bridge islands a bus and no redistribution exists.
 * A 3-bus hand example small enough to print every matrix in full.
 
-Run from the repository root: ``uv run python examples/06_network_matrices.py``.
+Runs from any directory, with no repository clone: ``python 06_network_matrices.py``.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from mambo_power.io import matpower
+from mambo_power import cases
 from mambo_power.model import Branch, Bus, Generator, Load, Network
 from mambo_power.numerics import NetworkArrays, bbus, bridges, lodf, ptdf, ybus
 
 np.set_printoptions(precision=4, suppress=True, linewidth=100)
 
 # --- 1. case14 -----------------------------------------------------------------------------
-net = matpower.load("fixtures/matpower/case14.m")
+net = cases.load("case14")
 arr = NetworkArrays.from_network(net)
 print(f"case14 arrays: {arr.n_bus} buses, {arr.n_branch} branches, slack position {arr.slack}")
 print(f"  p_load_pu[:4] = {arr.p_load_pu[:4]}  (MW / base_mva = {arr.base_mva})")

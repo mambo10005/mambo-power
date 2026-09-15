@@ -13,13 +13,12 @@ What this shows:
 * Warm start: copy the solved state into ``Bus.vm_pu`` / ``Bus.va_deg`` and solve again with
   ``init="auto"`` — a start already inside tolerance reports 0 iterations.
 
-Run from the repository root: ``uv run python examples/02_ac_power_flow.py``.
+Runs from any directory, with no repository clone: ``python 02_ac_power_flow.py``.
 """
 
 from __future__ import annotations
 
-from mambo_power import pf
-from mambo_power.io import matpower
+from mambo_power import cases, pf
 from mambo_power.results import AcPowerFlowResult
 
 
@@ -34,13 +33,13 @@ def summarise(label: str, result: AcPowerFlowResult) -> None:
 
 
 for name in ("case14", "case118"):
-    net = matpower.load(f"fixtures/matpower/{name}.m")
+    net = cases.load(name)
     for q_limits in (True, False):
         options = pf.AcOptions(init="flat", q_limits=q_limits)
         summarise(f"{name}, q_limits={q_limits}", pf.solve_ac(net, options=options))
 
 # --- A closer look at case118 with limits enforced ------------------------------------------
-net = matpower.load("fixtures/matpower/case118.m")
+net = cases.load("case118")
 result = pf.solve_ac(net, options=pf.AcOptions(init="flat"))
 print("\nfirst 5 bus voltages (case118, q_limits on):")
 for bus in result.buses[:5]:

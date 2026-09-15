@@ -22,13 +22,12 @@ What this shows:
   side (this is the first market result type carrying per-branch duals), and the redispatched
   point agreeing with ``market.solve_nodal`` -- which is a theorem, not a coincidence.
 
-Run from the repository root: ``uv run python examples/11_zonal_redispatch.py``.
+Runs from any directory, with no repository clone: ``python 11_zonal_redispatch.py``.
 """
 
 from __future__ import annotations
 
-from mambo_power import market, pf
-from mambo_power.io import matpower
+from mambo_power import cases, market, pf
 from mambo_power.model import (
     Branch,
     Bus,
@@ -125,7 +124,7 @@ print("  the network itself would.  Island the zones and the operator collects i
 # ratings are derived from the base-case DC flows (case30's RATE_A is not used here, so there is
 # one derivation rule and no mixed provenance), and each corridor's capacity is the sum of the
 # ratings on the branches that cross it.
-net = matpower.load("fixtures/matpower/case30.m")
+net = cases.load("case30")
 base_flow_mw = {b.id: abs(b.p_from_mw) for b in pf.solve_dc(net).branches}
 for br in net.branches:
     if br.id in base_flow_mw:
