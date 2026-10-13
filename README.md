@@ -15,9 +15,10 @@ Documentation: **https://mambo10005.github.io/mambo-power/**
   pandapower JSON, PyPSA, PSS/E RAW and CSV bundles.
 - Network matrices over scipy.sparse: `NetworkArrays` (the single per-unit conversion site),
   Ybus, Bbus, PTDF, LODF with bridge detection.
-- Solvers: DC power flow and AC Newton-Raphson with Q-limit enforcement; DC optimal power flow
-  with duals on HiGHS; N-1 contingency screening; market clearing (nodal LMP, multiperiod with
-  storage, zonal with redispatch, agent-based bidding).
+- Solvers: DC power flow and AC Newton-Raphson with Q-limit enforcement; DC and AC optimal power
+  flow with duals on HiGHS, security-constrained DC-OPF; N-1 contingency screening for branch
+  and generator outages; market clearing (nodal LMP, multiperiod with storage and unit
+  commitment, zonal with redispatch, agent-based bidding).
 - Typed, id-keyed results stamped with provenance (engine version, solver, timings), never
   stored on the network; a stateless, JSON-serialisable `jobs.run(SolveRequest)` surface
   designed to sit behind a service.
@@ -41,7 +42,7 @@ GitHub Pages, PyPI trusted publishing).
 | M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
 | M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
-| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0); unit commitment on the multiperiod market (0.5.0) | merged |
+| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0); unit commitment on the multiperiod market (0.5.0); AC-OPF (0.6.0) | merged |
 
 On PyPI as of `v0.1.0`. See
 [Getting started](https://mambo10005.github.io/mambo-power/getting-started/) for the current
@@ -95,6 +96,7 @@ if you're new. The manual is the reference:
 - [Power flow](https://mambo10005.github.io/mambo-power/manual/power-flow/) — the DC
   formulation and the AC solver's contract
 - [DC-OPF](https://mambo10005.github.io/mambo-power/manual/opf/),
+  [AC-OPF](https://mambo10005.github.io/mambo-power/manual/ac-opf/),
   [N-1 screening](https://mambo10005.github.io/mambo-power/manual/n1/) and
   [security-constrained OPF](https://mambo10005.github.io/mambo-power/manual/scopf/)
 - Market clearing: [nodal](https://mambo10005.github.io/mambo-power/manual/market/),

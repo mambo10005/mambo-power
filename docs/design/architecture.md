@@ -19,7 +19,7 @@ flowchart TB
         numerics["numerics<br/>NetworkArrays, ybus, bbus, ptdf, lodf,<br/>effective_roles"]
         pf["pf<br/>solve_dc, solve_ac, dc.solve"]
         ac["pf.ac_newton<br/>AcOptions, newton"]
-        opf["opf<br/>solve_dc_opf, solve_scopf, dc_opf,<br/>lmp_decomposition, gen_cost_coeffs"]
+        opf["opf<br/>solve_dc_opf, solve_ac_opf, solve_scopf,<br/>dc_opf, ac_opf, lmp_decomposition,<br/>gen_cost_coeffs"]
         opfmp["opf.multiperiod<br/>multiperiod_dc_opf<br/>(ramp, SoC, cyclic,<br/>commitment rows)"]
         opfz["opf.zonal<br/>zonal_dc_opf<br/>(per-zone balance, corridor columns)"]
         opfrd["opf.redispatch<br/>redispatch_dc_opf<br/>(delta columns both sides)"]
@@ -201,8 +201,9 @@ src/mambo_power/
                     psse_raw.py (load*), csv_bundle.py (dump, load*)
   numerics/         arrays.py (NetworkArrays), ybus.py, bbus.py, ptdf.py, lodf.py, roles.py, errors.py
   pf/               __init__.py (solve_dc, solve_ac), dc.py (solve, DcSolution), ac_newton.py, _common.py
-  opf/              __init__.py (solve_dc_opf, solve_scopf, gen_cost_coeffs), dc_opf.py (dc_opf,
-                    lmp_decomposition, SecurityRows), scopf.py (scopf_dc, security_rows),
+  opf/              __init__.py (solve_dc_opf, solve_ac_opf, solve_scopf, gen_cost_coeffs),
+                    dc_opf.py (dc_opf, lmp_decomposition, SecurityRows), ac_opf.py (ac_opf),
+                    scopf.py (scopf_dc, security_rows),
                     multiperiod.py (multiperiod_dc_opf, Commitment), zonal.py (zonal_dc_opf),
                     redispatch.py (redispatch_dc_opf)
   contingency/      __init__.py (n1), n1.py (screen_n1, screen_n1_dispatch, confirm_n1, confirm_n1_generators)
@@ -210,7 +211,7 @@ src/mambo_power/
                     zonal.py (solve_zonal, CorridorLimit),
                     strategy.py (Observation, Strategy, PriceTakerStrategy, MarkupStrategy,
                                  StrategyConfig, build_strategy)
-  results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, scopf.py, n1.py,
+  results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, ac_opf.py, scopf.py, n1.py,
                     feasibility.py, market.py, multiperiod.py, zonal.py
   jobs/             __init__.py, models.py (SolveRequest, SolveResult), registry.py (KINDS), run.py (run, run_json)
 ```

@@ -2,7 +2,7 @@
 
 **mambo-power** is a fundamental Python package for power system analysis and electricity
 market modelling. It owns its network data model and implements its own solvers — AC and DC
-power flow today, DC optimal power flow, N-1 contingency analysis and four market-clearing
+power flow today, DC and AC optimal power flow, N-1 contingency analysis and four market-clearing
 modes on the roadmap — on top of numpy, scipy and HiGHS.
 
 ```python
@@ -108,6 +108,7 @@ flowchart LR
 | Build Ybus, Bbus, PTDF or LODF matrices | [Manual › Numerics](manual/numerics.md) |
 | Run a DC or AC power flow, understand Q-limits and effective roles | [Manual › Power flow](manual/power-flow.md) |
 | Solve DC-OPF for cost-minimising dispatch and LMPs | [Manual › DC-OPF](manual/opf.md) |
+| Solve the full AC-OPF: losses, voltages, reactive dispatch, AC LMPs | [Manual › AC-OPF](manual/ac-opf.md) |
 | Screen for N-1 branch- and generator-contingency violations | [Manual › N-1 screening](manual/n1.md) |
 | Find the cheapest dispatch no single outage can overload | [Manual › Security-constrained OPF](manual/scopf.md) |
 | Clear a nodal market with elastic demand, LMPs and settlement | [Manual › Nodal market](manual/market.md) |
@@ -134,6 +135,6 @@ flowchart LR
 | M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
 | M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
-| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0); unit commitment on the multiperiod market (0.5.0) | merged |
+| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0); unit commitment on the multiperiod market (0.5.0); AC-OPF (0.6.0) | merged |
 
 mambo-power is MIT licensed. Source: [github.com/mambo10005/mambo-power](https://github.com/mambo10005/mambo-power).

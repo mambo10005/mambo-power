@@ -826,6 +826,65 @@ relaxation — cheaper, but the relaxation's prices belong to a fleet that is fr
 committed and are not what any market settles on; charging `c0` unconditionally under commitment
 — the LP's reading, which under commitment would pay a unit for being off.
 
+## ADR-018 — AC-OPF by trust-region sequential LP on HiGHS, with a power-flow restoration
+
+**Status:** accepted 2026-10-12.
+
+**Context.** Epic 01 excluded AC-OPF: the DC-OPF's dispatch is checked for AC feasibility after
+the fact (`ac_check`) and routinely fails it, and its LMPs carry no loss or voltage term. Every
+production AC-OPF is an interior-point NLP (MATPOWER's MIPS, PYPOWER's PIPS, IPOPT), and the
+package's runtime stack is numpy, scipy and HiGHS (ADR-002): no NLP solver, and HiGHS's QP
+solver — tried first — gives up with "Solve error" on these problems within a few iterations.
+
+**Decision.** `opf.ac_opf` solves the full AC-OPF (polar form, apparent-power limits) as a
+sequence of HiGHS LPs inside a trust region, with an AC power flow as the restoration step.
+
+1. **First-order model, exact costs.** Each LP linearises the nodal balance by the Newton
+   Jacobian the power flow already factorises and each flow limit by `2P·dP + 2Q·dQ`, and
+   confines the step to a trust region on angles, magnitudes and active dispatch. A quadratic
+   cost is carried as convex chords through the current dispatch — eight across the `Pg` radius
+   plus one to each bound — in `dc_opf`'s epigraph encoding, so the LP's `Pg` step is zero exactly
+   when the marginal price sits between the chord slopes at the current point.
+2. **Restoration by the package's own power flow.** After each step, `pf.ac_newton.newton` runs at
+   the LP's point: generator buses hold the LP's magnitude, the slack its angle, every other
+   voltage floats, the slack unit and the generator buses' `Qg` close the balance within their
+   limits with the power flow's Q-limit rounds. This removes the second-order residual a
+   first-order step leaves, so the `ℓ₁` merit function sees the cost and not the linearisation
+   error; without it the ratio test starved the trust region and the loop crawled.
+3. **Termination is a KKT test at chord resolution.** A feasible zero step cuts the radii; below
+   `step_tol_mw` the point is a KKT point to that accuracy and the LP's row duals are the
+   problem's multipliers (the P-balance duals the AC LMPs). An economic tolerance (`cost_tol`)
+   and a stall count end a slow final crawl along a curved valley at the same accuracy.
+4. **Evidence, not assumption.** All six bundled cases reach MATPOWER's published `runopf`
+   objectives (worst 1.5e-5 relative, case30; 2e-6 or better elsewhere), case14's published
+   dispatch and bus-1 LMP are reproduced, a hand case is checked against `scipy.optimize`
+   with the power-flow equations written out independently, and `tests/parity` checks cost,
+   dispatch and voltages against pandapower's `runopp`.
+5. **It is a `jobs` kind.** `opf.ac`, `OpfAcOptions` → `OpfAcResult`, the tenth kind.
+
+**Consequences.**
+
+1. **Linear convergence, tens of LPs.** A first-order model converges linearly: 34 LPs on case14,
+   50 on case300, each a sparse problem HiGHS solves in milliseconds — seconds in total at
+   case300 size, against sub-second for an interior-point code. Accepted for the solver stack it
+   keeps.
+2. **Local, like every AC-OPF.** A KKT point of a non-convex problem, from the power-flow start.
+   Where the AC-OPF has several local optima this finds the one nearest that start, exactly as
+   the interior-point codes do from theirs.
+3. **The DC-OPF manual gains its comparison.** The DC result is what the AC result approximates;
+   the manual pages point at each other and the example runs both.
+4. **Not modelled:** angle-difference limits, dispatchable loads and reactive costs, a
+   security-constrained AC formulation, re-slacking. Each is rows or columns on the same LP.
+
+*Rejected:* HiGHS's QP solver with the true quadratic objective — reaches the optimum, then
+reports "Solve error" on a 6e-5 primal infeasibility it cannot clear; a hand-written primal-dual
+interior-point method (MIPS) — the standard, but it needs the second derivatives of the power-flow
+equations and a careful implementation, a larger and riskier surface than one that reuses the
+Newton Jacobian and the simplex; `scipy.optimize.minimize(method="trust-constr")` — a general NLP
+code with no sparsity in its constraint handling at this scale, and its multipliers' conventions
+would have to be trusted for the LMPs; pure SLP without restoration — the first version here,
+which crawled because the merit penalty on second-order residuals ate every step's gain.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

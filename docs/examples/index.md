@@ -1,6 +1,6 @@
 # Examples
 
-Fifteen runnable scripts live under `examples/` in the repository. Each one is self-contained,
+Sixteen runnable scripts live under `examples/` in the repository. Each one is self-contained,
 reads only the bundled cases through `mambo_power.cases`, prints a short deterministic summary
 and exits 0 in about a second. They are executed on every push — by
 `tests/unit/test_examples_run.py` inside the test matrix and by the dedicated `examples` CI job —
@@ -32,6 +32,7 @@ python examples/02_ac_power_flow.py
 | [`13_interop.py`](#13-interop) | pandapower JSON export solved by `pp.rundcpp`, pandapower's case14 imported losslessly, PyPSA export optimised by PyPSA against `solve_dc_opf`, PSS/E RAW import with `RAW_NO_COSTS`, a bit-exact CSV bundle round trip, and one deliberately lossy conversion with its `ExportReport`; additionally needs `pip install pandapower pypsa` | [File formats](../manual/formats.md) |
 | [`14_scopf.py`](#14-security-constrained-opf) | `opf.solve_scopf`: the cheapest dispatch no single outage can overload, what it costs, which contingencies bind, the confirming `contingency.n1` | [Security-constrained OPF](../manual/scopf.md) |
 | [`15_unit_commitment.py`](#15-unit-commitment) | `market.solve_multiperiod` with `unit_commitment=True`: start-up costs, minimum outputs, when a cheap unit is worth starting, prices with the commitment fixed | [Multiperiod market › Unit commitment](../manual/multiperiod.md#unit-commitment) |
+| [`16_ac_opf.py`](#16-ac-optimal-power-flow) | `opf.solve_ac_opf` beside `solve_dc_opf`: losses, reactive dispatch, voltage bands, AC LMPs that vary with no limit binding | [AC-OPF](../manual/ac-opf.md) |
 
 ## 1. Load and validate
 
@@ -166,7 +167,7 @@ two-agent duopoly reporting `converged`, the same run under an iteration cap rep
 
 ## 13. Interop
 
-Unlike the other fourteen, this script additionally needs `pip install pandapower pypsa` on top of
+Unlike the other fifteen, this script additionally needs `pip install pandapower pypsa` on top of
 `pip install mambo-power`, and takes about a minute rather than a second: it imports pandapower
 and PyPSA (their cold imports alone are ~20 s) and runs their solvers as the oracles.
 
@@ -209,6 +210,17 @@ LP's, which do not recover the start-up.
 
 ``` { .python }
 --8<-- "examples/15_unit_commitment.py"
+```
+
+## 16. AC optimal power flow
+
+case14 under the DC-OPF and the AC-OPF side by side: the DC dispatch is 5.7 % cheaper on paper
+and fails its own AC check at three buses; the AC-OPF covers 9.3 MW of losses, holds four
+voltages on their band and one unit on its reactive limit, and prices every bus differently —
+a 4.5 $/MWh spread across the network with no branch limit binding, where the DC LMP is flat.
+
+``` { .python }
+--8<-- "examples/16_ac_opf.py"
 ```
 
 ## Conventions for examples

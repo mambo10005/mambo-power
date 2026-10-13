@@ -17,6 +17,10 @@ way ``market.nodal`` imports :func:`gen_cost_coeffs`. There is no ``solve_multip
 ``opf`` — the ``Scenario``-facing entry point lives in ``market/`` because a horizon needs
 ``Scenario.periods``, which a bare ``Network`` cannot supply.
 
+:func:`solve_ac_opf` (ADR-018) is the AC sibling of :func:`solve_dc_opf`: the same wrapper
+shape around :func:`mambo_power.opf.ac_opf.ac_opf`, the trust-region sequential-LP AC optimal
+power flow, with reactive dispatch, voltages, apparent-power limits and AC LMPs.
+
 :func:`solve_scopf` (ADR-016) is the security-constrained sibling of :func:`solve_dc_opf`: the
 same wrapper shape around :func:`mambo_power.opf.scopf.scopf_dc`, which generates
 post-contingency flow rows from :mod:`mambo_power.contingency`'s N-1 screen until the dispatch
@@ -38,6 +42,8 @@ from mambo_power.contingency import N1Options, n1
 from mambo_power.model import GeneratorCost, Network
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import flow_from_ptdf
+from mambo_power.opf.ac_opf import SOLVER as AC_OPF_SOLVER
+from mambo_power.opf.ac_opf import AcOpfSolution, OpfAcOptions, ac_opf
 from mambo_power.opf.dc_opf import (
     MissingCostError,
     NonConvexCostError,
@@ -55,8 +61,12 @@ from mambo_power.opf.scopf import ScopfOptions, ScopfSolution, scopf_dc
 from mambo_power.opf.zonal import ZonalDuals, ZonalSolution, zonal_dc_opf
 from mambo_power.pf import solve_ac
 from mambo_power.results import (
+    AcBranchFlowResult,
+    AcBusResult,
+    AcGenDispatchResult,
     BusLmpResult,
     GenDispatchResult,
+    OpfAcResult,
     OpfBranchFlowResult,
     OpfDcResult,
     ResultProvenance,
@@ -66,20 +76,24 @@ from mambo_power.results import (
 )
 
 __all__ = [
+    "AcOpfSolution",
     "MissingCostError",
     "MultiperiodDuals",
     "MultiperiodSolution",
     "NonConvexCostError",
+    "OpfAcOptions",
     "OpfDcOptions",
     "RedispatchSolution",
     "ScopfOptions",
     "ScopfSolution",
     "ZonalDuals",
     "ZonalSolution",
+    "ac_opf",
     "gen_cost_coeffs",
     "multiperiod_dc_opf",
     "redispatch_dc_opf",
     "scopf_dc",
+    "solve_ac_opf",
     "solve_dc_opf",
     "solve_scopf",
     "zonal_dc_opf",
@@ -391,4 +405,129 @@ def solve_scopf(net: Network, options: ScopfOptions | None = None) -> ScopfDcRes
         constraints=constraints,
         n1=confirmation,
         ac_check=ac_check,
+    )
+
+
+def voltage_limits(
+    net: Network, arr: NetworkArrays, *, default_min: float, default_max: float
+) -> tuple[FloatArray, FloatArray]:
+    """Per-bus ``(v_min_pu, v_max_pu)`` in ``arr`` bus order, each bus's own limit where it
+    carries one and the given default where it does not — the cost gather's voltage twin."""
+    buses_by_id = {b.id: b for b in net.buses}
+    v_min = np.array(
+        [
+            default_min if buses_by_id[b].v_min_pu is None else buses_by_id[b].v_min_pu
+            for b in arr.bus_ids
+        ],
+        dtype=np.float64,
+    )
+    v_max = np.array(
+        [
+            default_max if buses_by_id[b].v_max_pu is None else buses_by_id[b].v_max_pu
+            for b in arr.bus_ids
+        ],
+        dtype=np.float64,
+    )
+    return v_min, v_max
+
+
+def solve_ac_opf(net: Network, options: OpfAcOptions | None = None) -> OpfAcResult:
+    """AC optimal power flow of ``net`` (ADR-018): active and reactive dispatch, voltages, AC
+    LMPs, apparent-power flows at both ends of every branch.
+
+    The same never-raise convention as :func:`solve_dc_opf`: a run that does not converge is
+    reported through ``OpfAcResult.status``/``message``. Raises :class:`NonConvexCostError` and
+    :class:`MissingCostError` up front like :func:`solve_dc_opf`. A bus with no ``v_min_pu`` /
+    ``v_max_pu`` takes ``options.v_default_min_pu`` / ``v_default_max_pu``. The network is not
+    modified.
+    """
+    opts = options if options is not None else OpfAcOptions()
+    started_at = datetime.now(UTC)
+    clock = time.perf_counter()
+    arr = NetworkArrays.from_network(net)
+    cost_coeffs, pwl_costs = gen_cost_coeffs(net, arr)
+    v_min, v_max = voltage_limits(
+        net, arr, default_min=opts.v_default_min_pu, default_max=opts.v_default_max_pu
+    )
+    solution = ac_opf(
+        arr, cost_coeffs, opts, v_min_pu=v_min, v_max_pu=v_max, pwl_costs=pwl_costs or None
+    )
+    provenance = ResultProvenance(
+        engine="mambo-power",
+        version=mambo_power.__version__,
+        kind="opf.ac",
+        solver=AC_OPF_SOLVER,
+        started_at=started_at,
+        elapsed_s=time.perf_counter() - clock,
+        options=opts.model_dump(),
+    )
+    if solution.status != "Optimal" or solution.duals is None:
+        return OpfAcResult(
+            provenance=provenance,
+            status=solution.status,
+            message=solution.message,
+            iterations=solution.iterations,
+            objective_cost=solution.objective_cost,
+            max_mismatch_pu=solution.max_mismatch_pu,
+        )
+    base = arr.base_mva
+    duals = solution.duals
+    generators = [
+        AcGenDispatchResult(
+            id=gen_id,
+            bus=arr.bus_ids[int(arr.gen_bus[i])],
+            p_mw=float(solution.gen_p_mw[i]),
+            q_mvar=float(solution.gen_q_mvar[i]),
+            p_bound_dual=float(duals.gen_p_bound[i]),
+            q_bound_dual=float(duals.gen_q_bound[i]),
+        )
+        for i, gen_id in enumerate(arr.gen_ids)
+    ]
+    buses = [
+        AcBusResult(
+            id=bus_id,
+            vm_pu=float(np.abs(solution.v[i])),
+            va_deg=float(np.degrees(np.angle(solution.v[i]))),
+            lmp_p=float(duals.lmp_p[i]),
+            lmp_q=float(duals.lmp_q[i]),
+            v_bound_dual=float(duals.v_bound[i]),
+        )
+        for i, bus_id in enumerate(arr.bus_ids)
+    ]
+    s_from = solution.s_from_pu * base
+    s_to = solution.s_to_pu * base
+    rating = arr.rating_pu * base
+    branches = []
+    for k, br_id in enumerate(arr.branch_ids):
+        s_f, s_t = float(np.abs(s_from[k])), float(np.abs(s_to[k]))
+        branches.append(
+            AcBranchFlowResult(
+                id=br_id,
+                from_bus=arr.bus_ids[int(arr.f[k])],
+                to_bus=arr.bus_ids[int(arr.t[k])],
+                p_from_mw=float(s_from[k].real),
+                q_from_mvar=float(s_from[k].imag),
+                p_to_mw=float(s_to[k].real),
+                q_to_mvar=float(s_to[k].imag),
+                s_from_mva=s_f,
+                s_to_mva=s_t,
+                loading_percent=(
+                    100.0 * max(s_f, s_t) / float(rating[k]) if np.isfinite(rating[k]) else None
+                ),
+                flow_from_dual=float(duals.flow_from[k]),
+                flow_to_dual=float(duals.flow_to[k]),
+            )
+        )
+    losses_mw = float(np.sum(solution.gen_p_mw) - np.sum(arr.p_load_pu) * base)
+    return OpfAcResult(
+        provenance=provenance,
+        status=solution.status,
+        message=None,
+        iterations=solution.iterations,
+        objective_cost=solution.objective_cost,
+        losses_mw=losses_mw,
+        max_mismatch_pu=solution.max_mismatch_pu,
+        generators=generators,
+        buses=buses,
+        branches=branches,
     )

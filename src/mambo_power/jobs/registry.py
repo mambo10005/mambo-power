@@ -34,7 +34,14 @@ from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multi
 from mambo_power.market.nodal import MarketNodalOptions, solve_nodal
 from mambo_power.market.zonal import MarketZonalOptions, UnzonedBusError, solve_zonal
 from mambo_power.model import NetworkValidationError, Scenario, ValidationIssue
-from mambo_power.opf import OpfDcOptions, ScopfOptions, solve_dc_opf, solve_scopf
+from mambo_power.opf import (
+    OpfAcOptions,
+    OpfDcOptions,
+    ScopfOptions,
+    solve_ac_opf,
+    solve_dc_opf,
+    solve_scopf,
+)
 from mambo_power.pf import AcOptions, solve_ac, solve_dc
 from mambo_power.results import (
     AcPowerFlowResult,
@@ -44,6 +51,7 @@ from mambo_power.results import (
     MarketNodalResult,
     MarketZonalResult,
     N1Result,
+    OpfAcResult,
     OpfDcResult,
     ScopfDcResult,
 )
@@ -134,6 +142,18 @@ def _run_opf_dc(scenario: Scenario, options: BaseModel | None) -> BaseModel:
     result = solve_dc_opf(scenario.network, options=options)
     if result.status != "Optimal":
         _translate_non_optimal_status("opf.dc", result.status, result.message)
+    return result
+
+
+def _run_opf_ac(scenario: Scenario, options: BaseModel | None) -> BaseModel:
+    """Runner for ``opf.ac``: :func:`mambo_power.opf.solve_ac_opf` (ADR-018). A non-Optimal
+    status is a job failure like ``opf.dc``'s: an ``"Infeasible"`` or ``"IterationLimit"`` AC-OPF
+    has no dispatch anyone should settle on.
+    """
+    assert isinstance(options, OpfAcOptions)  # guaranteed by run(): validated into options_model
+    result = solve_ac_opf(scenario.network, options=options)
+    if result.status != "Optimal":
+        _translate_non_optimal_status("opf.ac", result.status, result.message)
     return result
 
 
@@ -301,6 +321,11 @@ register(KindSpec(kind="pf.dc", options_model=None, result_model=DcPowerFlowResu
 register(
     KindSpec(
         kind="opf.dc", options_model=OpfDcOptions, result_model=OpfDcResult, runner=_run_opf_dc
+    )
+)
+register(
+    KindSpec(
+        kind="opf.ac", options_model=OpfAcOptions, result_model=OpfAcResult, runner=_run_opf_ac
     )
 )
 register(

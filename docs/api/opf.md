@@ -1,7 +1,8 @@
 # `mambo_power.opf`
 
-DC optimal power flow: single-period, security-constrained, multiperiod, zonal, and redispatch.
-All five builders share one row-family core and one cost/bid extractor. See the [manual page](../manual/opf.md)
+Optimal power flow: DC single-period, AC single-period, security-constrained, multiperiod,
+zonal, and redispatch. The DC builders share one row-family core and one cost/bid extractor; the
+AC solver reuses the power flow's Jacobian and the epigraph encoding. See the [manual page](../manual/opf.md)
 for the formulation, duals, piecewise-linear costs and the pandapower formulation caveat, the
 [multiperiod manual page](../manual/multiperiod.md) for the coupling row families, and the
 [zonal manual page](../manual/zonal.md) for the per-zone balance rows, the corridor sign
@@ -15,6 +16,14 @@ page](../manual/scopf.md) for the post-contingency rows and the constraint-gener
 ## LP/QP builder over arrays
 
 ::: mambo_power.opf.dc_opf
+
+## AC-OPF over arrays
+
+Trust-region sequential LP with a power-flow restoration (ADR-018). Its module docstring carries
+the formulation, the chord model of a quadratic cost and the convergence test; the
+[manual page](../manual/ac-opf.md) has the parity table.
+
+::: mambo_power.opf.ac_opf
 
 ## Security-constrained builder over arrays
 

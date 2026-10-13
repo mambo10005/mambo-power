@@ -43,6 +43,9 @@ extends to a convex QP via `Highs.passHessian` (diagonal Hessian value `2·c2[g]
 `0.5·xᵀQx` convention) only when a nonzero `c2` is present. Duals are read identically either
 way — `Highs.getSolution().row_dual` / `col_dual` need no QP-specific handling.
 
+The full AC problem — losses, reactive dispatch, voltage bands, apparent-power limits — is
+[`solve_ac_opf`](ac-opf.md), which this DC formulation approximates.
+
 Startup/shutdown costs (`PolynomialCost.startup`/`shutdown`) are not modelled here: this is a
 single-period economic dispatch over already-committed generators, matching pandapower's
 `rundcopp`. They are modelled by the multiperiod market's [unit
