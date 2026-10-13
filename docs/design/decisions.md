@@ -676,6 +676,14 @@ dispatch taken up by the slack bus.
    every non-slack generator outage of the five rated OPF fixtures with no screen at all and
    requires the confirmed-violating set to match the pipeline's — the generator edition of M3's
    brute-force test.
+5. **A rated case ships with it.** No upstream case bundled here has a binding `RATE_A`
+   (case30's real ratings never bind), so until now every reader derived ratings by hand before
+   N-1 could show anything. `derived/case14_rated.m` — case14 with each branch rated at 20 %
+   above its own base-case DC flow, floored at 30 MVA — follows ADR-014's derived-variant
+   pattern: the rule and all twenty values are in `derived/PROVENANCE.md`, a script regenerates
+   the file, and a test re-derives it from case14. The tutorials and `examples/08_opf_and_n1.py`
+   load it; the test suite keeps its own test-time derivation with a 1 MVA floor, which gives
+   the agreement tests far more pairs to check.
 
 **Consequences.**
 

@@ -1,11 +1,12 @@
-# Derived fixtures — synthetic case14 variants (AC-4, AC-5)
+# Derived fixtures — synthetic case14 variants (AC-4, AC-5, ADR-015)
 
 These files are NOT upstream data and carry no reference solution. Each is
 `../case14.m` (the verbatim MATPOWER file; provenance and sha256 in
 `../PROVENANCE.md`) with a small, documented set of cell edits that put the
 network into a state the M2 semantics must handle: a PV bus without a live
 generator, a bus with two live generators at differing setpoints, a slack bus
-without a live generator, and an island. They are excluded from the parity
+without a live generator, an island, and — the one reader-facing variant — a
+real thermal rating on every branch. They are excluded from the parity
 fixture list (`tests/_fixtures.py::FIXTURES`) because they are not upstream
 bytes; they are exercised by `tests/unit/test_fixtures_derived.py` and by the
 S2 role/island tests.
@@ -82,3 +83,25 @@ S2 role/island tests.
   12-column row width (`mpc.gencost` rows must be rectangular; MODEL 2 import
   only reads each row's first `NCOST` coefficients, so the padding is inert).
 - `mpc.bus`, `mpc.gen` (all fields but `gencost`), `mpc.branch`: unchanged.
+
+### case14_rated.m — ADR-015 (N-1 and OPF teaching material)
+- `mpc.branch` rows 1-20, `RATE_A`: 0 -> `round(max(1.2 * |P_base|, 30), 1)`,
+  where `P_base` is the branch's from-side flow in the unmodified case14's DC
+  power flow (MW on the 100 MVA system base): 20 % of headroom above the
+  base-case flow, floored at 30 MVA so a lightly loaded branch is not given a
+  near-zero rating. The twenty values are listed in the file's header.
+- Why: case14 as shipped — like every bundled MATPOWER case except case30,
+  whose real ratings are loose enough never to bind — has `RATE_A == 0`
+  everywhere (MATPOWER's "unlimited"), so nothing in it can bind a DC-OPF flow
+  limit or be flagged by `contingency.n1`. Before this variant the tutorials,
+  `examples/08_opf_and_n1.py` and the test suite each derived a rating at run
+  time; the test suite still does (`tests/_rated.py`, with a 1 MVA floor so
+  the screen has hundreds of pairs to prove itself against), the teaching
+  material loads this file. On it the base case is clean (every branch at or
+  under 1/1.2 of its rating), `contingency.n1` confirms 11 violating branch
+  outages of 19 screenable and one violating generator outage (`gen-2`).
+- The edit is a rule, not a hand-picked cell, so it is regenerated rather than
+  edited: `scripts/derive_case14_rated.py` writes the file, and
+  `tests/unit/test_fixtures_derived.py::test_rated_is_case14_plus_the_documented_rating_rule`
+  re-derives the rule from case14's DC flow and asserts matrix equality.
+- `mpc.bus`, `mpc.gen`, `mpc.gencost` and every other `mpc.branch` column: unchanged.

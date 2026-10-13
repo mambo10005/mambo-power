@@ -1,4 +1,4 @@
-"""AC-4 / AC-5 fixtures under ``mambo_power/cases/data/derived/``: synthetic case14 variants.
+"""Derived fixtures under ``mambo_power/cases/data/derived/``: synthetic case14 variants.
 
 Each derived file is case14 with a documented cell-level edit (``derived/PROVENANCE.md`` and
 each file's header). Two things are checked here:
@@ -8,6 +8,10 @@ each file's header). Two things are checked here:
   independent reader), so nothing else drifted;
 * the importer's behaviour on each file TODAY, which S2 (effective roles, island repair)
   built on. ``case14_island`` is the one whose expected behaviour S2 flipped — see that test.
+
+``case14_rated`` (ADR-015's companion) is the reader-facing variant with a real ``RATE_A`` on
+every branch; its edit is a *rule* over case14's own DC flow rather than a hand-picked cell, so
+its derivation test re-derives the rule here instead of listing twenty numbers twice.
 """
 
 from __future__ import annotations
@@ -17,18 +21,24 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from mambo_power import cases, contingency, pf
 from mambo_power.io import matpower, native
 from mambo_power.model import Network, NetworkValidationError
+from mambo_power.numerics import NetworkArrays
+from mambo_power.pf import dc as pfdc
 from tests._fixtures import FIXTURES_DIR
 from tests.parity._mpc_reader import read_mpc_numpy
 
 DERIVED_DIR = FIXTURES_DIR / "derived"
 BASE = FIXTURES_DIR / "case14.m"
-DERIVED = ["case14_roles", "case14_island", "case14_noslackgen"]
+DERIVED = ["case14_roles", "case14_island", "case14_noslackgen", "case14_rated"]
 
 # mpc column positions (0-based) used by the edits
 GEN_PG, GEN_QG, GEN_VG, GEN_STATUS = 1, 2, 5, 7
-BR_STATUS = 10
+RATE_A, BR_STATUS = 5, 10
+
+RATED_MARGIN, RATED_FLOOR_MVA = 1.2, 30.0
+"""``case14_rated``'s rule: ``RATE_A = round(max(1.2 * |base-case DC flow|, 30), 1)``."""
 
 
 def _raw(path: Path) -> dict[str, np.ndarray]:
@@ -68,12 +78,22 @@ def test_noslackgen_is_case14_plus_documented_edits() -> None:
     _assert_same_matrices(_raw(DERIVED_DIR / "case14_noslackgen.m"), base)
 
 
+def test_rated_is_case14_plus_the_documented_rating_rule() -> None:
+    base = _raw(BASE)
+    arr = NetworkArrays.from_network(matpower.load(BASE))
+    flow_mw = np.abs(pfdc.solve(arr).p_from_pu) * arr.base_mva
+    base["branch"][:, RATE_A] = [
+        round(max(RATED_MARGIN * float(f), RATED_FLOOR_MVA), 1) for f in flow_mw
+    ]
+    _assert_same_matrices(_raw(DERIVED_DIR / "case14_rated.m"), base)
+
+
 @pytest.mark.parametrize("name", DERIVED)
 def test_header_names_base_and_purpose(name: str) -> None:
     head = (DERIVED_DIR / f"{name}.m").read_text(encoding="utf-8").split("mpc.version")[0]
     assert f"function mpc = {name}" in head
     assert "case14.m" in head and "SYNTHETIC" in head
-    assert ("AC-4" in head) or ("AC-5" in head)
+    assert ("AC-4" in head) or ("AC-5" in head) or ("ADR-015" in head)
 
 
 # --- importer behaviour today -------------------------------------------------------------------
@@ -122,3 +142,26 @@ def test_noslackgen_loads_with_no_in_service_generator_on_the_slack() -> None:
     assert len(on_slack) == 1 and not on_slack[0].in_service
     assert [g.id for g in net.generators if g.in_service and g.bus == "bus-1"] == []
     assert native.loads(native.dumps(net)) == net
+
+
+def test_rated_loads_with_every_branch_rated_and_a_clean_base_case() -> None:
+    net = cases.load("derived/case14_rated")
+    assert len(net.branches) == 20
+    rating = {br.id: br.rating_mva for br in net.branches}
+    assert all(r is not None and r >= RATED_FLOOR_MVA for r in rating.values())
+    base = pf.solve_dc(net)
+    loading = {b.id: abs(b.p_from_mw) / rating[b.id] for b in base.branches}  # type: ignore[operator]
+    assert max(loading.values()) == pytest.approx(1 / RATED_MARGIN, abs=1e-3)
+    assert native.loads(native.dumps(net)) == net
+
+
+def test_rated_gives_n1_something_to_find() -> None:
+    """The point of the variant: N-1 on it finds confirmed branch *and* generator violations,
+    which ``case14`` as shipped (and ``case30``, whose real ratings never bind) cannot show."""
+    result = contingency.n1(cases.load("derived/case14_rated"))
+    assert result.bridge_branch_ids == ["branch-14"]
+    assert sum(o.confirmed_violating for o in result.outages) == 11
+    assert [g.outage_generator_id for g in result.generator_outages if g.confirmed_violating] == [
+        "gen-2"
+    ]
+    assert result.slack_generator_ids == ["gen-1"]

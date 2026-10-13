@@ -765,7 +765,7 @@ print(len(raw.buses), len(raw.branches))
 ```
 
 ```text
-['case118.m', 'case14.m', 'case14_v33.raw', 'case30.m', 'case300.m', 'case57.m', 'case_ieee30.m', 'derived/case14_island.m', 'derived/case14_noslackgen.m', 'derived/case14_pwl.m', 'derived/case14_roles.m']
+['case118.m', 'case14.m', 'case14_v33.raw', 'case30.m', 'case300.m', 'case57.m', 'case_ieee30.m', 'derived/case14_island.m', 'derived/case14_noslackgen.m', 'derived/case14_pwl.m', 'derived/case14_rated.m', 'derived/case14_roles.m']
 case14.m True
 14 20 5
 14 20

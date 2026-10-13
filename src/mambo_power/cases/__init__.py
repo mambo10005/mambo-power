@@ -9,9 +9,11 @@ The files live under ``mambo_power/cases/data/`` and ship in the wheel, so a bar
 
 Names are relative POSIX paths under that directory — ``"case14.m"``,
 ``"derived/case14_roles.m"``, ``"case14_v33.raw"``. The six top-level ``.m`` files are verbatim
-MATPOWER distribution bytes; ``derived/`` holds synthetic case14 variants and the ``.raw`` file is
-a hand transcription of case14. Their provenance records (``PROVENANCE.md``, ``SOURCES.md``,
-``derived/PROVENANCE.md``, ``PROVENANCE-raw.md``) ship alongside them but are not listed as cases.
+MATPOWER distribution bytes; ``derived/`` holds synthetic case14 variants (among them
+``case14_rated``, the one bundled case with a binding thermal rating on every branch, for N-1
+and OPF flow limits) and the ``.raw`` file is a hand transcription of case14. Their provenance
+records (``PROVENANCE.md``, ``SOURCES.md``, ``derived/PROVENANCE.md``, ``PROVENANCE-raw.md``)
+ship alongside them but are not listed as cases.
 """
 
 from __future__ import annotations

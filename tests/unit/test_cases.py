@@ -29,6 +29,7 @@ EXPECTED_NAMES = [
     "derived/case14_island.m",
     "derived/case14_noslackgen.m",
     "derived/case14_pwl.m",
+    "derived/case14_rated.m",
     "derived/case14_roles.m",
 ]
 

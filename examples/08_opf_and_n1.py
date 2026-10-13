@@ -1,4 +1,4 @@
-"""DC-OPF dispatch and duals, then N-1 branch-contingency screening, on case14.
+"""DC-OPF dispatch and duals, then N-1 branch- and generator-contingency screening, on case14.
 
 What this shows:
 
@@ -10,9 +10,11 @@ What this shows:
   rated (no bundled MATPOWER fixture carries a real ``RATE_A``), so every bus's LMP is pure
   energy; tightening one branch's rating until it binds splits the price into energy +
   congestion, and buses on the constrained side of the network pay more.
-* ``contingency.n1`` — the LODF fast screen followed by a confirming DC re-solve, on a copy of
-  case14 with synthetic ratings (case14 as shipped has none). One outage's screened estimate
-  and DC-re-solve-confirmed flow, side by side, on a branch the screen correctly flagged.
+* ``contingency.n1`` — the LODF fast screen followed by a confirming DC re-solve, on the bundled
+  ``derived/case14_rated`` (case14 with a real rating on every branch; case14 as shipped has
+  none). One branch outage's screened estimate and DC-re-solve-confirmed flow, side by side, on
+  a branch the screen correctly flagged — then the generator outages, screened by PTDF with the
+  slack picking up the lost dispatch, which find the one unit case14 cannot afford to lose.
 
 Runs from any directory, with no repository clone: ``python 08_opf_and_n1.py``.
 """
@@ -63,18 +65,14 @@ for b in sorted(congested_lmp, key=lambda b: b.congestion, reverse=True)[:3]:
     print(f"  {b.id:8s} lmp {b.lmp:7.3f} = energy {b.energy:7.3f} + congestion {b.congestion:6.3f}")
 
 # --- 3. N-1: LODF screen, then a confirming DC re-solve --------------------------------------
-# case14 ships no real branch ratings either (research: RATE_A == 0 everywhere) — derive
-# synthetic ones from the base-case flow, the same "test-time transformation of an
-# already-owned fixture" this wave's own test suite uses, at 20% headroom above the base flow.
-rated = net.model_copy(deep=True)
-base_flow_mw = {b.id: abs(b.p_from_mw) for b in base.branches}
-for br in rated.branches:
-    if br.id in base_flow_mw:
-        br.rating_mva = max(1.2 * base_flow_mw[br.id], 1.0)
+# case14 ships no real branch ratings either (RATE_A == 0 everywhere), so the package bundles
+# a derived variant: every branch rated at 20% above its own base-case DC flow, floored at
+# 30 MVA (derived/PROVENANCE.md). The base case is clean; single outages are not.
+rated = cases.load("derived/case14_rated")
 
 n1_result = contingency.n1(rated)
 print(
-    f"\nN-1: {len(n1_result.outages)} outages flagged by the LODF screen (of "
+    f"\nN-1: {len(n1_result.outages)} branch outages flagged by the LODF screen (of "
     f"{len(rated.branches) - len(n1_result.bridge_branch_ids)} screenable branches)"
 )
 outage = n1_result.outages[0]
@@ -88,3 +86,23 @@ for flag in outage.flagged_branches[:3]:
     print(f"violating = {flag.confirmed_violating}")
 print("(the screen's LODF estimate and the confirming DC re-solve agree to five decimal places:")
 print(" AC-6 proves that holds for every outage on every bundled fixture, not just this one)")
+
+# --- 4. N-1 for generators: the slack picks up the lost dispatch -----------------------------
+# Losing a unit changes the injections, not the topology: the screen uses the PTDF column of
+# the generator's bus (the lost MW flows in from the slack), then the same DC re-solve
+# confirms. The slack bus's own generator is skipped and named: it is what absorbs the loss.
+print(
+    f"\nN-1 generators: {len(n1_result.generator_outages)} outages flagged (of "
+    f"{len(rated.generators) - len(n1_result.slack_generator_ids)} screenable units; "
+    f"{n1_result.slack_generator_ids} skipped at the slack)"
+)
+for gen_outage in n1_result.generator_outages:
+    print(
+        f"outage {gen_outage.outage_generator_id} ({gen_outage.lost_p_mw:.1f} MW lost): "
+        f"confirmed violating = {gen_outage.confirmed_violating}"
+    )
+    for flag in gen_outage.flagged_branches:
+        print(f"  {flag.branch_id:8s} rating {flag.rating_mva:7.2f} MVA  ", end="")
+        print(f"screened {flag.estimated_flow_mw:7.2f} MW  ", end="")
+        print(f"confirmed {flag.confirmed_flow_mw:7.2f} MW  ", end="")
+        print(f"violating = {flag.confirmed_violating}")

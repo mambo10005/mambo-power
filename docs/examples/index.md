@@ -24,7 +24,7 @@ python examples/02_ac_power_flow.py
 | [`05_roles_and_islands.py`](#5-roles-and-islands) | effective bus roles, `NoSlackGeneratorError`, island repair vs strict model | [Power flow](../manual/power-flow.md#effective-bus-roles), [File formats](../manual/formats.md#islands) |
 | [`06_network_matrices.py`](#6-network-matrices) | `NetworkArrays`, Ybus sparsity, PTDF, LODF with the bridge `NaN` column, a 3-bus case in full | [Numerics](../manual/numerics.md) |
 | [`07_results_and_export.py`](#7-results-and-export) | JSON round trip, `to_arrays()`, CSV export | [Results](../manual/results.md) |
-| [`08_opf_and_n1.py`](#8-opf-and-n-1) | `solve_dc_opf` dispatch/duals/LMP, `ac_check`, congestion, `contingency.n1` screen-then-confirm | [DC-OPF](../manual/opf.md), [N-1 screening](../manual/n1.md) |
+| [`08_opf_and_n1.py`](#8-opf-and-n-1) | `solve_dc_opf` dispatch/duals/LMP, `ac_check`, congestion, `contingency.n1` screen-then-confirm for branch and generator outages | [DC-OPF](../manual/opf.md), [N-1 screening](../manual/n1.md) |
 | [`09_nodal_market.py`](#9-nodal-market) | `market.solve_nodal` on a `Scenario`: elastic-demand dispatch, LMPs split by congestion, settlement | [Nodal market](../manual/market.md) |
 | [`10_multiperiod_market.py`](#10-multiperiod-market) | `market.solve_multiperiod` over a 24-period `Scenario`: ramp coupling, storage SoC with efficiency, the cyclic horizon, per-period LMPs and settlement | [Multiperiod market](../manual/multiperiod.md) |
 | [`11_zonal_redispatch.py`](#11-zonal-redispatch) | `market.solve_zonal`: zonal clearing, min-cost redispatch, the nodal reference, corridor duals, the three gap figures and the settlement identity | [Zonal market](../manual/zonal.md) |
@@ -100,8 +100,10 @@ bus and branch tables with the standard library.
 
 Cost-minimising DC-OPF dispatch and duals on case14, the `ac_check` AC-feasibility re-solve
 finding real voltage violations on an otherwise-clean dispatch, a tightened branch rating
-splitting the LMP into energy and congestion, and `contingency.n1`'s LODF screen next to its
-confirming DC re-solve on a flagged outage.
+splitting the LMP into energy and congestion, and `contingency.n1` on the bundled
+`derived/case14_rated`: the LODF screen next to its confirming DC re-solve on a flagged branch
+outage, then the generator outages (PTDF screen, slack picks up the loss) and the one unit whose
+loss overloads the slack's outlet line.
 
 ``` { .python }
 --8<-- "examples/08_opf_and_n1.py"

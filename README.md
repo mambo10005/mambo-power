@@ -41,6 +41,7 @@ GitHub Pages, PyPI trusted publishing).
 | M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
 | M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
+| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x) | merged |
 
 On PyPI as of `v0.1.0`. See
 [Getting started](https://mambo10005.github.io/mambo-power/getting-started/) for the current
