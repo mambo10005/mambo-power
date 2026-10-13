@@ -109,6 +109,7 @@ flowchart LR
 | Run a DC or AC power flow, understand Q-limits and effective roles | [Manual › Power flow](manual/power-flow.md) |
 | Solve DC-OPF for cost-minimising dispatch and LMPs | [Manual › DC-OPF](manual/opf.md) |
 | Screen for N-1 branch- and generator-contingency violations | [Manual › N-1 screening](manual/n1.md) |
+| Find the cheapest dispatch no single outage can overload | [Manual › Security-constrained OPF](manual/scopf.md) |
 | Clear a nodal market with elastic demand, LMPs and settlement | [Manual › Nodal market](manual/market.md) |
 | Clear a whole horizon with ramp limits and storage | [Manual › Multiperiod market](manual/multiperiod.md) |
 | Clear zonally, redispatch, and price what the simplification cost | [Manual › Zonal market](manual/zonal.md) |
@@ -132,6 +133,6 @@ flowchart LR
 | M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
 | M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
-| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x) | merged |
+| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0) | merged |
 
 mambo-power is MIT licensed. Source: [github.com/mambo10005/mambo-power](https://github.com/mambo10005/mambo-power).

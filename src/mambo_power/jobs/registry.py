@@ -34,7 +34,7 @@ from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multi
 from mambo_power.market.nodal import MarketNodalOptions, solve_nodal
 from mambo_power.market.zonal import MarketZonalOptions, UnzonedBusError, solve_zonal
 from mambo_power.model import NetworkValidationError, Scenario, ValidationIssue
-from mambo_power.opf import OpfDcOptions, solve_dc_opf
+from mambo_power.opf import OpfDcOptions, ScopfOptions, solve_dc_opf, solve_scopf
 from mambo_power.pf import AcOptions, solve_ac, solve_dc
 from mambo_power.results import (
     AcPowerFlowResult,
@@ -45,6 +45,7 @@ from mambo_power.results import (
     MarketZonalResult,
     N1Result,
     OpfDcResult,
+    ScopfDcResult,
 )
 
 Runner = Callable[[Scenario, BaseModel | None], BaseModel]
@@ -133,6 +134,20 @@ def _run_opf_dc(scenario: Scenario, options: BaseModel | None) -> BaseModel:
     result = solve_dc_opf(scenario.network, options=options)
     if result.status != "Optimal":
         _translate_non_optimal_status("opf.dc", result.status, result.message)
+    return result
+
+
+def _run_opf_scopf(scenario: Scenario, options: BaseModel | None) -> BaseModel:
+    """Runner for ``opf.scopf``: :func:`mambo_power.opf.solve_scopf` (ADR-016). A non-Optimal
+    status is translated like ``opf.dc``'s: ``"Infeasible"`` here means no preventive dispatch
+    survives every contingency, still "no dispatch at all" from the job's point of view, and
+    :data:`mambo_power.opf.scopf.ITERATION_LIMIT` maps to the same failure since the dispatch it
+    stopped on is not secure.
+    """
+    assert isinstance(options, ScopfOptions)  # guaranteed by run(): validated into options_model
+    result = solve_scopf(scenario.network, options=options)
+    if result.status != "Optimal":
+        _translate_non_optimal_status("opf.scopf", result.status, result.message)
     return result
 
 
@@ -286,6 +301,14 @@ register(KindSpec(kind="pf.dc", options_model=None, result_model=DcPowerFlowResu
 register(
     KindSpec(
         kind="opf.dc", options_model=OpfDcOptions, result_model=OpfDcResult, runner=_run_opf_dc
+    )
+)
+register(
+    KindSpec(
+        kind="opf.scopf",
+        options_model=ScopfOptions,
+        result_model=ScopfDcResult,
+        runner=_run_opf_scopf,
     )
 )
 register(KindSpec(kind="n1", options_model=N1Options, result_model=N1Result, runner=_run_n1))

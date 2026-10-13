@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mambo_power.model import Network, validate_network
 from mambo_power.numerics import NetworkArrays, bridges, lodf, ptdf
+from mambo_power.numerics.bbus import flow_from_ptdf
 from mambo_power.pf import dc as pfdc
 from mambo_power.results import N1BranchFlag, N1GeneratorOutageResult, N1OutageResult
 
@@ -106,7 +107,8 @@ def screen_n1(arr: NetworkArrays, options: N1Options) -> N1Screen:
     if any estimate exceeds that branch's ``rating_mva`` (``inf`` on an unrated branch, so it is
     never flagged). When ``options.generator_outages`` is on, it also estimates, for every
     in-service generator not at the slack bus, the flow after its base-case dispatch is lost to
-    the slack, from the PTDF column of its bus, and flags the generator on the same rule.
+    the slack, from the PTDF column of its bus, and flags the generator on the same rule. The
+    screen itself is :func:`screen_flows`; this function supplies it the base case.
     """
     base_sol = pfdc.solve(arr)
     # The LODF formula (post[l] = pre[l] + LODF[l, k] * pre[k]) needs the *signed* pre-outage
@@ -114,10 +116,53 @@ def screen_n1(arr: NetworkArrays, options: N1Options) -> N1Screen:
     # `ptdf(arr) @ p`. Only the final estimate is taken in magnitude, for comparison against a
     # rating; abs-ing the inputs first would silently flip the formula's sign on any branch
     # whose declared from/to direction opposes its actual flow direction.
-    base_flow_signed_mw = base_sol.p_from_pu * arr.base_mva
-    rating_mva = arr.rating_pu * arr.base_mva
+    return screen_flows(
+        arr,
+        base_sol.p_from_pu * arr.base_mva,
+        base_sol.gen_p_pu * arr.base_mva,
+        options,
+    )
 
-    ptdf_matrix = ptdf(arr)
+
+def screen_n1_dispatch(
+    arr: NetworkArrays,
+    gen_p_mw: FloatArray,
+    options: N1Options,
+    *,
+    ptdf_matrix: FloatArray | None = None,
+) -> N1Screen:
+    """:func:`screen_n1` for a caller-supplied dispatch instead of the network's declared one.
+
+    ``gen_p_mw`` is per generator in ``arr.gen_ids`` order and must balance the fixed load and
+    shunts (as an OPF dispatch does); the base-case flows are
+    :func:`mambo_power.numerics.bbus.flow_from_ptdf` of the resulting injection, the same
+    identity :func:`mambo_power.pf.dc.solve` solves for. This is the screen
+    :func:`mambo_power.opf.scopf.scopf_dc` runs on each candidate dispatch (ADR-016); a
+    precomputed ``ptdf_matrix`` is reused when given, since that loop screens the same network
+    many times.
+    """
+    ptdf_matrix = ptdf(arr) if ptdf_matrix is None else ptdf_matrix
+    gen_by_bus = np.bincount(arr.gen_bus, weights=gen_p_mw, minlength=arr.n_bus)
+    injection_mw = gen_by_bus - (arr.p_load_pu + arr.g_shunt_pu) * arr.base_mva
+    base_flow_signed_mw = flow_from_ptdf(ptdf_matrix, injection_mw, arr)
+    return screen_flows(arr, base_flow_signed_mw, gen_p_mw, options, ptdf_matrix=ptdf_matrix)
+
+
+def screen_flows(
+    arr: NetworkArrays,
+    base_flow_signed_mw: FloatArray,
+    gen_p_mw: FloatArray,
+    options: N1Options,
+    *,
+    ptdf_matrix: FloatArray | None = None,
+) -> N1Screen:
+    """The screen proper, over a given base case: signed branch flows and per-generator dispatch
+    in ``arr`` order, both MW. :func:`screen_n1` and :func:`screen_n1_dispatch` differ only in
+    where the base case comes from. The LODF, bridges and (when ``ptdf_matrix`` is not given)
+    the PTDF are computed here.
+    """
+    rating_mva = arr.rating_pu * arr.base_mva
+    ptdf_matrix = ptdf(arr) if ptdf_matrix is None else ptdf_matrix
     lodf_matrix = lodf(arr, ptdf_matrix)
     bridge_positions = bridges(arr)
     bridge_set = set(bridge_positions)
@@ -143,7 +188,6 @@ def screen_n1(arr: NetworkArrays, options: N1Options) -> N1Screen:
         # The base-case *solved* dispatch, not the declared one: the two agree for every
         # generator off the slack bus, and the slack bus's own generators are skipped, so this
         # is the MW a re-solve with the generator out of service actually removes.
-        gen_p_mw = base_sol.gen_p_pu * arr.base_mva
         for g in range(len(arr.gen_ids)):
             bus = int(arr.gen_bus[g])
             if bus == arr.slack:

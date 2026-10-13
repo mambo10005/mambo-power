@@ -128,6 +128,7 @@ nav:
       - Numerics: manual/numerics.md
       - Power flow: manual/power-flow.md
       - DC-OPF: manual/opf.md
+      - Security-constrained OPF: manual/scopf.md
       - N-1 screening: manual/n1.md
       - Nodal market: manual/market.md
       - Multiperiod market: manual/multiperiod.md

@@ -16,6 +16,12 @@ the same row-family core (ADR-007), and ``market.multiperiod`` imports it from t
 way ``market.nodal`` imports :func:`gen_cost_coeffs`. There is no ``solve_multiperiod`` wrapper in
 ``opf`` — the ``Scenario``-facing entry point lives in ``market/`` because a horizon needs
 ``Scenario.periods``, which a bare ``Network`` cannot supply.
+
+:func:`solve_scopf` (ADR-016) is the security-constrained sibling of :func:`solve_dc_opf`: the
+same wrapper shape around :func:`mambo_power.opf.scopf.scopf_dc`, which generates
+post-contingency flow rows from :mod:`mambo_power.contingency`'s N-1 screen until the dispatch
+survives every single branch or generator outage, then confirms that dispatch with the real
+:func:`mambo_power.contingency.n1`.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ import numpy as np
 import numpy.typing as npt
 
 import mambo_power
+from mambo_power.contingency import N1Options, n1
 from mambo_power.model import GeneratorCost, Network
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import flow_from_ptdf
@@ -44,6 +51,7 @@ from mambo_power.opf.multiperiod import (
     multiperiod_dc_opf,
 )
 from mambo_power.opf.redispatch import RedispatchSolution, redispatch_dc_opf
+from mambo_power.opf.scopf import ScopfOptions, ScopfSolution, scopf_dc
 from mambo_power.opf.zonal import ZonalDuals, ZonalSolution, zonal_dc_opf
 from mambo_power.pf import solve_ac
 from mambo_power.results import (
@@ -52,6 +60,8 @@ from mambo_power.results import (
     OpfBranchFlowResult,
     OpfDcResult,
     ResultProvenance,
+    ScopfDcResult,
+    SecurityConstraintResult,
     feasibility_report,
 )
 
@@ -62,12 +72,16 @@ __all__ = [
     "NonConvexCostError",
     "OpfDcOptions",
     "RedispatchSolution",
+    "ScopfOptions",
+    "ScopfSolution",
     "ZonalDuals",
     "ZonalSolution",
     "gen_cost_coeffs",
     "multiperiod_dc_opf",
     "redispatch_dc_opf",
+    "scopf_dc",
     "solve_dc_opf",
+    "solve_scopf",
     "zonal_dc_opf",
 ]
 
@@ -255,5 +269,126 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
         generators=generators,
         buses=buses,
         branches=branches,
+        ac_check=ac_check,
+    )
+
+
+def _dispatched_copy(net: Network, arr: NetworkArrays, dispatch_mw: FloatArray) -> Network:
+    """A deep copy of *net* with each in-service generator's ``p_mw`` set from *dispatch_mw*."""
+    dispatched = net.model_copy(deep=True)
+    p_mw_by_id = dict(zip(arr.gen_ids, dispatch_mw.tolist(), strict=True))
+    for gen in dispatched.generators:
+        if gen.id in p_mw_by_id:
+            gen.p_mw = p_mw_by_id[gen.id]
+    return dispatched
+
+
+def solve_scopf(net: Network, options: ScopfOptions | None = None) -> ScopfDcResult:
+    """Security-constrained DC-OPF of ``net`` (ADR-016): the cheapest dispatch no single branch
+    or generator outage can overload, with LMPs, base-case flows, the post-contingency rows
+    that had to be added, and the confirming :func:`mambo_power.contingency.n1` of the result.
+
+    The same never-raise convention as :func:`solve_dc_opf`: an infeasible LP — no preventive
+    dispatch survives every contingency at these ratings — is reported through
+    ``ScopfDcResult.status``/``message``; so is :data:`mambo_power.opf.scopf.ITERATION_LIMIT`.
+    Raises :class:`NonConvexCostError` and :class:`MissingCostError` up front like
+    :func:`solve_dc_opf`. The network is not modified: the confirming N-1 run and the optional
+    ``ac_check`` both work on a deep copy carrying the secure dispatch.
+    """
+    opts = options if options is not None else ScopfOptions()
+    started_at = datetime.now(UTC)
+    clock = time.perf_counter()
+    arr = NetworkArrays.from_network(net)
+    cost_coeffs, pwl_costs = gen_cost_coeffs(net, arr)
+    secured = scopf_dc(arr, cost_coeffs, opts, pwl_costs=pwl_costs or None)
+    solution = secured.solution
+
+    def provenance() -> ResultProvenance:
+        return ResultProvenance(
+            engine="mambo-power",
+            version=mambo_power.__version__,
+            kind="opf.scopf",
+            solver="highspy.Highs",
+            started_at=started_at,
+            elapsed_s=time.perf_counter() - clock,
+            options=opts.model_dump(),
+        )
+
+    if secured.status != "Optimal" or solution.duals is None:
+        return ScopfDcResult(
+            provenance=provenance(),
+            status=secured.status,
+            message=secured.message,
+            iterations=secured.iterations,
+            base_objective_cost=secured.base_objective_cost,
+        )
+
+    ptdf_matrix = solution.ptdf
+    lmp = lmp_decomposition(solution.duals, ptdf_matrix, secured.security)
+    gen_by_bus = np.bincount(arr.gen_bus, weights=solution.dispatch_mw, minlength=arr.n_bus)
+    injection_mw = gen_by_bus - (arr.p_load_pu + arr.g_shunt_pu) * arr.base_mva
+    flows_mw = flow_from_ptdf(ptdf_matrix, injection_mw, arr)
+
+    generators = [
+        GenDispatchResult(
+            id=gen_id,
+            bus=arr.bus_ids[int(arr.gen_bus[i])],
+            p_mw=float(solution.dispatch_mw[i]),
+            bound_dual=float(solution.duals.gen_bound[i]),
+        )
+        for i, gen_id in enumerate(arr.gen_ids)
+    ]
+    buses = [
+        BusLmpResult(
+            id=bus_id,
+            lmp=float(lmp.lmp[i]),
+            energy=float(lmp.energy[i]),
+            congestion=float(lmp.congestion[i]),
+        )
+        for i, bus_id in enumerate(arr.bus_ids)
+    ]
+    branches = [
+        OpfBranchFlowResult(
+            id=br_id,
+            from_bus=arr.bus_ids[int(arr.f[k])],
+            to_bus=arr.bus_ids[int(arr.t[k])],
+            p_from_mw=float(flows_mw[k]),
+            flow_limit_dual=float(solution.duals.flow_limit[k]),
+        )
+        for k, br_id in enumerate(arr.branch_ids)
+    ]
+    constraints = [
+        SecurityConstraintResult(
+            outage_kind=c.kind,
+            outage_id=(arr.branch_ids if c.kind == "branch" else arr.gen_ids)[c.outage],
+            branch_id=arr.branch_ids[c.monitored],
+            rating_mva=float(secured.security.rating_mw[r]),
+            post_contingency_flow_mw=float(secured.post_contingency_flow_mw[r]),
+            dual=float(solution.duals.security[r]),
+        )
+        for r, c in enumerate(secured.contingencies)
+    ]
+
+    dispatched = _dispatched_copy(net, arr, solution.dispatch_mw)
+    confirmation = n1(dispatched, N1Options(generator_outages=opts.generator_outages))
+    secure = not any(o.confirmed_violating for o in confirmation.outages) and not any(
+        o.confirmed_violating for o in confirmation.generator_outages
+    )
+    ac_check = feasibility_report(solve_ac(dispatched), dispatched) if opts.ac_check else None
+    return ScopfDcResult(
+        provenance=provenance(),
+        status=secured.status,
+        message=None,
+        iterations=secured.iterations,
+        secure=secure,
+        base_objective_cost=secured.base_objective_cost,
+        objective_cost=solution.objective_cost,
+        security_cost=solution.objective_cost - secured.base_objective_cost,
+        balance_dual=solution.duals.balance,
+        generators=generators,
+        buses=buses,
+        branches=branches,
+        constraints=constraints,
+        n1=confirmation,
         ac_check=ac_check,
     )

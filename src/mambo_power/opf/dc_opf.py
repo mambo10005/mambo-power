@@ -204,6 +204,43 @@ class OpfDuals:
     gen_bound: FloatArray
     """Per-generator reduced cost of its ``[p_min, p_max]`` bound, generator order; 0 unless the
     generator is pinned at a bound."""
+    security: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Per-row shadow price of the post-contingency flow rows (:class:`SecurityRows`, ADR-016),
+    in the caller's row order; length 0 when no ``security`` block was passed."""
+
+
+@dataclass(frozen=True)
+class SecurityRows:
+    """Post-contingency flow-limit rows for :func:`dc_opf` (ADR-016, security-constrained OPF).
+
+    Row ``r`` constrains one monitored branch under one outage: ``−rating_mw[r] − const_mw[r]
+    <= Σ_g gen_coeffs[r, g]·p_g − Σ_d bus_sensitivity[r, load_bus[d]]·p_d <= rating_mw[r] −
+    const_mw[r]`` — the exact shape of :func:`_flow_limit_rows`, so a security row is a flow
+    row whose sensitivities are the *post-outage* ones. ``bus_sensitivity[r, b]`` is the
+    post-contingency flow's derivative with respect to a net injection at bus ``b``; for a
+    branch outage ``k`` it is ``PTDF[l, b] + LODF[l, k]·PTDF[k, b]``, for a generator outage
+    it is ``PTDF[l, b]`` (the injections that remain still flow as in the base case).
+    ``gen_coeffs[r, g]`` is ``bus_sensitivity[r, gen_bus[g]]`` except at the column of an
+    outaged generator, where it is 0: that unit's dispatch is gone in the contingency, and
+    the slack's pickup contributes nothing since the PTDF's slack column is zero. The two
+    arrays are kept separately for that one difference, and because the LMP decomposition
+    (:func:`lmp_decomposition`) needs the bus form. :func:`mambo_power.opf.scopf.security_rows`
+    builds them; this module only adds and prices them.
+    """
+
+    gen_coeffs: FloatArray
+    """``(n_rows, n_gen)`` coefficients on the generator dispatch columns."""
+    bus_sensitivity: FloatArray
+    """``(n_rows, n_bus)`` post-contingency flow sensitivity to a net injection at each bus."""
+    const_mw: FloatArray
+    """``(n_rows,)`` fixed (load, shunt, phase-shift) contribution to each post-contingency flow."""
+    rating_mw: FloatArray
+    """``(n_rows,)`` rating of each row's monitored branch, MW on the system base."""
+
+    @property
+    def n_rows(self) -> int:
+        """Number of rows in this block."""
+        return int(self.rating_mw.size)
 
 
 @dataclass(frozen=True)
@@ -787,16 +824,24 @@ def _hypograph_rows(
     )
 
 
-def lmp_decomposition(duals: OpfDuals, ptdf: FloatArray) -> LmpBreakdown:
+def lmp_decomposition(
+    duals: OpfDuals, ptdf: FloatArray, security: SecurityRows | None = None
+) -> LmpBreakdown:
     """Per-bus LMP = balance dual (energy) + Σ(flow-limit-row duals × that bus's PTDF column).
 
     Standalone and independent of :func:`dc_opf`/:func:`mambo_power.opf.solve_dc_opf` — callable
     with any hand-built ``OpfDuals``/PTDF pair (spec design item 2); a later wave's
-    ``market.nodal`` calls this identically with its own duals.
+    ``market.nodal`` calls this identically with its own duals. With ``security`` (the block the
+    duals were solved with, ADR-016) the congestion term also carries ``Σ(security-row duals ×
+    that bus's post-contingency sensitivity)``: a binding post-contingency limit prices the
+    buses whose injections load the monitored branch in that contingency, exactly as a binding
+    base-case limit does.
     """
     n_bus = ptdf.shape[1]
     energy = np.full(n_bus, duals.balance, dtype=np.float64)
     congestion = np.asarray(duals.flow_limit @ ptdf, dtype=np.float64)
+    if security is not None and security.n_rows:
+        congestion = congestion + duals.security @ security.bus_sensitivity
     return LmpBreakdown(lmp=energy + congestion, energy=energy, congestion=congestion)
 
 
@@ -809,6 +854,7 @@ def dc_opf(
     demand_pwl_bids: Mapping[int, Sequence[tuple[float, float]]] | None = None,
     *,
     ptdf: FloatArray | None = None,
+    security: SecurityRows | None = None,
 ) -> OpfSolution:
     """Solve the DC-OPF/welfare LP/QP of ``arr`` (module docstring): minimise Σ cost(p_g) −
     Σ value(p_d) subject to one system-wide nodal-balance row and one PTDF-based flow-limit row
@@ -833,6 +879,11 @@ def dc_opf(
     (``tests/unit/test_opf_dc.py``). ``None`` (the default) computes it here, which keeps every
     other caller unchanged. A matrix of the wrong shape is a :class:`ValueError` up front — the
     one way a stale cache from another network can be told apart from this one.
+
+    ``security`` (ADR-016) is an optional block of post-contingency flow-limit rows
+    (:class:`SecurityRows`), appended after the base-case flow rows and priced into
+    ``OpfDuals.security``; ``None`` — every caller but :func:`mambo_power.opf.scopf.scopf_dc` —
+    leaves the LP exactly as before.
     """
     del options  # no tunable fields yet (OpfDcOptions docstring)
     n_gen = len(arr.gen_ids)
@@ -961,8 +1012,42 @@ def dc_opf(
         ),
     )
 
-    # PWL epigraph / hypograph rows, appended after the balance and flow-limit rows so those
-    # rows' indices (0 and 1..n_branch, read below) are unaffected.
+    # Post-contingency flow rows (ADR-016): the same shape as the base-case flow rows with the
+    # post-outage sensitivities, appended right after them so they are rows
+    # n_rows..n_rows + n_security - 1, read back below.
+    n_security = security.n_rows if security is not None else 0
+    if security is not None and n_security:
+        if security.gen_coeffs.shape != (n_security, n_gen) or security.bus_sensitivity.shape != (
+            n_security,
+            arr.n_bus,
+        ):
+            raise ValueError(
+                f"security rows must have gen_coeffs ({n_security}, {n_gen}) and "
+                f"bus_sensitivity ({n_security}, {arr.n_bus}) for this network, got "
+                f"{security.gen_coeffs.shape} and {security.bus_sensitivity.shape}"
+            )
+        withdrawals = (
+            -security.bus_sensitivity[:, arr.load_bus[elastic_idx_arr]]
+            if n_demand
+            else np.zeros((n_security, 0))
+        )
+        starts, indices, values = _dense_csr(
+            np.hstack([security.gen_coeffs, withdrawals]),
+            np.concatenate([gen_cols, demand_cols]),
+        )
+        _add_rows(
+            h,
+            _RowBlock(
+                lower=-security.rating_mw - security.const_mw,
+                upper=security.rating_mw - security.const_mw,
+                starts=starts,
+                indices=indices,
+                values=values,
+            ),
+        )
+
+    # PWL epigraph / hypograph rows, appended after the balance, flow-limit and security rows so
+    # those rows' indices (0, 1..n_branch and the security block, read below) are unaffected.
     _add_rows(h, _epigraph_rows(segments_by_gen, gen_cols, cost_col_of))
     _add_rows(h, _hypograph_rows(demand_segments_by_load, demand_col_of, demand_val_col_of))
 
@@ -991,6 +1076,7 @@ def dc_opf(
         balance=float(sol.row_dual[0]) if n_rows else 0.0,
         flow_limit=np.asarray(sol.row_dual[1:n_rows], dtype=np.float64),
         gen_bound=np.asarray(sol.col_dual[:n_gen], dtype=np.float64),
+        security=np.asarray(sol.row_dual[n_rows : n_rows + n_security], dtype=np.float64),
     )
     demand_bound = np.asarray(sol.col_dual[n_gen:n_dispatch], dtype=np.float64)
 

@@ -706,6 +706,63 @@ estimate; outaging slack-bus generators with the balance moved elsewhere — a d
 rule for one analysis, breaking the "every DC solve closes at the slack" invariant every other
 module relies on.
 
+## ADR-016 — Security-constrained OPF by constraint generation, with the N-1 screen as the oracle
+
+**Status:** accepted 2026-10-12.
+
+**Context.** `contingency.n1` reports post-contingency overloads and `opf.solve_dc_opf` finds the
+cheapest dispatch, but nothing connected them: the manual's own scope note called preventive
+redispatch on a violation a carry-over. A dispatch that is cheapest and N-1-insecure is not one an
+operator can use. ADR-006 split `dc_opf`'s row families from its solver object so a later caller
+could add rows to the same LP; ADR-015 made the screen cover generator outages too. Both halves
+were in place.
+
+**Decision.** `opf.scopf` is the preventive security-constrained DC-OPF, built on the two existing
+pieces rather than as a third solver.
+
+1. **A contingency is a row of the existing shape.** Under the DC model the post-contingency flow
+   on a monitored branch is linear in the dispatch — `flow_l + LODF[l,k]·flow_k` for a branch
+   outage, `flow_l − PTDF[l,bus(g)]·p_g` for a generator outage with the slack making up the loss —
+   so each (outage, branch) pair is one more flow-limit row. `dc_opf` gains an optional
+   `security: SecurityRows` block, appended after the base-case rows and priced into
+   `OpfDuals.security`; `lmp_decomposition` folds those duals into the congestion term. With
+   `security=None` every existing caller's LP is byte-for-byte unchanged.
+2. **Rows are generated, not enumerated.** All pairs at once is `n_outages × n_branch` dense rows
+   (~170 000 on case300), almost all slack. `scopf_dc` instead solves, screens the dispatch with
+   `contingency.n1.screen_n1_dispatch` — the N-1 screen over a caller-supplied dispatch, split out
+   of `screen_n1` for this — adds a row for every newly flagged pair, and repeats until nothing new
+   is flagged. Linearity makes an added row exact for the next solve, so each round terminates or
+   adds a new row from a finite set; `max_iterations` is a guard, and reaching it is reported as
+   `IterationLimit`, never as a secure result.
+3. **The result carries its own confirmation.** `solve_scopf` writes the dispatch into a copy of
+   the network and runs the real `contingency.n1` — every flagged outage DC-re-solved — reporting
+   that `N1Result` and its verdict as `secure`. A reader does not have to trust the screen the loop
+   used; the proof is in the result.
+4. **Infeasible is an answer.** When no dispatch survives every contingency at the given ratings —
+   typically a load whose last remaining path is rated below it — the LP is infeasible and the
+   result says so, with the plain OPF's cost still reported. Through `jobs` it is the structured
+   `INFEASIBLE_LP` failure `opf.dc` already uses.
+5. **It is a `jobs` kind.** `opf.scopf`, `ScopfOptions` → `ScopfDcResult`, the ninth kind.
+
+**Consequences.**
+
+1. **Preventive only.** One dispatch holds for every contingency; corrective post-contingency
+   redispatch, N-2 and emergency ratings are not modelled. These compose the same way — more rows,
+   or a second dispatch block per contingency — and are recorded here as the next step.
+2. **The same DC model throughout.** The screen, the rows and the confirmation share one set of
+   assumptions, which is what makes "secure" mean something precise: no DC post-contingency
+   overload at the normal rating. AC security is a check (`ac_check`), not a constraint.
+3. **Ratings drive feasibility.** The test suite's 1 MVA-floor ratings leave every bundled fixture
+   but case14 infeasible; the reader-facing `derived/case14_rated` is secured at 13 % extra cost.
+   The manual says so, so an infeasible result reads as a finding about the data, not a bug.
+
+*Rejected:* enumerating every (outage, branch) row up front — simplest to reason about, but
+hundreds of thousands of dense rows on the larger fixtures for a handful that bind; a separate
+SCOPF LP builder — a second copy of the balance, flow, epigraph and hypograph families to keep in
+step with `dc_opf`, the duplication ADR-007 and ADR-008 exist to prevent; trusting the loop's own
+screen as the proof of security — the brute-force agreement tests say it would be right, but the
+real `contingency.n1` on the result costs a few re-solves and leaves nothing to take on faith.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

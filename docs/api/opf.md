@@ -1,11 +1,12 @@
 # `mambo_power.opf`
 
-DC optimal power flow: single-period, multiperiod, zonal, and redispatch. All four builders
-share one row-family core and one cost/bid extractor. See the [manual page](../manual/opf.md)
+DC optimal power flow: single-period, security-constrained, multiperiod, zonal, and redispatch.
+All five builders share one row-family core and one cost/bid extractor. See the [manual page](../manual/opf.md)
 for the formulation, duals, piecewise-linear costs and the pandapower formulation caveat, the
 [multiperiod manual page](../manual/multiperiod.md) for the coupling row families, and the
 [zonal manual page](../manual/zonal.md) for the per-zone balance rows, the corridor sign
-convention and the redispatch delta columns.
+convention and the redispatch delta columns, and the [security-constrained OPF
+page](../manual/scopf.md) for the post-contingency rows and the constraint-generation loop.
 
 ::: mambo_power.opf
     options:
@@ -14,6 +15,14 @@ convention and the redispatch delta columns.
 ## LP/QP builder over arrays
 
 ::: mambo_power.opf.dc_opf
+
+## Security-constrained builder over arrays
+
+Constraint generation around `dc_opf`: the N-1 screen of each dispatch supplies the
+(outage, branch) pairs whose post-contingency flow rows are added for the next solve. Its module
+docstring carries the row algebra for branch and generator outages and the convergence argument.
+
+::: mambo_power.opf.scopf
 
 ## Multiperiod LP/QP builder over arrays
 
