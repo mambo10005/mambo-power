@@ -641,6 +641,63 @@ and a failure mode to a tutorial's first cell, and the files are small enough to
 `fixtures/` copy for the tests alongside the packaged one — two copies drift, and the test suite
 would stop validating what users actually load.
 
+## ADR-015 — Generator outages join the N-1 screen; the slack absorbs the loss and is never outaged
+
+**Status:** accepted 2026-10-12.
+
+**Context.** M3 shipped `contingency.n1` for branch outages only and recorded generator-outage
+contingencies as a carry-over (wave spec Not Doing; `docs/manual/n1.md` §Scope). The pipeline's
+shape — a linear fast screen over the base-case DC dispatch, then a real DC re-solve for every
+flagged outage, with a brute-force sweep proving the screen misses nothing — does not depend on
+the outaged element being a branch. What it needs for a generator is a rule for where the lost
+MW goes, because a generator outage, unlike a branch outage, changes the injection vector.
+
+**Decision.** Generator outages are screened and confirmed by the same pipeline, with the lost
+dispatch taken up by the slack bus.
+
+1. **The slack picks up the loss.** This is not a new modelling choice: `pf.dc.solve` already
+   closes every DC power flow at the slack bus, and the confirming re-solve of a generator taken
+   out of service is just that solve. The screen estimates the same thing linearly — the
+   post-outage flow on branch `l` is `|base_flow[l] − PTDF[l, bus(g)] · P_g|`, where `P_g` is the
+   generator's base-case *solved* dispatch and the PTDF's slack column is zero, so the slack's
+   pickup contributes nothing. DC power flow is linear, so the estimate and the re-solve are the
+   same system evaluated two ways; the re-solve is kept as the ground truth and as the value
+   reported, exactly as for branches.
+2. **Generators at the slack bus are skipped, and named.** The slack bus absorbs every other
+   outage's loss; its own generator's outage moves no flow under this rule, and a confirming
+   re-solve could have nothing left to absorb the balance. `N1Result.slack_generator_ids` lists
+   them, the generator counterpart of `bridge_branch_ids`: a skipped element is reported, never
+   silently dropped.
+3. **On by default, switchable.** `N1Options.generator_outages` (default `True`) adds
+   `N1Result.generator_outages`, one `N1GeneratorOutageResult` per flagged generator with its
+   `lost_p_mw` and the same `N1BranchFlag` rows branch outages carry. Both new result fields
+   default to empty, so an `N1Result` serialised before this ADR still validates.
+4. **The agreement guarantee extends.** `tests/unit/test_contingency_n1_generators.py` re-solves
+   every non-slack generator outage of the five rated OPF fixtures with no screen at all and
+   requires the confirmed-violating set to match the pipeline's — the generator edition of M3's
+   brute-force test.
+
+**Consequences.**
+
+1. **"N-1" now means branches and generators.** A rating violation caused by losing a unit is
+   found by the same call as one caused by losing a line. The cost is one PTDF column product per
+   generator in the screen and one DC re-solve per flagged generator — case300 (69 generators)
+   adds about 56 re-solves to the 293 branch re-solves at the test ratings.
+2. **Distributed slack is the open question, not a limitation hidden in the numbers.** Sending
+   the whole loss to one slack generator is what the DC solver does today for every analysis;
+   a participation-factor or AGC-style pickup would change the base solver, not this module, and
+   is recorded here as the next step for anyone who needs it.
+3. **Still no N-2 and no redispatch.** `contingency.n1` reports violations, it does not fix them;
+   preventive or corrective redispatch stays a carry-over.
+
+*Rejected:* a separate `contingency.n1_generators` entry point — two results for one question,
+and the `jobs` kind would have to grow a second kind for the SaaS to call; using the declared
+`Generator.p_mw` as the lost dispatch — differs from the solved value only at the slack bus,
+which is skipped anyway, but the solved value is what the re-solve removes and so is the honest
+estimate; outaging slack-bus generators with the balance moved elsewhere — a different slack
+rule for one analysis, breaking the "every DC solve closes at the slack" invariant every other
+module relies on.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

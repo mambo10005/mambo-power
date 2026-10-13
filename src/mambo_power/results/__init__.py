@@ -25,7 +25,12 @@ from mambo_power.results.multiperiod import (
     MarketPeriodResult,
     StorageDispatchResult,
 )
-from mambo_power.results.n1 import N1BranchFlag, N1OutageResult, N1Result
+from mambo_power.results.n1 import (
+    N1BranchFlag,
+    N1GeneratorOutageResult,
+    N1OutageResult,
+    N1Result,
+)
 from mambo_power.results.opf import (
     BusLmpResult,
     GenDispatchResult,
@@ -74,6 +79,7 @@ __all__ = [
     "MarketPeriodResult",
     "MarketZonalResult",
     "N1BranchFlag",
+    "N1GeneratorOutageResult",
     "N1OutageResult",
     "N1Result",
     "OpfBranchFlowResult",

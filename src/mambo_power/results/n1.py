@@ -1,4 +1,4 @@
-"""N-1 branch-contingency screen-then-confirm result.
+"""N-1 contingency screen-then-confirm result: branch and generator outages.
 
 ``N1Result`` is shared here rather than siloed in ``contingency`` because it is the type
 ``contingency.n1`` produces *and* the type ``jobs``' ``n1`` kind consumes, mirroring why
@@ -55,21 +55,57 @@ class N1OutageResult(BaseModel):
     )
 
 
+class N1GeneratorOutageResult(BaseModel):
+    """The PTDF screen's verdict on one generator outage, plus its confirming re-solve.
+
+    A generator outage removes ``lost_p_mw`` of injection at the generator's bus; under the DC
+    model the slack-bus generator picks it up, so the screen estimates every branch's
+    post-outage flow as ``|base_flow - ptdf[:, bus] * lost_p_mw|`` and the confirming re-solve
+    takes the generator out of service and runs a real DC power flow. Only outages the screen
+    flagged appear here, exactly as for :class:`N1OutageResult`.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    outage_generator_id: str = Field(description="The generator id taken out of service.")
+    lost_p_mw: float = Field(
+        description="The generator's base-case DC dispatch removed by the outage, MW."
+    )
+    flagged_branches: list[N1BranchFlag] = Field(
+        description="Branches the PTDF screen flagged for this outage, at least one."
+    )
+    confirmed_violating: bool = Field(
+        description="Whether the DC re-solve confirms at least one flagged branch violates."
+    )
+
+
 class N1Result(BaseModel):
-    """N-1 branch-contingency screen-then-confirm result (``contingency.n1``).
+    """N-1 contingency screen-then-confirm result (``contingency.n1``).
 
     ``bridge_branch_ids`` names branches whose outage would disconnect the network
     (``numerics.bridges``) — LODF is undefined for them, so they are skipped by the screen
-    entirely and never appear as an ``outages`` entry. Branch outages only this wave;
-    generator-outage contingencies are an explicit carry-over (wave spec Not Doing).
+    entirely and never appear as an ``outages`` entry. ``slack_generator_ids`` is the generator
+    counterpart: a generator at the slack bus is what absorbs every other outage's lost
+    injection under the DC model, so its own outage moves no flow and is skipped rather than
+    re-solved (ADR-015). ``generator_outages`` is empty when ``N1Options.generator_outages`` is
+    off; both generator fields default to empty so an ``N1Result`` serialised before they
+    existed still validates.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     provenance: ResultProvenance
     outages: list[N1OutageResult] = Field(
-        description="One entry per outage the LODF screen flagged, in branch order."
+        description="One entry per branch outage the LODF screen flagged, in branch order."
     )
     bridge_branch_ids: list[str] = Field(
         description="Branch ids skipped because their outage disconnects the network."
+    )
+    generator_outages: list[N1GeneratorOutageResult] = Field(
+        default_factory=list,
+        description="One entry per generator outage the PTDF screen flagged, in generator order.",
+    )
+    slack_generator_ids: list[str] = Field(
+        default_factory=list,
+        description="Generator ids at the slack bus, skipped because the slack absorbs the loss.",
     )

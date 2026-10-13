@@ -1,4 +1,4 @@
-"""Brute-force N-1 oracle: DC re-solve every branch outage directly, no LODF pre-filter.
+"""Brute-force N-1 oracles: DC re-solve every branch (and generator) outage directly, no pre-filter.
 
 Generalizes ``_brute_force_lodf.py``'s deep-copy-once/flip/rebuild shape from "outage -> PTDF
 diff" to "outage -> DC re-solve -> limit check" (wave spec Design item 5), to prove S4's
@@ -39,6 +39,32 @@ def brute_force_n1(net: Network, arr: NetworkArrays) -> set[str]:
         by_id[outage_id].in_service = True
         flow_mw = np.abs(sol.p_from_pu) * arr_k.base_mva
         rating_mva = arr_k.rating_pu * arr_k.base_mva
+        if np.any(flow_mw > rating_mva + VIOLATION_TOL_MVA):
+            confirmed.add(outage_id)
+    return confirmed
+
+
+def brute_force_n1_generators(net: Network, arr: NetworkArrays) -> set[str]:
+    """Generator ids whose outage a real DC re-solve confirms violates a branch's rating.
+
+    The generator counterpart of :func:`brute_force_n1`: re-solves *every* in-service generator
+    outage except the slack bus's own generators (the slack absorbs every other outage's lost
+    dispatch, so its own outage moves no flow — the same skip rule the PTDF screen applies,
+    ADR-015), with no PTDF pre-filter at all.
+    """
+    confirmed: set[str] = set()
+    outaged = net.model_copy(deep=True)
+    by_id = {gen.id: gen for gen in outaged.generators}
+    for g, outage_id in enumerate(arr.gen_ids):
+        if int(arr.gen_bus[g]) == arr.slack:
+            continue
+        by_id[outage_id].in_service = False
+        assert validate_network(outaged) == []
+        arr_g = NetworkArrays.from_network(outaged)
+        sol = pfdc.solve(arr_g)
+        by_id[outage_id].in_service = True
+        flow_mw = np.abs(sol.p_from_pu) * arr_g.base_mva
+        rating_mva = arr_g.rating_pu * arr_g.base_mva
         if np.any(flow_mw > rating_mva + VIOLATION_TOL_MVA):
             confirmed.add(outage_id)
     return confirmed

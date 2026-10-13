@@ -1,7 +1,7 @@
-"""N-1 branch-contingency screening: LODF fast screen -> confirming DC re-solve.
+"""N-1 contingency screening: linear fast screen -> confirming DC re-solve.
 
 Two stages, mirroring ``pf.ac_newton``/``pf.dc``'s array-level split. :func:`screen_n1` is the
-*estimate*: for every non-bridge branch outage ``k`` (:func:`mambo_power.numerics.bridges`
+*estimate*. For every non-bridge branch outage ``k`` (:func:`mambo_power.numerics.bridges`
 skips the rest — a bridge outage disconnects the network, LODF is undefined for it, the same
 skip rule ``_brute_force_lodf.py`` uses), it estimates every other branch ``l``'s post-outage
 flow from the base-case DC dispatch and :func:`mambo_power.numerics.lodf`::
@@ -9,28 +9,36 @@ flow from the base-case DC dispatch and :func:`mambo_power.numerics.lodf`::
     estimated[l] = |base_flow[l] + lodf[l, k] * base_flow[k]|
 
 — the exact form S1's fixture-wide rating-margin sanity sweep used (record/m3-s1-report.md) —
-and flags ``k`` if any ``l``'s estimate exceeds ``l``'s ``rating_mva``. :func:`confirm_n1` is
-the *ground truth*: for each flagged outage, it rebuilds the network with that branch out of
-service (the same deep-copy-once/flip/rebuild pattern ``_brute_force_lodf.py`` uses) and runs a
-real :func:`mambo_power.pf.dc.solve` — a single right-hand-side DC re-solve, cheap even at
-case300 scale (record/m3-research.md §4) — confirming whether each flagged branch's flow
-genuinely exceeds its rating. An outage the screen does not flag is never re-solved; AC-6's
-brute-force agreement test (``tests/unit/test_contingency_n1_brute_force.py``) proves that is
-safe: the confirmed-violation set this pipeline produces equals a full brute-force sweep's.
+and flags ``k`` if any ``l``'s estimate exceeds ``l``'s ``rating_mva``. For every generator
+``g`` that is not at the slack bus (ADR-015), it estimates the flow after ``g``'s base-case
+dispatch ``P_g`` is lost and picked up by the slack from :func:`mambo_power.numerics.ptdf`::
+
+    estimated[l] = |base_flow[l] - ptdf[l, bus(g)] * P_g|
+
+(the PTDF's slack column is zero, so the slack's pickup contributes nothing) and flags ``g`` on
+the same rule. :func:`confirm_n1` and :func:`confirm_n1_generators` are the *ground truth*: for
+each flagged outage, they rebuild the network with that element out of service (the same
+deep-copy-once/flip/rebuild pattern ``_brute_force_lodf.py`` uses) and run a real
+:func:`mambo_power.pf.dc.solve` — a single right-hand-side DC re-solve, cheap even at case300
+scale (record/m3-research.md §4) — confirming whether each flagged branch's flow genuinely
+exceeds its rating. An outage the screen does not flag is never re-solved; the brute-force
+agreement tests (``tests/unit/test_contingency_n1_brute_force.py``,
+``tests/unit/test_contingency_n1_generators.py``) prove that is safe: the confirmed-violation
+set this pipeline produces equals a full brute-force sweep's, for branches and for generators.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from mambo_power.model import Network, validate_network
 from mambo_power.numerics import NetworkArrays, bridges, lodf, ptdf
 from mambo_power.pf import dc as pfdc
-from mambo_power.results import N1BranchFlag, N1OutageResult
+from mambo_power.results import N1BranchFlag, N1GeneratorOutageResult, N1OutageResult
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -40,15 +48,22 @@ rating — matches ``tests._rated``'s own base-case-never-violates check."""
 
 
 class N1Options(BaseModel):
-    """Options for :func:`mambo_power.contingency.n1`. Empty today; reserved for future knobs
-    (e.g. a screening tolerance) so the public signature does not need to change to add one."""
+    """Options for :func:`mambo_power.contingency.n1`."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    generator_outages: bool = Field(
+        default=True,
+        description=(
+            "Also screen and confirm the outage of every in-service generator that is not at "
+            "the slack bus; off leaves N1Result.generator_outages empty."
+        ),
+    )
 
 
 @dataclass(frozen=True)
 class N1Screen:
-    """Array-level LODF fast-screen verdict (:func:`screen_n1`).
+    """Array-level linear fast-screen verdict (:func:`screen_n1`).
 
     ``flagged_positions[k]`` lists the positions of branches whose LODF-estimated post-outage
     flow exceeds their rating when branch ``k`` is taken out; only outages with at least one
@@ -57,23 +72,42 @@ class N1Screen:
     :func:`confirm_n1` can report the estimate alongside the confirmed value.
     ``bridge_positions`` lists the branches skipped because their outage would disconnect the
     network (:func:`mambo_power.numerics.bridges`) — LODF is undefined for them.
+
+    The three ``gen_*`` fields are the generator counterparts, keyed by position in
+    ``arr.gen_ids``: ``gen_flagged_positions[g]`` and ``gen_estimated_flow_mw[g]`` for every
+    flagged generator outage, and ``gen_slack_positions`` for the generators at the slack bus,
+    which are skipped (ADR-015). ``gen_lost_p_mw[g]`` is the base-case DC dispatch the outage
+    removes, recorded for every screened generator, flagged or not.
     """
 
     flagged_positions: dict[int, list[int]]
     estimated_flow_mw: dict[int, FloatArray]
     bridge_positions: list[int]
+    gen_flagged_positions: dict[int, list[int]] = field(default_factory=dict)
+    gen_estimated_flow_mw: dict[int, FloatArray] = field(default_factory=dict)
+    gen_slack_positions: list[int] = field(default_factory=list)
+    gen_lost_p_mw: dict[int, float] = field(default_factory=dict)
+
+
+def _violating(estimated: FloatArray, rating_mva: FloatArray, skip: int | None) -> list[int]:
+    """Positions whose estimate exceeds their rating, excluding *skip* (the outaged branch)."""
+    return [
+        branch
+        for branch in range(estimated.shape[0])
+        if branch != skip and estimated[branch] > rating_mva[branch] + VIOLATION_TOL_MVA
+    ]
 
 
 def screen_n1(arr: NetworkArrays, options: N1Options) -> N1Screen:
-    """LODF fast screen: which branch outages would push another branch over its rating.
+    """Linear fast screen: which branch or generator outages would push a branch over its rating.
 
     Solves the base case once (:func:`mambo_power.pf.dc.solve`), then for every non-bridge
-    branch ``k``, estimates every other branch's post-outage flow and flags ``k`` if any
-    estimate exceeds that branch's ``rating_mva`` (``inf`` on an unrated branch, so it is never
-    flagged). ``options`` is accepted for symmetry with :func:`confirm_n1` and future
-    extensibility; nothing in it is read yet.
+    branch ``k``, estimates every other branch's post-outage flow from the LODF and flags ``k``
+    if any estimate exceeds that branch's ``rating_mva`` (``inf`` on an unrated branch, so it is
+    never flagged). When ``options.generator_outages`` is on, it also estimates, for every
+    in-service generator not at the slack bus, the flow after its base-case dispatch is lost to
+    the slack, from the PTDF column of its bus, and flags the generator on the same rule.
     """
-    del options
     base_sol = pfdc.solve(arr)
     # The LODF formula (post[l] = pre[l] + LODF[l, k] * pre[k]) needs the *signed* pre-outage
     # flow — the same signed quantity `_brute_force_lodf.py`'s own oracle assembles via
@@ -83,7 +117,8 @@ def screen_n1(arr: NetworkArrays, options: N1Options) -> N1Screen:
     base_flow_signed_mw = base_sol.p_from_pu * arr.base_mva
     rating_mva = arr.rating_pu * arr.base_mva
 
-    lodf_matrix = lodf(arr, ptdf(arr))
+    ptdf_matrix = ptdf(arr)
+    lodf_matrix = lodf(arr, ptdf_matrix)
     bridge_positions = bridges(arr)
     bridge_set = set(bridge_positions)
 
@@ -95,23 +130,78 @@ def screen_n1(arr: NetworkArrays, options: N1Options) -> N1Screen:
         estimated: FloatArray = np.abs(
             base_flow_signed_mw + lodf_matrix[:, k] * base_flow_signed_mw[k]
         )
-        violating = [
-            branch
-            for branch in range(arr.n_branch)
-            if branch != k and estimated[branch] > rating_mva[branch] + VIOLATION_TOL_MVA
-        ]
+        violating = _violating(estimated, rating_mva, k)
         if violating:
             flagged_positions[k] = violating
             estimated_flow_mw[k] = estimated
+
+    gen_flagged_positions: dict[int, list[int]] = {}
+    gen_estimated_flow_mw: dict[int, FloatArray] = {}
+    gen_slack_positions: list[int] = []
+    gen_lost_p_mw: dict[int, float] = {}
+    if options.generator_outages:
+        # The base-case *solved* dispatch, not the declared one: the two agree for every
+        # generator off the slack bus, and the slack bus's own generators are skipped, so this
+        # is the MW a re-solve with the generator out of service actually removes.
+        gen_p_mw = base_sol.gen_p_pu * arr.base_mva
+        for g in range(len(arr.gen_ids)):
+            bus = int(arr.gen_bus[g])
+            if bus == arr.slack:
+                gen_slack_positions.append(g)
+                continue
+            lost_p_mw = float(gen_p_mw[g])
+            gen_lost_p_mw[g] = lost_p_mw
+            estimated = np.abs(base_flow_signed_mw - ptdf_matrix[:, bus] * lost_p_mw)
+            violating = _violating(estimated, rating_mva, None)
+            if violating:
+                gen_flagged_positions[g] = violating
+                gen_estimated_flow_mw[g] = estimated
     return N1Screen(
         flagged_positions=flagged_positions,
         estimated_flow_mw=estimated_flow_mw,
         bridge_positions=bridge_positions,
+        gen_flagged_positions=gen_flagged_positions,
+        gen_estimated_flow_mw=gen_estimated_flow_mw,
+        gen_slack_positions=gen_slack_positions,
+        gen_lost_p_mw=gen_lost_p_mw,
     )
 
 
+def _flags_for(
+    arr: NetworkArrays,
+    arr_k: NetworkArrays,
+    sol_k: pfdc.DcSolution,
+    monitored: list[int],
+    estimated: FloatArray,
+) -> list[N1BranchFlag]:
+    """The :class:`N1BranchFlag` rows for one confirming re-solve.
+
+    *monitored* and *estimated* are in the base-case ``arr`` positions; each monitored branch is
+    looked up by id in the outaged ``arr_k`` because the two array views differ by the outaged
+    element.
+    """
+    confirmed_flow_mw = np.abs(sol_k.p_from_pu) * arr_k.base_mva
+    confirmed_rating_mva = arr_k.rating_pu * arr_k.base_mva
+    flags: list[N1BranchFlag] = []
+    for branch in monitored:
+        monitored_id = arr.branch_ids[branch]
+        pos = arr_k.branch_index[monitored_id]
+        confirmed = float(confirmed_flow_mw[pos])
+        limit = float(confirmed_rating_mva[pos])
+        flags.append(
+            N1BranchFlag(
+                branch_id=monitored_id,
+                rating_mva=limit,
+                estimated_flow_mw=float(estimated[branch]),
+                confirmed_flow_mw=confirmed,
+                confirmed_violating=confirmed > limit + VIOLATION_TOL_MVA,
+            )
+        )
+    return flags
+
+
 def confirm_n1(net: Network, arr: NetworkArrays, screen: N1Screen) -> list[N1OutageResult]:
-    """Confirming DC re-solve for every outage *screen* flagged; ground truth, not estimate.
+    """Confirming DC re-solve for every branch outage *screen* flagged; ground truth, not estimate.
 
     Rebuilds the network with each flagged branch out of service and runs a real
     :func:`mambo_power.pf.dc.solve`, recording both the LODF-estimated and the confirmed flow
@@ -132,27 +222,47 @@ def confirm_n1(net: Network, arr: NetworkArrays, screen: N1Screen) -> list[N1Out
         arr_k = NetworkArrays.from_network(outaged)
         sol_k = pfdc.solve(arr_k)
         by_id[outage_id].in_service = True
-        confirmed_flow_mw = np.abs(sol_k.p_from_pu) * arr_k.base_mva
-        confirmed_rating_mva = arr_k.rating_pu * arr_k.base_mva
-
-        flags: list[N1BranchFlag] = []
-        for branch in screen.flagged_positions[k]:
-            monitored_id = arr.branch_ids[branch]
-            pos = arr_k.branch_index[monitored_id]
-            confirmed = float(confirmed_flow_mw[pos])
-            limit = float(confirmed_rating_mva[pos])
-            flags.append(
-                N1BranchFlag(
-                    branch_id=monitored_id,
-                    rating_mva=limit,
-                    estimated_flow_mw=float(screen.estimated_flow_mw[k][branch]),
-                    confirmed_flow_mw=confirmed,
-                    confirmed_violating=confirmed > limit + VIOLATION_TOL_MVA,
-                )
-            )
+        flags = _flags_for(
+            arr, arr_k, sol_k, screen.flagged_positions[k], screen.estimated_flow_mw[k]
+        )
         outages.append(
             N1OutageResult(
                 outage_branch_id=outage_id,
+                flagged_branches=flags,
+                confirmed_violating=any(f.confirmed_violating for f in flags),
+            )
+        )
+    return outages
+
+
+def confirm_n1_generators(
+    net: Network, arr: NetworkArrays, screen: N1Screen
+) -> list[N1GeneratorOutageResult]:
+    """Confirming DC re-solve for every generator outage *screen* flagged; ground truth.
+
+    The generator counterpart of :func:`confirm_n1`: takes each flagged generator out of
+    service on one deep copy of *net*, re-solves (the slack-bus generator absorbs the lost
+    dispatch, :func:`mambo_power.pf.dc.solve`'s own rule) and records the PTDF-estimated and
+    the confirmed flow for every branch the screen flagged for that outage. *net* is not
+    modified.
+    """
+    outaged = net.model_copy(deep=True)
+    by_id = {gen.id: gen for gen in outaged.generators}
+    outages: list[N1GeneratorOutageResult] = []
+    for g in sorted(screen.gen_flagged_positions):
+        outage_id = arr.gen_ids[g]
+        by_id[outage_id].in_service = False
+        assert validate_network(outaged) == []
+        arr_g = NetworkArrays.from_network(outaged)
+        sol_g = pfdc.solve(arr_g)
+        by_id[outage_id].in_service = True
+        flags = _flags_for(
+            arr, arr_g, sol_g, screen.gen_flagged_positions[g], screen.gen_estimated_flow_mw[g]
+        )
+        outages.append(
+            N1GeneratorOutageResult(
+                outage_generator_id=outage_id,
+                lost_p_mw=screen.gen_lost_p_mw[g],
                 flagged_branches=flags,
                 confirmed_violating=any(f.confirmed_violating for f in flags),
             )
