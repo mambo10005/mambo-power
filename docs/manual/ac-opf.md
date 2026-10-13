@@ -95,6 +95,15 @@ method; the two share nothing but the problem. case14's published dispatch (194.
 `runopp` (PYPOWER's PIPS) on the same six cases. A hand case in `tests/unit/test_opf_ac.py` is
 checked against `scipy.optimize` (SLSQP) with the power-flow equations written out independently.
 
+Two formulation differences had to be stated for the pandapower comparison to mean anything,
+and both were found by measuring, not assumed: pandapower's OPF holds the `ext_grid` voltage at
+its setpoint where MATPOWER and this solver let the slack voltage float in its band (run blind,
+pandapower's cost is higher on every case whose slack setpoint is not already at the band's top,
+with the worst voltage difference on the slack bus at exactly the setpoint), and its default
+branch limit is a current magnitude where MATPOWER's default and ours is apparent power. The
+parity test pins the slack voltage in our network and asks PYPOWER for apparent-power limits, so
+the two solve the same problem.
+
 ## The result
 
 `OpfAcResult` carries `generators` (`p_mw`, `q_mvar`, the two bound duals), `buses` (`vm_pu`,
