@@ -75,6 +75,12 @@ class GenCommitmentResult(BaseModel):
         "are the same thing)."
     )
     initial_on: bool = Field(description="Status in the period before the horizon.")
+    min_up_periods: int = Field(
+        default=1, ge=1, description="Minimum consecutive periods on once started (ADR-019)."
+    )
+    min_down_periods: int = Field(
+        default=1, ge=1, description="Minimum consecutive periods off once stopped (ADR-019)."
+    )
     on: list[bool] = Field(description="Commitment status per period.")
     started: list[bool] = Field(description="Start-up event per period.")
     stopped: list[bool] = Field(description="Shut-down event per period.")

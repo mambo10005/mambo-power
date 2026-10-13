@@ -885,6 +885,51 @@ code with no sparsity in its constraint handling at this scale, and its multipli
 would have to be trusted for the LMPs; pure SLP without restoration — the first version here,
 which crawled because the merit penalty on second-order residuals ate every step's gain.
 
+## ADR-019 — Minimum up and down times as event-window rows on the commitment binaries
+
+**Status:** accepted 2026-10-13.
+
+**Context.** ADR-017's unit commitment lets a unit start and stop in adjacent periods: nothing
+holds a started unit on or a stopped unit off, which is the first thing a thermal unit's
+operator will object to, and the one gap that ADR listed. The model carried no such data.
+
+**Decision.** `Generator` gains `min_up_periods`, `min_down_periods` and
+`initial_state_periods`; `Commitment` gains the matching arrays; `multiperiod_dc_opf` builds
+two more row families after the four of ADR-017.
+
+1. **Event-window rows, not state chains.** For a committable unit with `min_up > 1`, one row
+   per period: the start-ups of the last `min_up` periods ending at `t` sum to at most `u[t]`
+   (`Σ v[s] − u[t] ≤ 0`, `s = max(0, t − min_up + 1) .. t`); for `min_down > 1`, the
+   shut-downs of the last `min_down` periods sum to at most `1 − u[t]`. These are the standard
+   tight formulation on the `(u, v, w)` triple (Rajan–Takriti), one row per period per unit,
+   and they use the event columns ADR-017 already has. A minimum of 1 is what the logic row
+   says on its own and builds no row.
+2. **Pre-horizon obligations are fixed columns.** `initial_state_periods` is how long the unit
+   has been in its `initial_on` state, counting the period just before the horizon. A unit on
+   for `k < min_up` periods has `u[t]` fixed at 1 for `t < min_up − k` (clipped to the
+   horizon); a unit off is held off against `min_down` the same way. `None` means long enough
+   that nothing carries in — the wrapper's reading of a generator that states no history.
+3. **The data travels.** The three fields round-trip through JSON and the CSV bundle (which
+   gains an integer column kind), are exported to PyPSA as `min_up_time` / `min_down_time` and,
+   when stated, `up_time_before` / `down_time_before`, and are reported as dropped by the
+   pandapower exporter, which has no column for them.
+
+**Consequences.**
+
+1. **Minimal surface.** Three model fields, three `Commitment` fields, two row families, two
+   result fields on `GenCommitmentResult`; the restricted-LP pricing, the ramp relaxation and
+   everything else in ADR-017 are untouched, and a network that states no minimum times builds
+   the same MIP as before, row for row.
+2. **Periods are the unit.** `Period` has no duration, so the minimum times are counted in
+   periods, like the ramps; a caller with hourly periods and a four-hour minimum writes 4.
+3. **Not modelled:** start-up costs that depend on how long the unit has been off (hot/warm/cold
+   starts), start-up and shut-down ramp trajectories, must-run and fixed-outage windows. Each is
+   more columns or bounds on the same binaries.
+
+*Rejected:* one aggregated row per unit over the whole horizon — weaker LP relaxation, slower
+MIP; counting the minimum times in hours with a period duration on `Period` — a model change
+with no other consumer yet, and the ramps are already per period.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

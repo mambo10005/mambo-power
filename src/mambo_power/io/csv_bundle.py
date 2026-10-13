@@ -135,7 +135,7 @@ _MANIFEST = "manifest.json"
 _TRUE = frozenset({"true", "1"})
 _FALSE = frozenset({"false", "0"})
 
-_Kind = Literal["str", "float", "bool"]
+_Kind = Literal["str", "float", "int", "bool"]
 
 
 @dataclass(frozen=True)
@@ -176,6 +176,8 @@ def _scalar_kind(annotation: Any) -> tuple[_Kind, bool]:
         return "str", optional
     if annotation is float:
         return "float", optional
+    if annotation is int:
+        return "int", optional
     if annotation is bool:
         return "bool", optional
     raise TypeError(f"not a scalar annotation: {annotation!r}")
@@ -272,6 +274,8 @@ def _cell(value: object, column: _Column, owner: str) -> str:
         return "true" if value else "false"
     if column.kind == "float":
         return repr(float(value))  # type: ignore[arg-type]
+    if column.kind == "int":
+        return str(int(value))  # type: ignore[call-overload]
     text = str(value)
     if column.optional and text == "":
         raise ValueError(
@@ -435,6 +439,13 @@ def _parse(cell: str, column: _Column, where: str) -> object:
         raise _BundleError(
             "CSV_BAD_VALUE", f'{where}: "{column.name}" = {cell!r} is not true/false/1/0'
         )
+    if column.kind == "int":
+        try:
+            return int(cell)
+        except ValueError:
+            raise _BundleError(
+                "CSV_BAD_VALUE", f'{where}: "{column.name}" = {cell!r} is not an integer'
+            ) from None
     try:
         value = float(cell)
     except ValueError:

@@ -191,6 +191,25 @@ class Generator(_Entity):
     ramp_down_mw: float | None = Field(
         default=None, description="Max decrease from the previous period, MW; None = none."
     )
+    min_up_periods: int | None = Field(
+        default=None,
+        ge=1,
+        description="Minimum number of consecutive periods the unit stays on once started "
+        "(unit commitment, ADR-019); None or 1 = none.",
+    )
+    min_down_periods: int | None = Field(
+        default=None,
+        ge=1,
+        description="Minimum number of consecutive periods the unit stays off once stopped "
+        "(unit commitment, ADR-019); None or 1 = none.",
+    )
+    initial_state_periods: int | None = Field(
+        default=None,
+        ge=1,
+        description="How many periods the unit has already been in its pre-horizon state "
+        "(on if p_mw > 0, off otherwise), counting the period just before the horizon; "
+        "None = long enough that no minimum up/down obligation carries into the horizon.",
+    )
 
 
 class Load(_Entity):

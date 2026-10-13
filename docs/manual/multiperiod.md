@@ -104,7 +104,7 @@ re-derived for `T` periods rather than inherited from `dc_opf`:
 | 5 | cyclic `soc[T-1] == soc_initial` | after tier 4, `s` |
 | 6 | ramp coupling, per ramped generator per adjacent pair | after tier 5, `(t-1)*n_ramped + j` |
 | 7-8 | PWL epigraph / hypograph rows | last — an encoding detail, never part of the dual shape |
-| 9-12 | unit-commitment rows, only with `unit_commitment` | after tier 8 — see [Unit commitment](#unit-commitment) |
+| 9-14 | unit-commitment rows, only with `unit_commitment` | after tier 8 — see [Unit commitment](#unit-commitment) and [Minimum up and down times](#minimum-up-and-down-times) |
 
 ## Ramp coupling
 
@@ -329,7 +329,48 @@ A unit with no minimum output, no no-load cost and no event cost has **nothing t
 False` and always on, and never registers an event. Only the other units get binaries, which also
 keeps the MIP small. The ramp rows split into one-sided pairs relaxed by the unit's capacity on the
 period it starts (up side) or stops (down side): a unit may start at any output and stop from any
-output, and the ramp applies between two committed periods. No minimum up/down time is modelled.
+output, and the ramp applies between two committed periods. Minimum up and down times are their
+own section [below](#minimum-up-and-down-times).
+
+### Minimum up and down times
+
+A unit that can start and stop in adjacent periods is not a thermal unit. Three more optional
+fields on `Generator` ([ADR-019](../design/decisions.md)), all counted in **periods** like the
+ramps:
+
+```python
+Generator(..., min_up_periods: int | None = None, min_down_periods: int | None = None,
+          initial_state_periods: int | None = None)
+```
+
+- `min_up_periods` — once started, the unit stays on at least this many consecutive periods;
+  `None` or 1 means none (a started unit is on in the period it starts, which the logic row
+  already says).
+- `min_down_periods` — once stopped, off at least this many; same rules.
+- `initial_state_periods` — how long the unit has already been in its pre-horizon state (on if
+  `p_mw > 0`), counting the period just before the horizon, so at least 1. `None` means long
+  enough that no obligation carries in. A unit on for `k < min_up_periods` periods is held on
+  for the first `min_up_periods - k` periods of the horizon, a unit off is held off against
+  `min_down_periods` the same way.
+
+Two row families after tier 12, one row per period per committable unit whose minimum is above 1:
+
+| Tier | Family | Meaning |
+| --- | --- | --- |
+| 13 | \(\sum_{s = \max(0,\, t - U_g + 1)}^{t} v_g[s] \le u_g[t]\) | started inside the last \(U_g\) periods ⇒ still on |
+| 14 | \(\sum_{s = \max(0,\, t - D_g + 1)}^{t} w_g[s] \le 1 - u_g[t]\) | stopped inside the last \(D_g\) periods ⇒ still off |
+
+The obligation carried in from before the horizon is a fixed `on` column over the periods it
+covers, not a row. The array-level builder takes the same three things as `(n_gen,)` integer
+arrays on `Commitment` (`min_up_periods`, `min_down_periods`, `initial_state_periods`), `None`
+meaning none throughout; the result reports each unit's two minimums on
+`GenCommitmentResult.min_up_periods` / `min_down_periods`. The fields round-trip through JSON and
+the CSV bundle, reach PyPSA as `min_up_time` / `min_down_time` (and `up_time_before` /
+`down_time_before` where stated), and are reported as dropped by the pandapower exporter.
+
+On the example scenario below, give `baseload` a 2-period minimum up time and it can no longer
+run for the peak alone; give it a 3-period minimum down time with `initial_state_periods=1`
+and it is held off for the first two periods whatever its start-up costs.
 
 ### Quadratic costs are linearised
 

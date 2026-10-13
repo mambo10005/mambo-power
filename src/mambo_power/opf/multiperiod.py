@@ -109,7 +109,15 @@ tier  family                                    rows
 10    minimum, ``p_g[t] − p_min·u_g[t] >= 0``   ``T*n_gen``
 11    logic, ``u[t] − u[t−1] − v[t] + w[t] == 0`` ``T*n_gen`` (``t = 0`` against ``initial_on``)
 12    ``v[t] + w[t] <= 1``                      ``T*n_gen`` (no start and stop in one period)
+13    minimum up, ``Σ v[s] − u[t] <= 0``        ``T`` per committable unit with ``min_up > 1``
+14    minimum down, ``Σ w[s] + u[t] <= 1``      ``T`` per committable unit with ``min_down > 1``
 ===== ======================================== ==================================================
+
+Tiers 13-14 (ADR-019) sum the events of the last ``min_up`` (``min_down``) periods ending at
+``t``, ``s = max(0, t − min + 1) .. t``: a unit started inside that window is still on, one
+stopped inside it is still off. A minimum of 1 is what the logic row already says and builds no
+row. An obligation from before the horizon (``Commitment.initial_state_periods``) is a fixed
+``on`` column over the periods it covers, not a row.
 
 A unit with ``p_min <= 0``, no no-load cost and no start-up or shut-down cost has nothing
 to commit — on at 0 MW and off are the same thing — so its binaries are fixed on and its
@@ -118,16 +126,16 @@ events off, and it stays the continuous column it is in the LP; only the other u
 is a row that applies only while committed — and the objective gains ``no_load_cost·u``,
 ``startup_cost·v`` and ``shutdown_cost·w``. Tier 6 ramp rows split into one-sided pairs with a
 ``−p_max·v[t]`` / ``+p_max·w[t]`` relaxation so a unit may start at any output up to its capacity
-and stop from any output; no minimum up/down time is modelled. HiGHS solves MILPs, not MIQPs, so
-a nonzero ``c2`` (or ``v2``) with a commitment block is a ``ValueError``: the caller linearises a
-quadratic cost into ``pwl_costs`` first, as :func:`mambo_power.market.multiperiod.solve_multiperiod`
-does. Tier 7 epigraph rows carry the unit's ``on`` column, ``cost_g >= slope_i·p_g +
-intercept_i·u_g``, so a committed unit's cost is its curve and an off unit's is exactly zero; the
-polynomial ``c0`` stays the unconditional per-period constant it is in the LP (a caller who means
-"no-load" moves it into ``Commitment.no_load_cost``, as the market wrapper does). After the MIP
-solves, the binaries are fixed at their solution and the model is re-run as an LP, which is where
-every dual above comes from — the restricted-LP prices a unit-commitment market settles on
-(ADR-017).
+and stop from any output; minimum up and down times are tiers 13-14. HiGHS solves MILPs, not
+MIQPs, so a nonzero ``c2`` (or ``v2``) with a commitment block is a ``ValueError``: the caller
+linearises a quadratic cost into ``pwl_costs`` first, as
+:func:`mambo_power.market.multiperiod.solve_multiperiod` does. Tier 7 epigraph rows carry the
+unit's ``on`` column, ``cost_g >= slope_i·p_g + intercept_i·u_g``, so a committed unit's cost is
+its curve and an off unit's is exactly zero; the polynomial ``c0`` stays the unconditional
+per-period constant it is in the LP (a caller who means "no-load" moves it into
+``Commitment.no_load_cost``, as the market wrapper does). After the MIP solves, the binaries are
+fixed at their solution and the model is re-run as an LP, which is where every dual above comes
+from — the restricted-LP prices a unit-commitment market settles on (ADR-017).
 """
 
 from __future__ import annotations
@@ -160,6 +168,7 @@ _OPTIMAL = "Optimal"
 __all__ = ["Commitment", "MultiperiodDuals", "MultiperiodSolution", "multiperiod_dc_opf"]
 
 BoolArray = npt.NDArray[np.bool_]
+IntArray = npt.NDArray[np.int64]
 
 
 @dataclass(frozen=True)
@@ -179,6 +188,18 @@ class Commitment:
     """Whether the unit is committed in the period before the horizon."""
     no_load_cost: FloatArray
     """Cost of being on for one period at any output, $; ``>= 0``."""
+    min_up_periods: IntArray | None = None
+    """``(n_gen,)`` minimum consecutive periods on once started (ADR-019); ``>= 1``, where 1
+    (or ``None`` for the whole array) means no minimum: the logic rows already force a started
+    unit on in the period it starts."""
+    min_down_periods: IntArray | None = None
+    """``(n_gen,)`` minimum consecutive periods off once stopped; ``>= 1``, 1 meaning none."""
+    initial_state_periods: IntArray | None = None
+    """``(n_gen,)`` how many periods each unit has already spent in its ``initial_on`` state
+    before the horizon, ``>= 1`` (the period just before the horizon counts). ``None`` means
+    long enough that no obligation carries in. A unit on for fewer periods than its minimum up
+    time is held on for the remainder (clipped to the horizon), and likewise off against its
+    minimum down time."""
 
 
 @dataclass(frozen=True)
@@ -342,6 +363,22 @@ def _checked_ramp(name: str, values: FloatArray | None, n_gen: int) -> FloatArra
     return array
 
 
+def _checked_periods(name: str, values: IntArray | None, n_gen: int, least: int) -> IntArray:
+    """``commitment.<name>`` as an ``(n_gen,)`` integer array ``>= least``; ``None`` is all
+    ``least``."""
+    if values is None:
+        return np.full(n_gen, least, dtype=np.int64)
+    out = np.asarray(values)
+    if out.shape != (n_gen,):
+        raise ValueError(
+            f"commitment.{name} must have shape ({n_gen},) (NetworkArrays generator order), "
+            f"got {out.shape}"
+        )
+    if not np.issubdtype(out.dtype, np.integer) or np.any(out < least):
+        raise ValueError(f"commitment.{name} must be integers >= {least}")
+    return out.astype(np.int64)
+
+
 def multiperiod_dc_opf(
     arr: NetworkArrays,
     cost_coeffs: FloatArray,
@@ -438,6 +475,15 @@ def multiperiod_dc_opf(
                 "MILPs, not MIQPs; linearise a quadratic cost into pwl_costs first (the market "
                 "wrapper does this with MarketMultiperiodOptions.quadratic_segments)"
             )
+        min_up = _checked_periods("min_up_periods", commitment.min_up_periods, n_gen, 1)
+        min_down = _checked_periods("min_down_periods", commitment.min_down_periods, n_gen, 1)
+        initial_periods = (
+            None
+            if commitment.initial_state_periods is None
+            else _checked_periods(
+                "initial_state_periods", commitment.initial_state_periods, n_gen, 1
+            )
+        )
 
     # --- column layout (module docstring, "Column layout") -------------------------------------
     per_period_dispatch = n_gen + n_demand + 3 * n_storage
@@ -809,6 +855,44 @@ def multiperiod_dc_opf(
         _add_rows(h, _sparse_rows(min_rows, np.zeros(count), np.full(count, highspy.kHighsInf)))
         _add_rows(h, _sparse_rows(logic_rows, logic_rhs, logic_rhs))
         _add_rows(h, _sparse_rows(event_rows, np.full(count, -highspy.kHighsInf), np.ones(count)))
+        # tiers 13-14 (ADR-019): a start within the last min_up periods keeps the unit on, a
+        # stop within the last min_down periods keeps it off. A minimum of 1 adds nothing the
+        # logic row does not already say, so it builds no row; nor does a non-committable unit.
+        up_units = [g for g in range(n_gen) if committable[g] and min_up[g] > 1]
+        down_units = [g for g in range(n_gen) if committable[g] and min_down[g] > 1]
+        up_rows = [
+            [(int(start_cols[s][g]), 1.0) for s in range(max(0, t - int(min_up[g]) + 1), t + 1)]
+            + [(int(on_cols[t][g]), -1.0)]
+            for t in range(n_periods)
+            for g in up_units
+        ]
+        down_rows = [
+            [(int(stop_cols[s][g]), 1.0) for s in range(max(0, t - int(min_down[g]) + 1), t + 1)]
+            + [(int(on_cols[t][g]), 1.0)]
+            for t in range(n_periods)
+            for g in down_units
+        ]
+        n_commit_rows += len(up_rows) + len(down_rows)
+        if up_rows:
+            n_up = len(up_rows)
+            _add_rows(h, _sparse_rows(up_rows, np.full(n_up, -highspy.kHighsInf), np.zeros(n_up)))
+        if down_rows:
+            n_down = len(down_rows)
+            _add_rows(
+                h, _sparse_rows(down_rows, np.full(n_down, -highspy.kHighsInf), np.ones(n_down))
+            )
+        # An obligation carried in from before the horizon is a fixed ``on`` column, not a row:
+        # a unit on for k < min_up periods stays on for min_up - k more, and likewise off.
+        if initial_periods is not None:
+            for g in range(n_gen):
+                if not committable[g]:
+                    continue
+                on_initially = bool(commitment.initial_on[g])
+                minimum = int(min_up[g]) if on_initially else int(min_down[g])
+                held = min(n_periods, max(0, minimum - int(initial_periods[g])))
+                for t in range(held):
+                    value = 1.0 if on_initially else 0.0
+                    h.changeColBounds(int(on_cols[t][g]), value, value)
         # The default 1e-4 relative gap can leave a cheaper schedule unexplored; the problems
         # built here are small, so ask for the optimum.
         h.setOptionValue("mip_rel_gap", 1e-9)

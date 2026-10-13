@@ -44,7 +44,10 @@ be switched off). HiGHS solves MILPs, not MIQPs, so a quadratic cost is **linear
 piecewise-linear cost; the reported ``objective_cost`` is the chord cost, a slight over-estimate
 of the quadratic one. The clearing becomes a MIP; the prices and settlement below are those of
 the LP left once the commitment is fixed at the optimum (the builder's own two-pass rule), and
-the result carries each unit's schedule in ``MarketMultiperiodResult.commitment``.
+the result carries each unit's schedule in ``MarketMultiperiodResult.commitment``. Minimum up
+and down times (ADR-019) come off ``Generator.min_up_periods`` / ``min_down_periods``, and the
+obligation a unit brings into the horizon off ``initial_state_periods``: a unit that states no
+history is taken to have been in its state long enough that none carries in.
 
 **Settlement.** Payments, receipts and congestion rent are computed per period, directly from
 that period's LMPs and dispatch. Storage is settled as the third participant it physically is --
@@ -72,7 +75,12 @@ from mambo_power.opf.dc_opf import (
     OpfDuals,
     lmp_decomposition,
 )
-from mambo_power.opf.multiperiod import Commitment, MultiperiodSolution, multiperiod_dc_opf
+from mambo_power.opf.multiperiod import (
+    Commitment,
+    IntArray,
+    MultiperiodSolution,
+    multiperiod_dc_opf,
+)
 from mambo_power.results import (
     BusLmpResult,
     GenCommitmentResult,
@@ -85,6 +93,10 @@ from mambo_power.results import (
 )
 
 from mambo_power.market.nodal import load_bid_coeffs  # isort: skip
+
+_NO_HISTORY = 10**9
+"""``initial_state_periods`` for a unit that states none: longer than any minimum, so no
+obligation carries into the horizon."""
 
 __all__ = [
     "MarketMultiperiodOptions",
@@ -156,10 +168,25 @@ def _commitment(
             grid = np.linspace(0.0, max(float(p_max[i]), 0.0), segments + 1)
             pwl[i] = [(float(p), float(c2 * p * p + c1 * p)) for p in grid]
             coeffs[i, :2] = 0.0
+    gens = [gens_by_id[gen_id] for gen_id in arr.gen_ids]
+    initial_periods = [g.initial_state_periods for g in gens]
     commitment = Commitment(
-        startup_cost=startup, shutdown_cost=shutdown, initial_on=initial_on, no_load_cost=no_load
+        startup_cost=startup,
+        shutdown_cost=shutdown,
+        initial_on=initial_on,
+        no_load_cost=no_load,
+        min_up_periods=np.array([g.min_up_periods or 1 for g in gens], dtype=np.int64),
+        min_down_periods=np.array([g.min_down_periods or 1 for g in gens], dtype=np.int64),
+        # a unit that states no history carries no obligation in: "long enough" is the horizon
+        initial_state_periods=np.array(
+            [k if k is not None else _NO_HISTORY for k in initial_periods], dtype=np.int64
+        ),
     )
     return commitment, coeffs, pwl
+
+
+def _period_count(values: IntArray | None, i: int) -> int:
+    return 1 if values is None else int(values[i])
 
 
 def _commitment_rows(
@@ -181,6 +208,8 @@ def _commitment_rows(
                     or commitment.shutdown_cost[i] > 0.0
                 ),
                 initial_on=bool(commitment.initial_on[i]),
+                min_up_periods=_period_count(commitment.min_up_periods, i),
+                min_down_periods=_period_count(commitment.min_down_periods, i),
                 on=[bool(x) for x in on],
                 started=[bool(x) for x in started],
                 stopped=[bool(x) for x in stopped],

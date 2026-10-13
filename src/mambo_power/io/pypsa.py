@@ -30,6 +30,7 @@ zero-optional-dependency import (design item R9; ``pypsa`` is a dev extra).
   survives too), ``marginal_cost = c1``, ``marginal_cost_quadratic = c2``, the constant ``c0`` in
   the custom :data:`COST_CONSTANT_COLUMN` column (``n.objective`` excludes constants),
   ``ramp_limit_up/down`` as fractions of ``p_nom``, ``start_up_cost``/``shut_down_cost``,
+  ``min_up_time``/``min_down_time`` (and ``up_time_before``/``down_time_before`` where stated),
   ``control``, ``active``. **``p_set`` is never written**: a non-NaN ``p_set`` pins the dispatch
   in ``optimize()`` (``tests/parity/test_opf_vs_pypsa.py``'s root cause).
 * ``phase_shift`` is carried faithfully and honoured by PyPSA's linear power flow (``n.lpf()``
@@ -262,7 +263,16 @@ def _add_generators(n: pypsa.Network, net: Network, live: set[str], warn: Any) -
         shut_down_cost=shutdown,
         ramp_limit_up=ramp_up,
         ramp_limit_down=ramp_down,
+        min_up_time=[g.min_up_periods or 0 for g in net.generators],
+        min_down_time=[g.min_down_periods or 0 for g in net.generators],
     )
+    # PyPSA's up_time_before / down_time_before have defaults (1 / 0) that mean something, so
+    # they are written only where the model states the pre-horizon state (ADR-019)
+    for g in net.generators:
+        if g.initial_state_periods is not None:
+            on = g.p_mw > 0.0
+            n.generators.at[g.id, "up_time_before"] = g.initial_state_periods if on else 0
+            n.generators.at[g.id, "down_time_before"] = 0 if on else g.initial_state_periods
     # a custom column (PyPSA keeps it through CSV export/import); assigned after add() because
     # add()'s typed signature does not admit unknown keyword attributes
     n.generators[COST_CONSTANT_COLUMN] = c0

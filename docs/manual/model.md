@@ -144,6 +144,9 @@ flow needs no schema bump; no power-flow solver reads it.
 | `cost` | `PolynomialCost \| PiecewiseCost \| None` | — | `None` | Discriminated on `kind`. |
 | `ramp_up_mw` | `float \| None` | MW | `None` | Max increase from the previous period. `None` = unconstrained; must be strictly > 0 when given. Read by [`market.multiperiod`](multiperiod.md#ramp-coupling). |
 | `ramp_down_mw` | `float \| None` | MW | `None` | Max decrease from the previous period; same rules. |
+| `min_up_periods` | `int \| None` | periods | `None` | Minimum consecutive periods on once started; `None` or 1 = none. Read by [unit commitment](multiperiod.md#minimum-up-and-down-times). |
+| `min_down_periods` | `int \| None` | periods | `None` | Minimum consecutive periods off once stopped; same rules. |
+| `initial_state_periods` | `int \| None` | periods | `None` | How long the unit has already been in its pre-horizon state (on if `p_mw > 0`), counting the period just before the horizon. `None` = long enough that no up/down obligation carries into the horizon. |
 
 Several generators may sit on one bus. Their powers and limits are summed per bus in the
 numerics; the voltage setpoint rule is described under

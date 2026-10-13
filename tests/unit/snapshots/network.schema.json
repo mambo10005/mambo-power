@@ -332,6 +332,48 @@
           "default": null,
           "description": "Max decrease from the previous period, MW; None = none.",
           "title": "Ramp Down Mw"
+        },
+        "min_up_periods": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Minimum number of consecutive periods the unit stays on once started (unit commitment, ADR-019); None or 1 = none.",
+          "title": "Min Up Periods"
+        },
+        "min_down_periods": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Minimum number of consecutive periods the unit stays off once stopped (unit commitment, ADR-019); None or 1 = none.",
+          "title": "Min Down Periods"
+        },
+        "initial_state_periods": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How many periods the unit has already been in its pre-horizon state (on if p_mw > 0, off otherwise), counting the period just before the horizon; None = long enough that no minimum up/down obligation carries into the horizon.",
+          "title": "Initial State Periods"
         }
       },
       "required": [

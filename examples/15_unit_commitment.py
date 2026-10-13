@@ -13,6 +13,9 @@ What this shows:
 * Prices are the restricted LP's (the binaries fixed at the optimum): the LMP is the marginal
   energy cost given the committed fleet, and start-up costs are not recovered through it —
   ``commitment_cost`` is what an uplift would have to cover.
+* Minimum up and down times (ADR-019): ``Generator.min_down_periods`` with
+  ``initial_state_periods`` holds a unit that has just stopped off into the horizon, so the
+  cheapest start is the first one the rules allow, not period 0.
 
 Runs from any directory, with no repository clone: ``python 15_unit_commitment.py``.
 """
@@ -40,15 +43,16 @@ def unit(
     )
 
 
-def scenario(baseload_startup: float) -> Scenario:
+def scenario(baseload_startup: float, **baseload_fields: int | None) -> Scenario:
     # one bus; a dear peaker that is on, and a cheap baseload unit with a 40 MW minimum that is
     # off before the horizon and costs `baseload_startup` to start
+    baseload = unit("baseload", 0.0, 40.0, 200.0, 10.0, startup=baseload_startup)
     net = Network(
         base_mva=100.0,
         buses=[Bus(id="b1", base_kv=138.0, type="slack")],
         generators=[
             unit("peaker", 10.0, 0.0, 100.0, 50.0),
-            unit("baseload", 0.0, 40.0, 200.0, 10.0, startup=baseload_startup),
+            baseload.model_copy(update=baseload_fields),
         ],
         loads=[Load(id="ld", bus="b1", p_mw=50.0, q_mvar=0.0)],
     )
@@ -88,3 +92,17 @@ print(f"\nbaseload at the LMP earns {energy_receipts:.0f} $ for {10 * 180:.0f} $
 print(
     f"and paid {baseload.startup_cost:.0f} $ to start: the gap is the uplift a market would settle"
 )
+
+# --- 3. Minimum down time: the unit stopped just before the horizon, and must stay off -------
+# a $1000 start-up pays for itself at once, so without the rule baseload starts in period 0;
+# with a 3-period minimum down time and 1 period already off, it is held off for two more
+free = solve_multiperiod(scenario(1000.0), MarketMultiperiodOptions(unit_commitment=True))
+held = solve_multiperiod(
+    scenario(1000.0, min_down_periods=3, initial_state_periods=1),
+    MarketMultiperiodOptions(unit_commitment=True),
+)
+for label, result in (("no minimum", free), ("min down 3, off for 1", held)):
+    c = next(c for c in result.commitment if c.id == "baseload")
+    on = "".join("1" if x else "0" for x in c.on)
+    print(f"\n{label:22s} baseload on={on}  horizon cost {result.objective_cost:.0f} $")
+print("(the start moves to the first period the rule allows; the peak is met by the peaker)")

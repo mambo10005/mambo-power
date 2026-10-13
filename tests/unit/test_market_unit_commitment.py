@@ -345,3 +345,183 @@ def test_result_round_trips_and_the_jobs_kind_takes_the_option() -> None:
     assert out.result.objective_cost == pytest.approx(6800.0)
     assert out.provenance is not None
     assert out.provenance.options == {"unit_commitment": True, "quadratic_segments": 8}
+
+
+# --- minimum up and down times (ADR-019) -------------------------------------------------------
+#
+# ``_min_time_scenario`` is the same one bus with a 3-period load and two units, ``small``
+# ($50/MWh, free, on) and ``big`` ($10/MWh, 40 MW minimum, off before the horizon), with the
+# event and no-load costs the test names. Every schedule for ``big`` is costed by hand in the
+# test that uses it.
+
+
+def _min_time_scenario(
+    loads: tuple[float, ...],
+    *,
+    big_startup: float = 0.0,
+    big_no_load: float = 0.0,
+    big_p_mw: float = 0.0,
+    min_up: int | None = None,
+    min_down: int | None = None,
+    initial_state_periods: int | None = None,
+) -> Scenario:
+    big = _unit("big", big_p_mw, 40.0, 200.0, 10.0, startup=big_startup).model_copy(
+        update={
+            "cost": PolynomialCost(coefficients=[10.0, big_no_load], startup=big_startup),
+            "min_up_periods": min_up,
+            "min_down_periods": min_down,
+            "initial_state_periods": initial_state_periods,
+        }
+    )
+    net = Network(
+        base_mva=100.0,
+        buses=[Bus(id="b1", base_kv=138.0, type="slack")],
+        generators=[_unit("small", 10.0, 0.0, 100.0, 50.0), big],
+        loads=[Load(id="ld", bus="b1", p_mw=50.0, q_mvar=0.0)],
+    )
+    return Scenario(network=net, periods=[Period(load_p_mw={"ld": p}) for p in loads])
+
+
+def test_minimum_up_time_keeps_a_started_unit_on() -> None:
+    # 50 / 80 / 60 MW with a $2500 no-load: on for the peak alone costs 800 + 5500 + 2500 =
+    # 8800; on for periods 1-2 costs 1400 + 2500 + 5000 = 8900; 0-1 costs 9300; never, 9500.
+    free = solve_multiperiod(_min_time_scenario((50.0, 80.0, 60.0), big_no_load=2500.0), UC)
+    held = solve_multiperiod(
+        _min_time_scenario((50.0, 80.0, 60.0), big_no_load=2500.0, min_up=2), UC
+    )
+
+    assert free.objective_cost == pytest.approx(8800.0)
+    assert _schedule(free, "big") == [0, 1, 0]
+    assert held.status == "Optimal"
+    assert held.objective_cost == pytest.approx(8900.0)
+    assert _schedule(held, "big") == [0, 1, 1]
+    big = next(c for c in held.commitment if c.id == "big")
+    assert big.min_up_periods == 2 and big.min_down_periods == 1
+    assert big.started == [False, True, False] and big.stopped == [False, False, False]
+
+
+def test_minimum_down_time_carried_in_from_before_the_horizon() -> None:
+    # off for 1 period against a 2-period minimum down time: held off in period 0, and
+    # starting in period 1 costs 50·50 + 10·130 + 1000 = 4800; against a 3-period minimum,
+    # held off in periods 0-1, and starting in period 2 costs 50·130 + 10·50 + 1000 = 8000 —
+    # both against 9000 on small alone.
+    two = solve_multiperiod(
+        _min_time_scenario(
+            (50.0, 80.0, 50.0), big_startup=1000.0, min_down=2, initial_state_periods=1
+        ),
+        UC,
+    )
+    three = solve_multiperiod(
+        _min_time_scenario(
+            (50.0, 80.0, 50.0), big_startup=1000.0, min_down=3, initial_state_periods=1
+        ),
+        UC,
+    )
+    unstated = solve_multiperiod(
+        _min_time_scenario((50.0, 80.0, 50.0), big_startup=1000.0, min_down=3), UC
+    )
+
+    assert two.objective_cost == pytest.approx(4800.0)
+    assert _schedule(two, "big") == [0, 1, 1]
+    assert three.objective_cost == pytest.approx(8000.0)
+    assert _schedule(three, "big") == [0, 0, 1]
+    # no stated history: no obligation carries in, and the start pays for itself at once
+    assert unstated.objective_cost == pytest.approx(10.0 * 180.0 + 1000.0)
+    assert _schedule(unstated, "big") == [1, 1, 1]
+
+
+def test_minimum_up_time_carried_in_holds_a_running_unit_on() -> None:
+    # on for 1 period against a 3-period minimum up time: held on in periods 0 and 1, free in
+    # period 2. With a $3000 no-load, on for 0-1 then off costs 10·130 + 6000 + 50·50 = 9800
+    # against 1800 + 9000 = 10800 for the whole horizon.
+    result = solve_multiperiod(
+        _min_time_scenario(
+            (50.0, 80.0, 50.0),
+            big_no_load=3000.0,
+            big_p_mw=50.0,
+            min_up=3,
+            initial_state_periods=1,
+        ),
+        UC,
+    )
+
+    assert result.objective_cost == pytest.approx(9800.0)
+    assert _schedule(result, "big") == [1, 1, 0]
+    big = next(c for c in result.commitment if c.id == "big")
+    assert big.initial_on and big.stopped == [False, False, True]
+
+
+def test_a_minimum_of_one_period_builds_nothing_and_changes_nothing() -> None:
+    scenario = _two_unit_scenario(big_startup=5000.0)
+    arr = NetworkArrays.from_network(scenario.network)
+    cost_coeffs, _ = gen_cost_coeffs(scenario.network, arr)
+    base = Commitment(
+        startup_cost=np.array([0.0, 5000.0]),
+        shutdown_cost=np.zeros(2),
+        initial_on=np.array([True, False]),
+        no_load_cost=np.zeros(2),
+    )
+    ones = Commitment(
+        startup_cost=base.startup_cost,
+        shutdown_cost=base.shutdown_cost,
+        initial_on=base.initial_on,
+        no_load_cost=base.no_load_cost,
+        min_up_periods=np.ones(2, dtype=np.int64),
+        min_down_periods=np.ones(2, dtype=np.int64),
+        initial_state_periods=np.ones(2, dtype=np.int64),
+    )
+    load = np.array([[50.0], [80.0], [50.0]])
+
+    plain = multiperiod_dc_opf(arr, cost_coeffs, 3, period_load_mw=load, commitment=base)
+    same = multiperiod_dc_opf(arr, cost_coeffs, 3, period_load_mw=load, commitment=ones)
+
+    assert same.objective_cost == pytest.approx(plain.objective_cost) == pytest.approx(6800.0)
+    assert np.array_equal(same.committed, plain.committed)
+
+
+def test_builder_rejects_a_bad_minimum_time_block() -> None:
+    scenario = _two_unit_scenario(big_startup=1.0)
+    arr = NetworkArrays.from_network(scenario.network)
+    cost_coeffs, _ = gen_cost_coeffs(scenario.network, arr)
+
+    def block(**fields: object) -> Commitment:
+        return Commitment(
+            startup_cost=np.zeros(2),
+            shutdown_cost=np.zeros(2),
+            initial_on=np.zeros(2, dtype=np.bool_),
+            no_load_cost=np.zeros(2),
+            **fields,  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="min_up_periods must have shape"):
+        multiperiod_dc_opf(arr, cost_coeffs, 2, commitment=block(min_up_periods=np.ones(3, int)))
+    with pytest.raises(ValueError, match="min_down_periods must be integers >= 1"):
+        multiperiod_dc_opf(arr, cost_coeffs, 2, commitment=block(min_down_periods=np.array([1, 0])))
+    with pytest.raises(ValueError, match="min_up_periods must be integers"):
+        multiperiod_dc_opf(
+            arr, cost_coeffs, 2, commitment=block(min_up_periods=np.array([1.5, 2.0]))
+        )
+    with pytest.raises(ValueError, match="initial_state_periods must be integers >= 1"):
+        multiperiod_dc_opf(
+            arr, cost_coeffs, 2, commitment=block(initial_state_periods=np.array([0, 1]))
+        )
+
+
+def test_minimum_times_round_trip_through_json_and_csv() -> None:
+    import tempfile
+    from pathlib import Path
+
+    from mambo_power.io import csv_bundle
+
+    scenario = _min_time_scenario((50.0,), min_up=3, min_down=2, initial_state_periods=1)
+    net = scenario.network
+    big = next(g for g in net.generators if g.id == "big")
+    assert (big.min_up_periods, big.min_down_periods, big.initial_state_periods) == (3, 2, 1)
+
+    assert Network.model_validate_json(net.model_dump_json()) == net
+    with tempfile.TemporaryDirectory() as tmp:
+        csv_bundle.dump(net, Path(tmp))
+        back = csv_bundle.load(Path(tmp))
+    assert back.generators == net.generators
+    with pytest.raises(ValueError):
+        Generator.model_validate({**big.model_dump(), "min_up_periods": 0})
