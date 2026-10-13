@@ -24,7 +24,11 @@ class N1BranchFlag(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     branch_id: str = Field(description="The monitored branch id whose flow was flagged.")
-    rating_mva: float = Field(gt=0.0, description="The monitored branch's thermal rating, MVA.")
+    rating_mva: float = Field(
+        gt=0.0,
+        description="The post-contingency limit applied to the monitored branch, MVA: its "
+        "emergency rating where one is set, else its normal rating (ADR-020).",
+    )
     estimated_flow_mw: float = Field(
         ge=0.0, description="LODF-screen estimated |flow| on this branch after the outage, MW."
     )

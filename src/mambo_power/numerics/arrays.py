@@ -60,6 +60,10 @@ class NetworkArrays:
     shift_rad: FloatArray
     rating_pu: FloatArray
     """Thermal rating in pu of ``base_mva``; ``inf`` where the branch has none."""
+    rating_emergency_pu: FloatArray
+    """Post-contingency rating in pu of ``base_mva`` (ADR-020): ``Branch.rating_emergency_mva``
+    where set, else :attr:`rating_pu` (``inf`` on an unrated branch). Read by the N-1 screen
+    and the SCOPF's security rows; no base-case solve reads it."""
 
     p_load_pu: FloatArray
     q_load_pu: FloatArray
@@ -161,6 +165,14 @@ class NetworkArrays:
             np.float64,
             n_branch,
         )
+        rating_emergency_pu = np.fromiter(
+            (
+                rating_pu[k] if br.rating_emergency_mva is None else br.rating_emergency_mva / base
+                for k, br in enumerate(branches)
+            ),
+            np.float64,
+            n_branch,
+        )
 
         def per_bus(pairs: list[tuple[int, float]]) -> FloatArray:
             positions = np.fromiter((p for p, _ in pairs), np.int64, len(pairs))
@@ -229,6 +241,7 @@ class NetworkArrays:
             tap=tap,
             shift_rad=shift_rad,
             rating_pu=rating_pu,
+            rating_emergency_pu=rating_emergency_pu,
             p_load_pu=p_load_pu,
             q_load_pu=q_load_pu,
             g_shunt_pu=g_shunt_pu,

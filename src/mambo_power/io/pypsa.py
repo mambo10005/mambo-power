@@ -68,6 +68,7 @@ CODES: tuple[str, ...] = (
     "PYPSA_ZONE_DROPPED",
     "PYPSA_GEN_Q_LIMITS_DROPPED",
     "PYPSA_GEN_RAMP_DROPPED",
+    "PYPSA_EMERGENCY_RATING_DROPPED",
     "PYPSA_GEN_VSET_CONFLICT",
     "PYPSA_UNRATED_S_NOM_DEFAULTED",
     "PYPSA_COST_NONCONVEX",
@@ -173,6 +174,15 @@ def _add_branches(
     lines = [br for br in net.branches if not br.is_transformer]
     trafos = [br for br in net.branches if br.is_transformer]
     for br in net.branches:
+        if br.rating_emergency_mva is not None:
+            warn(
+                ConversionIssue(
+                    code="PYPSA_EMERGENCY_RATING_DROPPED",
+                    message=f"branch {br.id!r}: PyPSA branches carry one s_nom; dropped "
+                    f"rating_emergency_mva={br.rating_emergency_mva}",
+                    element_ids=[br.id],
+                )
+            )
         if br.rating_mva is None:
             warn(
                 ConversionIssue(

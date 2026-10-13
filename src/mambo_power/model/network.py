@@ -160,6 +160,14 @@ def validate_network(net: Network) -> list[ValidationIssue]:
                 f"branches[{index}].rating_mva",
                 f'branch "{branch.id}": rating_mva must be > 0 when given, got {branch.rating_mva}',
             )
+        emergency = branch.rating_emergency_mva
+        if emergency is not None and (branch.rating_mva is None or emergency < branch.rating_mva):
+            add(
+                "BAD_RANGE",
+                f"branches[{index}].rating_emergency_mva",
+                f'branch "{branch.id}": rating_emergency_mva {emergency} needs a rating_mva it is '
+                f"not below, got rating_mva {branch.rating_mva}",
+            )
     for index, gen in enumerate(net.generators):
         if gen.p_min_mw > gen.p_max_mw:
             add(

@@ -930,6 +930,46 @@ two more row families after the four of ADR-017.
 MIP; counting the minimum times in hours with a period duration on `Period` — a model change
 with no other consumer yet, and the ramps are already per period.
 
+## ADR-020 — Emergency ratings: a post-contingency flow is held to a second, higher limit
+
+**Status:** accepted 2026-10-13.
+
+**Context.** ADR-016's SCOPF and the N-1 screen held every post-contingency flow to the branch's
+one `rating_mva`. Operators rate a line twice: a continuous rating and a short-term one the
+line may carry for the minutes after a contingency, until corrective action. MATPOWER (`RATE_C`)
+and PSS/E (`RATEC`) both carry it; with only the normal rating the preventive dispatch is more
+expensive than it needs to be, and on the bundled fixtures often infeasible outright.
+
+**Decision.** `Branch.rating_emergency_mva`, a second optional rating that only the
+contingency code reads.
+
+1. **One array, one fallback.** `NetworkArrays.rating_emergency_pu` is the emergency rating
+   where set and `rating_pu` where not, so the N-1 screen, the confirming re-solve and the SCOPF's
+   security rows switch to it with one line each and a network that states none is unchanged.
+2. **The base case never sees it.** The power flow, DC-OPF and AC-OPF rate the intact network
+   at `rating_mva` alone; the SCOPF secures against the emergency rating while holding the base
+   case to the normal one — the standard preventive formulation with short-term ratings.
+3. **The data travels.** Read from MATPOWER `RATE_C` and PSS/E branch `RATEC` only where they
+   exceed the normal rating (every bundled case reads as before), round-tripped through JSON and
+   the CSV bundle, and reported as dropped by the pandapower and PyPSA exporters, which carry one
+   rating.
+4. **Validated.** An emergency rating needs a normal rating and may not be below it
+   (`BAD_RANGE`).
+
+**Consequences.**
+
+1. **"Secure" gains a second number.** `N1BranchFlag.rating_mva` and
+   `SecurityConstraintResult.rating_mva` report the limit that was applied, which is the
+   emergency rating where one exists.
+2. **The prerequisite for corrective redispatch.** A corrective SCOPF holds the immediate
+   post-contingency flow to the emergency rating and the redispatched one to the normal rating;
+   this field is the first of those two limits.
+3. **Not modelled:** a third (load-shedding) rating, time-dependent ratings, and PSS/E
+   transformer `RATC1`.
+
+*Rejected:* a single configurable factor on the normal rating (`ScopfOptions.emergency_factor`)
+— a global knob where the data is per branch and both file formats carry it per branch.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

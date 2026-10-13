@@ -161,7 +161,8 @@ def screen_flows(
     where the base case comes from. The LODF, bridges and (when ``ptdf_matrix`` is not given)
     the PTDF are computed here.
     """
-    rating_mva = arr.rating_pu * arr.base_mva
+    # post-contingency flows are held to the emergency rating where one is set (ADR-020)
+    rating_mva = arr.rating_emergency_pu * arr.base_mva
     ptdf_matrix = ptdf(arr) if ptdf_matrix is None else ptdf_matrix
     lodf_matrix = lodf(arr, ptdf_matrix)
     bridge_positions = bridges(arr)
@@ -225,7 +226,7 @@ def _flags_for(
     element.
     """
     confirmed_flow_mw = np.abs(sol_k.p_from_pu) * arr_k.base_mva
-    confirmed_rating_mva = arr_k.rating_pu * arr_k.base_mva
+    confirmed_rating_mva = arr_k.rating_emergency_pu * arr_k.base_mva
     flags: list[N1BranchFlag] = []
     for branch in monitored:
         monitored_id = arr.branch_ids[branch]

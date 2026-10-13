@@ -376,6 +376,8 @@ def _build(case: _Case) -> tuple[Network, list[ImportIssue]]:
             x=row[3],
             b=row[4],
             rating_mva=row[5] if row[5] > 0 else None,
+            # RATE_C, MATPOWER's emergency rating, only where it says more than RATE_A
+            rating_emergency_mva=row[7] if 0 < row[5] < row[7] else None,
             tap_ratio=row[8] if row[8] != 0 else None,
             shift_deg=row[9] if row[9] != 0 else None,
             in_service=row[10] > 0,

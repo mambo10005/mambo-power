@@ -32,7 +32,11 @@ class SecurityConstraintResult(BaseModel):
     outage_kind: Literal["branch", "generator"] = Field(description="What is lost.")
     outage_id: str = Field(description="Id of the outaged branch or generator.")
     branch_id: str = Field(description="The monitored branch id.")
-    rating_mva: float = Field(gt=0.0, description="The monitored branch's thermal rating, MVA.")
+    rating_mva: float = Field(
+        gt=0.0,
+        description="The post-contingency limit applied to the monitored branch, MVA: its "
+        "emergency rating where one is set, else its normal rating (ADR-020).",
+    )
     post_contingency_flow_mw: float = Field(
         description="Signed from-side flow on the monitored branch after the outage, MW."
     )

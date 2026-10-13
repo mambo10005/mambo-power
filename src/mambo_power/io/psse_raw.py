@@ -545,7 +545,7 @@ class _Builder:
             _require(f, 14, "branch", line)
             i, j = self.bus_ref(f[0], "branch I", line), self.bus_ref(f[1], "branch J", line)
             key = f"{i.id[4:]}-{j.id[4:]}-{f[2].strip()}"
-            r, x, b, rate_a = _floats(f[3:7], "branch", line)
+            r, x, b, rate_a, _rate_b, rate_c = _floats(f[3:9], "branch", line)
             gi, bi, gj, bj = _floats(f[9:13], "branch", line)
             st = _integer(_number(f[13], "branch ST", line), "branch ST", line)
             self.branches.append(
@@ -557,6 +557,8 @@ class _Builder:
                     x=x,
                     b=b,
                     rating_mva=_rating(rate_a),
+                    # RATEC, the emergency rating, only where it says more than RATEA
+                    rating_emergency_mva=rate_c if 0 < rate_a < rate_c else None,
                     in_service=st > 0,
                     kind="line",
                 )

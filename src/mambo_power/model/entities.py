@@ -69,6 +69,12 @@ class Branch(_Entity):
     x: float = Field(description="Series reactance, per unit on base_mva.")
     b: float = Field(description="Total line charging susceptance, per unit on base_mva.")
     rating_mva: float | None = Field(default=None, description="Thermal rating, MVA; None = none.")
+    rating_emergency_mva: float | None = Field(
+        default=None,
+        description="Short-term (post-contingency) rating, MVA, >= rating_mva (ADR-020); None = "
+        "the normal rating applies after a contingency too. Read by contingency.n1 and "
+        "opf.solve_scopf; never by a base-case solve.",
+    )
     tap_ratio: float | None = Field(default=None, description="Off-nominal tap; None = 1.0.")
     shift_deg: float | None = Field(default=None, description="Phase shift, degrees; None = 0.")
     in_service: bool = True

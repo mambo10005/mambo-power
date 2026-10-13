@@ -47,6 +47,19 @@
           "description": "Thermal rating, MVA; None = none.",
           "title": "Rating Mva"
         },
+        "rating_emergency_mva": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Short-term (post-contingency) rating, MVA, >= rating_mva (ADR-020); None = the normal rating applies after a contingency too. Read by contingency.n1 and opf.solve_scopf; never by a base-case solve.",
+          "title": "Rating Emergency Mva"
+        },
         "tap_ratio": {
           "anyOf": [
             {

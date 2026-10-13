@@ -143,7 +143,7 @@ string is a path or a document.
 | 4 | `BR_X` | `x` | pu |
 | 5 | `BR_B` | `b` | pu, total charging |
 | 6 | `RATE_A` | `rating_mva` | `0` means unrated → `None` |
-| 7–8 | `RATE_B`, `RATE_C` | dropped | short-term / emergency ratings |
+| 7–8 | `RATE_B`, `RATE_C` | `rating_emergency_mva` from `RATE_C` | only where `RATE_C > RATE_A > 0`; `RATE_B` dropped |
 | 9 | `TAP` | `tap_ratio` | `0` means nominal → `None` |
 | 10 | `SHIFT` | `shift_deg` | `0` → `None` |
 | 11 | `BR_STATUS` | `in_service` | `> 0` is in service |
@@ -354,7 +354,7 @@ to compute its impedance — it re-imports as a rating.
 | `ELEMENT_DROPPED` | both | Import: a row of a table that is not read (`trafo3w`, `switch`, `storage`, ...) or a `poly_cost` / `pwl_cost` row that is not a generator's active-power cost. Export: a `Storage` unit (pandapower's `storage` has no efficiency columns). |
 | `FIELD_DEFAULTED` | both | Import: a missing or `NaN` limit column (`min/max_p_mw`, `min/max_q_mvar` on `ext_grid` / `gen` / `sgen`) set to the element's setpoint, so the limits pin the setpoint rather than invent a range. Export: an unrated transformer's `sn_mva` set to `base_mva`. |
 | `ISLAND_DEACTIVATED` | import | As for MATPOWER: buses that cannot reach the slack are switched off with their elements ([islands](#islands)). |
-| `FIELD_DROPPED` | export | A model field with no pandapower column: `Zone.name`, a stored `Bus.vm_pu` / `va_deg` on any bus but the slack (results tables are not written; one issue, `bus_ids` names them), generator `ramp_up_mw` / `ramp_down_mw` / `min_up_periods` / `min_down_periods` / `initial_state_periods`, the slack generator's `p_mw` / `q_mvar` (`ext_grid` has no setpoint), a PV generator's `q_mvar`, an `sgen`'s `v_set_pu`, a transformer's `b` (no line charging on a trafo), `cost.startup` / `cost.shutdown`, and a piecewise cost's offset `points[0][1]`. |
+| `FIELD_DROPPED` | export | A model field with no pandapower column: `Zone.name`, a stored `Bus.vm_pu` / `va_deg` on any bus but the slack (results tables are not written; one issue, `bus_ids` names them), generator `ramp_up_mw` / `ramp_down_mw` / `min_up_periods` / `min_down_periods` / `initial_state_periods`, a branch's `rating_emergency_mva`, the slack generator's `p_mw` / `q_mvar` (`ext_grid` has no setpoint), a PV generator's `q_mvar`, an `sgen`'s `v_set_pu`, a transformer's `b` (no line charging on a trafo), `cost.startup` / `cost.shutdown`, and a piecewise cost's offset `points[0][1]`. |
 | `COST_DROPPED` | export | A polynomial cost of degree > 2 (`poly_cost` holds `cp0..cp2`); dropped, never approximated. |
 | `BID_DROPPED` | export | A load's demand bid (pandapower has no elastic demand); the load is written as a fixed `p_mw`. |
 
@@ -444,6 +444,7 @@ objective on every bundled case (`tests/parity/test_pypsa_export_vs_pypsa.py`).
 | `PYPSA_ZONE_DROPPED` | The `zones` list (PyPSA has no zone component); the bus `zone` column still names them. |
 | `PYPSA_GEN_Q_LIMITS_DROPPED` | `q_min_mvar` / `q_max_mvar` (PyPSA generators carry no reactive limits). |
 | `PYPSA_GEN_RAMP_DROPPED` | A ramp on a zero-capacity generator (cannot be a fraction of `p_nom = 0`). |
+| `PYPSA_EMERGENCY_RATING_DROPPED` | A branch with a `rating_emergency_mva`: PyPSA branches carry one `s_nom`. |
 | `PYPSA_GEN_VSET_CONFLICT` | In-service generators at one bus disagreeing on `v_set_pu`; PyPSA has one `v_mag_pu_set` per bus, the first in-service generator's wins (out-of-service units do not take part). |
 | `PYPSA_COST_NONCONVEX` | A quadratic cost with `c2 < 0` (concave). Exported unchanged as `marginal_cost_quadratic` — nothing is dropped — but PyPSA's solver will reject the non-convex objective with its own error, so the report names the generator up front. |
 | `PYPSA_UNRATED_S_NOM_DEFAULTED` | A branch with `rating_mva = None`, written with `s_nom = 1e5` (`pypsa.UNRATED_S_NOM_MVA`); one entry per branch naming it and the sentinel. |
@@ -532,7 +533,7 @@ way. Sections through zone must be present and terminated.
 | load | `I, ID, STATUS, AREA, ZONE, PL, QL, IP, IQ, YP, YQ` | `p_mw`, `q_mvar`; a non-zero `IP IQ YP YQ` is folded as `P = PL + IP·VM + YP·VM²` at the bus's `VM` (`RAW_LOAD_ZIP_FOLDED`) |
 | fixed shunt | `I, ID, STATUS, GL, BL` | `g_mw`, `b_mvar` (MW / MVAr at 1 pu) |
 | generator | `I, ID, PG, QG, QT, QB, VS, ..., STAT, ..., PT, PB` | `p_mw`, `q_mvar`, `q_max_mvar`, `q_min_mvar`, `v_set_pu`, `in_service`, `p_max_mw`, `p_min_mw`; `cost = None` (`RAW_NO_COSTS`); `IREG`, `MBASE`, `ZR/ZX`, `RT/XT`, `GTAP`, `RMPCT`, owners and `WMOD/WPF` dropped |
-| branch | `I, J, CKT, R, X, B, RATEA, ..., GI, BI, GJ, BJ, ST` | `r`, `x`, `b` (pu on `SBASE`), `rating_mva` (`RATEA`, `0` → `None`), `in_service`, `kind = "line"`; end shunts become `Shunt` entries (`RAW_BRANCH_END_SHUNT_FOLDED`); `RATEB/C`, `LEN`, owners dropped |
+| branch | `I, J, CKT, R, X, B, RATEA, ..., GI, BI, GJ, BJ, ST` | `r`, `x`, `b` (pu on `SBASE`), `rating_mva` (`RATEA`, `0` → `None`), `rating_emergency_mva` (`RATEC`, only where `RATEC > RATEA > 0`), `in_service`, `kind = "line"`; end shunts become `Shunt` entries (`RAW_BRANCH_END_SHUNT_FOLDED`); `RATEB`, `LEN`, owners dropped |
 | transformer (4 lines) | line 1 `I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, ..., STAT`; line 2 `R1-2, X1-2, SBASE1-2`; line 3 `WINDV1, NOMV1, ANG1, RATA1`; line 4 `WINDV2, NOMV2` | `r`, `x`, `tap_ratio`, `shift_deg = ANG1`, `rating_mva = RATA1`, `b = 0`, `kind = "transformer"` (set from the record, not inferred from the tap); magnetising admittance becomes a `Shunt` at the from bus (`RAW_XFMR_MAGNETISING_FOLDED`) |
 | zone | `I, ZONAME` | zone names → `Zone.name`. The **area** section is not read — only the bus `AREA` labels survive, as `Bus.area` — so each area record (`I, ISW, PDES, PTOL, ARNAME`) is reported `RAW_SECTION_IGNORED` |
 
@@ -599,7 +600,7 @@ Anything wrong with the **network** raises `NetworkValidationError`, as for ever
   and owners are skipped, not modelled. A switched shunt's `BINIT` is not folded, so a case
   whose voltage profile relies on it solves to a different voltage.
 - Transformers have `b = 0`; the magnetising branch is a bus shunt, not line charging.
-- Only `RATEA` becomes `rating_mva`; `RATEB` / `RATEC` are dropped.
+- `RATEA` becomes `rating_mva` and, on branch records, `RATEC` becomes `rating_emergency_mva` where it exceeds `RATEA`; `RATEB` and a transformer's `RATB1` / `RATC1` are dropped.
 
 ### Example
 

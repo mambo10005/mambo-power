@@ -36,8 +36,10 @@ column being zero —
 \]
 
 Both are linear in the dispatch, so each (outage, monitored branch) pair is one extra LP row,
-\(-\text{rating}_l \le \text{flow}^{(c)}_l \le \text{rating}_l\), with the same fixed-term folding
-as a base-case flow row. `opf.dc_opf.SecurityRows` is that block, and `dc_opf(..., security=...)`
+\(-\text{rating}^{\text{e}}_l \le \text{flow}^{(c)}_l \le \text{rating}^{\text{e}}_l\), with the same
+fixed-term folding as a base-case flow row; \(\text{rating}^{\text{e}}_l\) is the branch's
+[emergency rating](n1.md#emergency-ratings) where one is set, else its normal rating, while the
+base-case rows keep the normal rating. `opf.dc_opf.SecurityRows` is that block, and `dc_opf(..., security=...)`
 adds it after the base-case rows and prices it into `OpfDuals.security`; with `security=None`,
 every other caller's LP is byte-for-byte what it was.
 
@@ -132,6 +134,6 @@ is survivable too.
 
 ## Scope
 
-Preventive, single outages, DC. Corrective (post-contingency) redispatch, N-2, emergency ratings
-distinct from the normal rating, and an AC formulation are not modelled; the AC side is the same
-`ac_check` DC-OPF offers — a check, not a constraint.
+Preventive, single outages, DC, with a per-branch [emergency rating](n1.md#emergency-ratings) for
+the post-contingency rows. Corrective (post-contingency) redispatch, N-2 and an AC formulation
+are not modelled; the AC side is the same `ac_check` DC-OPF offers — a check, not a constraint.

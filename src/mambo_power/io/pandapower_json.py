@@ -1016,6 +1016,9 @@ def _export_branches(
 ) -> None:
     lines = [br for br in net.branches if not br.is_transformer]  # kind, or a later-assigned tap
     trafos = [br for br in net.branches if br.is_transformer]
+    for br in net.branches:
+        if br.rating_emergency_mva is not None:
+            dropped(br.id, "rating_emergency_mva", br.rating_emergency_mva)
     if lines:
         zb = [bus_by_id[br.from_bus].base_kv ** 2 / net.base_mva for br in lines]
         pp.create_lines_from_parameters(

@@ -137,7 +137,8 @@ def security_rows(
     rating_mw = np.zeros(n_rows)
     fixed_bus_mw = (arr.p_load_pu + arr.g_shunt_pu + p_shift(arr)) * arr.base_mva
     base_const = pf_shift(arr) * arr.base_mva - ptdf_matrix @ fixed_bus_mw
-    base_rating = arr.rating_pu * arr.base_mva
+    # a post-contingency row is held to the emergency rating where one is set (ADR-020)
+    base_rating = arr.rating_emergency_pu * arr.base_mva
     for r, c in enumerate(contingencies):
         if c.kind == "branch":
             factor = float(lodf_matrix[c.monitored, c.outage])
