@@ -30,7 +30,7 @@ python examples/02_ac_power_flow.py
 | [`11_zonal_redispatch.py`](#11-zonal-redispatch) | `market.solve_zonal`: zonal clearing, min-cost redispatch, the nodal reference, corridor duals, the three gap figures and the settlement identity | [Zonal market](../manual/zonal.md) |
 | [`12_agent_market.py`](#12-strategic-bidding) | `market.solve_agents`: generators offering through a `Strategy`, price-takers reproducing `solve_nodal` bit-exactly, a pivotal markup stopping at demand's own bid, the duopoly, `termination_reason`, `StrategyConfig` crossing `jobs` as JSON | [Agent-based bidding](../manual/agents.md) |
 | [`13_interop.py`](#13-interop) | pandapower JSON export solved by `pp.rundcpp`, pandapower's case14 imported losslessly, PyPSA export optimised by PyPSA against `solve_dc_opf`, PSS/E RAW import with `RAW_NO_COSTS`, a bit-exact CSV bundle round trip, and one deliberately lossy conversion with its `ExportReport`; additionally needs `pip install pandapower pypsa` | [File formats](../manual/formats.md) |
-| [`14_scopf.py`](#14-security-constrained-opf) | `opf.solve_scopf`: the cheapest dispatch no single outage can overload, what it costs, which contingencies bind, the confirming `contingency.n1` | [Security-constrained OPF](../manual/scopf.md) |
+| [`14_scopf.py`](#14-security-constrained-opf) | `opf.solve_scopf`: the cheapest dispatch no single outage can overload, what it costs, which contingencies bind, the confirming `contingency.n1`; corrective redispatch with emergency ratings | [Security-constrained OPF](../manual/scopf.md) |
 | [`15_unit_commitment.py`](#15-unit-commitment) | `market.solve_multiperiod` with `unit_commitment=True`: start-up costs, minimum outputs, minimum down times, when a cheap unit is worth starting, prices with the commitment fixed | [Multiperiod market › Unit commitment](../manual/multiperiod.md#unit-commitment) |
 | [`16_ac_opf.py`](#16-ac-optimal-power-flow) | `opf.solve_ac_opf` beside `solve_dc_opf`: losses, reactive dispatch, voltage bands, AC LMPs that vary with no limit binding | [AC-OPF](../manual/ac-opf.md) |
 
@@ -194,7 +194,10 @@ of its dispatch confirms eleven violating branch outages and one violating gener
 `opf.solve_scopf` secures it by constraint generation — three solves, 35 post-contingency rows —
 for 13 % more cost, spreading the dispatch off the slack unit whose main outlet cannot be spared.
 Three rows bind, one of them a generator outage, and the real `contingency.n1` of the secure
-dispatch, carried on the result, flags nothing.
+dispatch, carried on the result, flags nothing. With a 30 % emergency rating and a 20 MW
+corrective ramp on every unit, the corrective SCOPF ([ADR-021](../design/decisions.md)) secures
+the same network for $799/h instead of $1009/h, and every correction's real re-solve comes back
+at or under the normal rating.
 
 ``` { .python }
 --8<-- "examples/14_scopf.py"

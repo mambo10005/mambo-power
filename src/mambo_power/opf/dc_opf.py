@@ -207,6 +207,13 @@ class OpfDuals:
     security: FloatArray = field(default_factory=lambda: np.zeros(0))
     """Per-row shadow price of the post-contingency flow rows (:class:`SecurityRows`, ADR-016),
     in the caller's row order; length 0 when no ``security`` block was passed."""
+    corrective_balance: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Per-block shadow price of each corrected dispatch's own balance row
+    (:class:`CorrectiveRows`, ADR-021), $/MWh; part of the energy price, since a marginal MW of
+    load must be served by the corrected dispatch too. Length 0 without a corrective block."""
+    corrective_flow: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Per-row shadow price of the corrected post-contingency flow rows, in the caller's row
+    order; length 0 without a corrective block."""
 
 
 @dataclass(frozen=True)
@@ -240,6 +247,52 @@ class SecurityRows:
     @property
     def n_rows(self) -> int:
         """Number of rows in this block."""
+        return int(self.rating_mw.size)
+
+
+@dataclass(frozen=True)
+class CorrectiveRows:
+    """Post-contingency *redispatch* for :func:`dc_opf` (ADR-021, corrective SCOPF).
+
+    One **block** per corrected contingency: a second set of generator columns ``p^c``, bounded
+    like the base dispatch except the lost unit (``lost_gen[c] >= 0``) which is fixed at 0, tied
+    to the base dispatch by ``−ramp_down_mw[g] <= p^c_g − p_g <= ramp_up_mw[g]`` (a row only
+    where the ramp is finite), closing its own balance ``Σ p^c − Σ p_d == fixed load`` (no slack
+    pickup: the redispatch itself covers a lost unit), and holding the corrected flow of every
+    monitored branch in that contingency to the *normal* rating:  ``−rating_mw[r] − const_mw[r]
+    <= Σ_g bus_sensitivity[r, gen_bus[g]]·p^c_g − Σ_d bus_sensitivity[r, load_bus[d]]·p_d <=
+    rating_mw[r] − const_mw[r]`` for every row ``r`` with ``block_of_row[r] == c``. The
+    sensitivities are the same post-outage ones :class:`SecurityRows` carries; the immediate
+    (pre-correction) flow is still a :class:`SecurityRows` row at the emergency rating. The
+    corrected dispatch has no cost: the objective stays the base dispatch's.
+    :func:`mambo_power.opf.scopf.corrective_rows` builds the block.
+    """
+
+    lost_gen: IntArray
+    """``(n_blocks,)`` position of the generator lost in each block's contingency, ``-1`` for a
+    branch outage."""
+    ramp_up_mw: FloatArray
+    """``(n_gen,)`` how far each unit may move up between the base and a corrected dispatch,
+    MW; ``inf`` = unlimited."""
+    ramp_down_mw: FloatArray
+    """``(n_gen,)`` the same downwards."""
+    block_of_row: IntArray
+    """``(n_rows,)`` which block each corrected flow row belongs to."""
+    bus_sensitivity: FloatArray
+    """``(n_rows, n_bus)`` post-contingency flow sensitivity to a net injection at each bus."""
+    const_mw: FloatArray
+    """``(n_rows,)`` fixed (load, shunt, phase-shift) contribution to each corrected flow."""
+    rating_mw: FloatArray
+    """``(n_rows,)`` normal rating of each row's monitored branch, MW."""
+
+    @property
+    def n_blocks(self) -> int:
+        """Number of corrected contingencies."""
+        return int(self.lost_gen.size)
+
+    @property
+    def n_rows(self) -> int:
+        """Number of corrected flow rows over every block."""
         return int(self.rating_mw.size)
 
 
@@ -281,6 +334,9 @@ class OpfSolution:
     demand_bound: FloatArray = field(default_factory=lambda: np.zeros(0))
     """Per-elastic-load reduced cost of its ``[load_p_min_mw, load_p_max_mw]`` bound, same order
     as :attr:`demand_dispatch_mw`; 0 unless that load is pinned at a bound."""
+    corrective_dispatch_mw: FloatArray = field(default_factory=lambda: np.zeros((0, 0)))
+    """``(n_blocks, n_gen)`` corrected dispatch per :class:`CorrectiveRows` block (ADR-021),
+    MW; shape ``(0, 0)`` without a corrective block or when ``status != "Optimal"``."""
 
 
 @dataclass(frozen=True)
@@ -825,7 +881,10 @@ def _hypograph_rows(
 
 
 def lmp_decomposition(
-    duals: OpfDuals, ptdf: FloatArray, security: SecurityRows | None = None
+    duals: OpfDuals,
+    ptdf: FloatArray,
+    security: SecurityRows | None = None,
+    corrective: CorrectiveRows | None = None,
 ) -> LmpBreakdown:
     """Per-bus LMP = balance dual (energy) + Σ(flow-limit-row duals × that bus's PTDF column).
 
@@ -835,13 +894,20 @@ def lmp_decomposition(
     duals were solved with, ADR-016) the congestion term also carries ``Σ(security-row duals ×
     that bus's post-contingency sensitivity)``: a binding post-contingency limit prices the
     buses whose injections load the monitored branch in that contingency, exactly as a binding
-    base-case limit does.
+    base-case limit does. With ``corrective`` (ADR-021) the energy term adds every corrected
+    dispatch's own balance dual — a marginal MW of load has to be served after each corrected
+    contingency as well — and the congestion term the corrected flow rows' duals times their
+    sensitivities.
     """
     n_bus = ptdf.shape[1]
     energy = np.full(n_bus, duals.balance, dtype=np.float64)
     congestion = np.asarray(duals.flow_limit @ ptdf, dtype=np.float64)
     if security is not None and security.n_rows:
         congestion = congestion + duals.security @ security.bus_sensitivity
+    if corrective is not None and corrective.n_blocks:
+        energy = energy + float(np.sum(duals.corrective_balance))
+        if corrective.n_rows:
+            congestion = congestion + duals.corrective_flow @ corrective.bus_sensitivity
     return LmpBreakdown(lmp=energy + congestion, energy=energy, congestion=congestion)
 
 
@@ -855,6 +921,7 @@ def dc_opf(
     *,
     ptdf: FloatArray | None = None,
     security: SecurityRows | None = None,
+    corrective: CorrectiveRows | None = None,
 ) -> OpfSolution:
     """Solve the DC-OPF/welfare LP/QP of ``arr`` (module docstring): minimise Σ cost(p_g) −
     Σ value(p_d) subject to one system-wide nodal-balance row and one PTDF-based flow-limit row
@@ -1046,8 +1113,96 @@ def dc_opf(
             ),
         )
 
-    # PWL epigraph / hypograph rows, appended after the balance, flow-limit and security rows so
-    # those rows' indices (0, 1..n_branch and the security block, read below) are unaffected.
+    # Corrective blocks (ADR-021): per corrected contingency a second dispatch column block,
+    # appended after every column above (the Hessian prefix and the PWL tiers are untouched),
+    # with its balance row, its corrected flow rows and its ramp-coupling rows to the base
+    # dispatch, in that order, block after block, right after the security rows.
+    n_blocks = corrective.n_blocks if corrective is not None else 0
+    corrective_cols: list[ColArray] = []
+    corrective_row_index: list[int] = []  # LP row of each corrected flow row, caller's order
+    corrective_balance_index: list[int] = []
+    if corrective is not None and n_blocks:
+        if corrective.bus_sensitivity.shape != (corrective.n_rows, arr.n_bus) or (
+            corrective.ramp_up_mw.shape != (n_gen,) or corrective.ramp_down_mw.shape != (n_gen,)
+        ):
+            raise ValueError(
+                f"corrective rows must have bus_sensitivity ({corrective.n_rows}, {arr.n_bus}) "
+                f"and ramps ({n_gen},) for this network"
+            )
+        next_col = h.getNumCol()
+        next_row = n_rows + n_security
+        elastic_load_bus = arr.load_bus[elastic_idx_arr]
+        for b in range(n_blocks):
+            cols = np.arange(next_col, next_col + n_gen, dtype=np.int32)
+            next_col += n_gen
+            lower, upper = p_min.copy(), p_max.copy()
+            lost = int(corrective.lost_gen[b])
+            if lost >= 0:
+                lower[lost] = upper[lost] = 0.0
+            h.addVars(n_gen, lower, upper)
+            corrective_cols.append(cols)
+            _add_rows(h, _balance_row(cols, demand_cols, total_fixed))
+            corrective_balance_index.append(next_row)
+            next_row += 1
+            rows = np.flatnonzero(corrective.block_of_row == b)
+            if rows.size:
+                sensitivity = corrective.bus_sensitivity[rows]
+                coeffs = sensitivity[:, arr.gen_bus]
+                if lost >= 0:
+                    coeffs[:, lost] = 0.0
+                withdrawals = (
+                    -sensitivity[:, elastic_load_bus] if n_demand else np.zeros((rows.size, 0))
+                )
+                starts, indices, values = _dense_csr(
+                    np.hstack([coeffs, withdrawals]), np.concatenate([cols, demand_cols])
+                )
+                _add_rows(
+                    h,
+                    _RowBlock(
+                        lower=-corrective.rating_mw[rows] - corrective.const_mw[rows],
+                        upper=corrective.rating_mw[rows] - corrective.const_mw[rows],
+                        starts=starts,
+                        indices=indices,
+                        values=values,
+                    ),
+                )
+                corrective_row_index.extend(range(next_row, next_row + rows.size))
+                next_row += rows.size
+            ramped = [
+                g
+                for g in range(n_gen)
+                if g != lost
+                and (
+                    np.isfinite(corrective.ramp_up_mw[g]) or np.isfinite(corrective.ramp_down_mw[g])
+                )
+            ]
+            if ramped:
+                n_ramped = len(ramped)
+                _add_rows(
+                    h,
+                    _RowBlock(
+                        lower=np.array([-corrective.ramp_down_mw[g] for g in ramped]),
+                        upper=np.array([corrective.ramp_up_mw[g] for g in ramped]),
+                        starts=np.arange(0, 2 * n_ramped + 1, 2, dtype=np.int32),
+                        indices=np.array(
+                            [c for g in ramped for c in (int(cols[g]), int(gen_cols[g]))],
+                            dtype=np.int32,
+                        ),
+                        values=np.array([v for _ in ramped for v in (1.0, -1.0)]),
+                    ),
+                )
+                next_row += n_ramped
+        if corrective_row_index:
+            # rows were appended block by block; put the duals back in the caller's row order
+            order = np.concatenate(
+                [np.flatnonzero(corrective.block_of_row == b) for b in range(n_blocks)]
+            )
+            by_caller_row = np.empty(corrective.n_rows, dtype=np.int64)
+            by_caller_row[order] = np.array(corrective_row_index)
+            corrective_row_index = by_caller_row.tolist()
+
+    # PWL epigraph / hypograph rows, appended after the balance, flow-limit, security and
+    # corrective rows so those rows' indices (read below) are unaffected.
     _add_rows(h, _epigraph_rows(segments_by_gen, gen_cols, cost_col_of))
     _add_rows(h, _hypograph_rows(demand_segments_by_load, demand_col_of, demand_val_col_of))
 
@@ -1077,8 +1232,15 @@ def dc_opf(
         flow_limit=np.asarray(sol.row_dual[1:n_rows], dtype=np.float64),
         gen_bound=np.asarray(sol.col_dual[:n_gen], dtype=np.float64),
         security=np.asarray(sol.row_dual[n_rows : n_rows + n_security], dtype=np.float64),
+        corrective_balance=np.array([sol.row_dual[r] for r in corrective_balance_index]),
+        corrective_flow=np.array([sol.row_dual[r] for r in corrective_row_index]),
     )
     demand_bound = np.asarray(sol.col_dual[n_gen:n_dispatch], dtype=np.float64)
+    corrective_dispatch_mw = (
+        np.array([[sol.col_value[c] for c in cols] for cols in corrective_cols])
+        if corrective_cols
+        else np.zeros((0, 0))
+    )
 
     # objective_cost stays "total generation cost only" (unchanged M2/M3 semantics, docstring on
     # OpfSolution.objective_cost) even with elastic demand in the same solve — computed directly
@@ -1097,4 +1259,5 @@ def dc_opf(
         message=None,
         demand_dispatch_mw=demand_dispatch_mw,
         demand_bound=demand_bound,
+        corrective_dispatch_mw=corrective_dispatch_mw,
     )

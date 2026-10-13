@@ -59,12 +59,15 @@ from mambo_power.opf.multiperiod import (
 from mambo_power.opf.redispatch import RedispatchSolution, redispatch_dc_opf
 from mambo_power.opf.scopf import ScopfOptions, ScopfSolution, scopf_dc
 from mambo_power.opf.zonal import ZonalDuals, ZonalSolution, zonal_dc_opf
+from mambo_power.pf import dc as pfdc
 from mambo_power.pf import solve_ac
 from mambo_power.results import (
     AcBranchFlowResult,
     AcBusResult,
     AcGenDispatchResult,
     BusLmpResult,
+    CorrectiveActionResult,
+    GenCorrectionResult,
     GenDispatchResult,
     OpfAcResult,
     OpfBranchFlowResult,
@@ -314,7 +317,15 @@ def solve_scopf(net: Network, options: ScopfOptions | None = None) -> ScopfDcRes
     clock = time.perf_counter()
     arr = NetworkArrays.from_network(net)
     cost_coeffs, pwl_costs = gen_cost_coeffs(net, arr)
-    secured = scopf_dc(arr, cost_coeffs, opts, pwl_costs=pwl_costs or None)
+    ramp_up, ramp_down = _corrective_ramps(net, arr)
+    secured = scopf_dc(
+        arr,
+        cost_coeffs,
+        opts,
+        pwl_costs=pwl_costs or None,
+        ramp_up_mw=ramp_up,
+        ramp_down_mw=ramp_down,
+    )
     solution = secured.solution
 
     def provenance() -> ResultProvenance:
@@ -338,7 +349,7 @@ def solve_scopf(net: Network, options: ScopfOptions | None = None) -> ScopfDcRes
         )
 
     ptdf_matrix = solution.ptdf
-    lmp = lmp_decomposition(solution.duals, ptdf_matrix, secured.security)
+    lmp = lmp_decomposition(solution.duals, ptdf_matrix, secured.security, secured.corrective)
     gen_by_bus = np.bincount(arr.gen_bus, weights=solution.dispatch_mw, minlength=arr.n_bus)
     injection_mw = gen_by_bus - (arr.p_load_pu + arr.g_shunt_pu) * arr.base_mva
     flows_mw = flow_from_ptdf(ptdf_matrix, injection_mw, arr)
@@ -388,6 +399,7 @@ def solve_scopf(net: Network, options: ScopfOptions | None = None) -> ScopfDcRes
     secure = not any(o.confirmed_violating for o in confirmation.outages) and not any(
         o.confirmed_violating for o in confirmation.generator_outages
     )
+    corrections = _corrections(net, arr, secured)
     ac_check = feasibility_report(solve_ac(dispatched), dispatched) if opts.ac_check else None
     return ScopfDcResult(
         provenance=provenance(),
@@ -405,7 +417,73 @@ def solve_scopf(net: Network, options: ScopfOptions | None = None) -> ScopfDcRes
         constraints=constraints,
         n1=confirmation,
         ac_check=ac_check,
+        corrections=corrections,
+        corrected_secure=all(c.confirmed_max_loading <= 1.0 + 1e-9 for c in corrections),
     )
+
+
+def _corrective_ramps(net: Network, arr: NetworkArrays) -> tuple[FloatArray, FloatArray]:
+    """``Generator.ramp_up_mw`` / ``ramp_down_mw`` in ``arr`` order, ``inf`` where ``None``: the
+    corrective ramps of ADR-021, the same gather ``market.multiperiod`` makes for its ramp rows."""
+    gens_by_id = {g.id: g for g in net.generators}
+
+    def column(attribute: str) -> FloatArray:
+        values = [getattr(gens_by_id[gen_id], attribute) for gen_id in arr.gen_ids]
+        return np.array([np.inf if v is None else v for v in values], dtype=np.float64)
+
+    return column("ramp_up_mw"), column("ramp_down_mw")
+
+
+def _corrections(
+    net: Network, arr: NetworkArrays, secured: ScopfSolution
+) -> list[CorrectiveActionResult]:
+    """One :class:`~mambo_power.results.CorrectiveActionResult` per corrected outage (ADR-021),
+    each confirmed by a real DC re-solve of the network with the outage applied and the
+    corrected dispatch written in: the loading reported is that solve's, not the LP's."""
+    solution = secured.solution
+    if secured.corrective is None or solution.duals is None:
+        return []
+    rows_by_outage: dict[tuple[str, int], list[SecurityConstraintResult]] = {}
+    for r, c in enumerate(secured.corrected_contingencies):
+        rows_by_outage.setdefault((c.kind, c.outage), []).append(
+            SecurityConstraintResult(
+                outage_kind=c.kind,
+                outage_id=(arr.branch_ids if c.kind == "branch" else arr.gen_ids)[c.outage],
+                branch_id=arr.branch_ids[c.monitored],
+                rating_mva=float(secured.corrective.rating_mw[r]),
+                post_contingency_flow_mw=float(secured.corrected_flow_mw[r]),
+                dual=float(solution.duals.corrective_flow[r]),
+            )
+        )
+    out: list[CorrectiveActionResult] = []
+    for b, (kind, outage) in enumerate(secured.corrected_outages):
+        corrected = solution.corrective_dispatch_mw[b]
+        outage_id = (arr.branch_ids if kind == "branch" else arr.gen_ids)[outage]
+        outaged = _dispatched_copy(net, arr, corrected)
+        if kind == "branch":
+            next(br for br in outaged.branches if br.id == outage_id).in_service = False
+        else:
+            next(g for g in outaged.generators if g.id == outage_id).in_service = False
+        arr_k = NetworkArrays.from_network(outaged)
+        flows = np.abs(pfdc.solve(arr_k).p_from_pu)
+        loading = flows / arr_k.rating_pu  # inf rating -> 0
+        out.append(
+            CorrectiveActionResult(
+                outage_kind=kind,
+                outage_id=outage_id,
+                redispatch=[
+                    GenCorrectionResult(
+                        id=gen_id,
+                        p_mw=float(corrected[i]),
+                        delta_mw=float(corrected[i] - solution.dispatch_mw[i]),
+                    )
+                    for i, gen_id in enumerate(arr.gen_ids)
+                ],
+                constraints=rows_by_outage.get((kind, outage), []),
+                confirmed_max_loading=float(np.max(loading)) if loading.size else 0.0,
+            )
+        )
+    return out
 
 
 def voltage_limits(

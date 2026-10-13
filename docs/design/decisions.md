@@ -970,6 +970,59 @@ contingency code reads.
 *Rejected:* a single configurable factor on the normal rating (`ScopfOptions.emergency_factor`)
 — a global knob where the data is per branch and both file formats carry it per branch.
 
+## ADR-021 — Corrective SCOPF: a redispatch column block per contingency in the same LP
+
+**Status:** accepted 2026-10-13.
+
+**Context.** ADR-016's SCOPF is preventive: one dispatch holds every post-contingency flow,
+with no action after the outage. Operators do act — within the minutes an emergency rating
+(ADR-020) buys — and a preventive dispatch is dearer than it needs to be by exactly the
+corrections it refuses to count on. ADR-016 recorded corrective redispatch as the next step
+and ADR-020 supplied the first of its two limits.
+
+**Decision.** `ScopfOptions.corrective` adds, for every contingency that needs one, a corrected
+dispatch to the same LP.
+
+1. **A block, not a second solver.** `dc_opf` gains an optional `CorrectiveRows` block: per
+   corrected contingency a second set of generator columns, bounded like the base dispatch with
+   the lost unit fixed at zero, tied to the base dispatch by two-sided ramp rows
+   (`Generator.ramp_up_mw` / `ramp_down_mw`, the one-period ramp read as the corrective one),
+   closing its own balance with no slack pickup, and holding the monitored branches' corrected
+   flows to the *normal* rating. The immediate flow stays a `SecurityRows` row at the emergency
+   rating. The corrected dispatch has no cost: the objective is the base dispatch's.
+2. **Generated the same way.** The constraint-generation loop screens twice per solve: the base
+   dispatch against the emergency ratings (ADR-016, unchanged) and, per outage, the corrected
+   dispatch where one exists or the base dispatch where not against the normal ratings. Each
+   newly flagged pair is a corrected row; an outage flagged for the first time gets a block.
+   Linearity gives the same finite termination argument as ADR-016.
+3. **Priced.** A corrected balance row's dual joins the LMP's energy term and a corrected flow
+   row's the congestion term (`lmp_decomposition(..., corrective)`); on the hand case a binding
+   corrective ramp prices the load bus at the ramping unit's marginal cost.
+4. **Confirmed.** Every correction is re-solved for real — the network with the outage applied
+   and the corrected dispatch written in, through `pf.dc.solve` — and reported as
+   `confirmed_max_loading`; `corrected_secure` is that verdict, next to `n1`'s `secure` for the
+   immediate flows.
+
+**Consequences.**
+
+1. **Three answers bracket each other.** Preventive at the normal rating ≥ corrective ≥
+   preventive at the emergency rating, and without an emergency rating corrective equals
+   preventive. The hand case and case14_rated check the ordering.
+2. **The LP grows by `n_gen` columns per corrected outage**, not per contingency: only the
+   outages the screen flags against the normal rating get a block. On case14_rated with 30 %
+   emergency headroom that is 18 blocks and 3 solves.
+3. **The ramp field does double duty.** `ramp_up_mw` / `ramp_down_mw` are the per-period ramps
+   of the multiperiod market and the corrective ramps here; a dedicated corrective ramp is a
+   field away if a caller needs the two to differ.
+4. **Not modelled:** a cost on the correction, load shedding as a corrective action, N-2.
+
+*Rejected:* corrective rows on the base columns with a relaxed rating (a "soft preventive"
+formulation) — it answers a different question and cannot express a lost unit's replacement; a
+separate corrective SCOPF builder — ADR-007/008's duplication again; charging the corrected
+dispatch its own generation cost — it never runs unless the contingency happens, and the
+expected-cost weighting that would make it meaningful needs outage probabilities the model does
+not carry.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

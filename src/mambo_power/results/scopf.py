@@ -43,6 +43,46 @@ class SecurityConstraintResult(BaseModel):
     dual: float = Field(description="Shadow price of the post-contingency row; 0 unless binding.")
 
 
+class GenCorrectionResult(BaseModel):
+    """One generator's corrected output in one contingency (ADR-021)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    id: str = Field(description="Generator id from the network.")
+    p_mw: float = Field(description="Corrected output once the contingency has happened, MW.")
+    delta_mw: float = Field(description="p_mw minus the base-case dispatch, MW.")
+
+
+class CorrectiveActionResult(BaseModel):
+    """The post-contingency redispatch for one outage (ADR-021, corrective SCOPF).
+
+    The redispatch is the corrected dispatch the LP found for this outage: every unit within its
+    corrective ramp of the base case, the lost unit at zero, the load served without the slack
+    making anything up. ``constraints`` are the pairs whose *corrected* flow is held to the
+    normal rating; ``confirmed_max_loading`` is the real DC re-solve of the network with the
+    outage applied and this redispatch, as a fraction of the normal rating over every branch
+    — ``<= 1`` is what ``ScopfDcResult.corrected_secure`` means.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    outage_kind: Literal["branch", "generator"] = Field(description="What is lost.")
+    outage_id: str = Field(description="Id of the outaged branch or generator.")
+    redispatch: list[GenCorrectionResult] = Field(
+        description="Every generator's corrected output, generator order."
+    )
+    constraints: list[SecurityConstraintResult] = Field(
+        default_factory=list,
+        description="The corrected-flow rows for this outage: rating_mva is the normal rating, "
+        "post_contingency_flow_mw the corrected flow.",
+    )
+    confirmed_max_loading: float = Field(
+        ge=0.0,
+        description="Largest |flow| / normal rating over every rated branch in the confirming DC "
+        "re-solve with the outage applied and the redispatch in place.",
+    )
+
+
 class ScopfDcResult(BaseModel):
     """Result of :func:`mambo_power.opf.solve_scopf`.
 
@@ -53,6 +93,9 @@ class ScopfDcResult(BaseModel):
     "Optimal"`` the dispatch/LMP/flow rows are empty and ``message`` carries the diagnostic.
     ``n1`` is the real :func:`mambo_power.contingency.n1` of the secure dispatch and ``secure``
     is its verdict; ``security_cost`` is what the security rows added to the plain OPF's cost.
+    With ``ScopfOptions.corrective`` (ADR-021), ``n1`` confirms the *immediate* post-contingency
+    flows against the emergency ratings and ``corrections`` / ``corrected_secure`` the corrected
+    ones against the normal ratings.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
@@ -97,6 +140,16 @@ class ScopfDcResult(BaseModel):
         default=None,
         description="contingency.n1 of the secure dispatch (the confirmation); None when not "
         "Optimal.",
+    )
+    corrections: list[CorrectiveActionResult] = Field(
+        default_factory=list,
+        description="With ScopfOptions.corrective (ADR-021): the post-contingency redispatch for "
+        "every outage that needed one, in the order the loop added them.",
+    )
+    corrected_secure: bool = Field(
+        default=True,
+        description="Whether every correction's confirming re-solve keeps every branch at or "
+        "under its normal rating; True when there are no corrections.",
     )
     ac_check: FeasibilityReport | None = Field(
         default=None,

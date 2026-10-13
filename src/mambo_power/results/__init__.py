@@ -51,7 +51,12 @@ from mambo_power.results.power_flow import (
     PowerFlowResultBase,
 )
 from mambo_power.results.provenance import ResultProvenance
-from mambo_power.results.scopf import ScopfDcResult, SecurityConstraintResult
+from mambo_power.results.scopf import (
+    CorrectiveActionResult,
+    GenCorrectionResult,
+    ScopfDcResult,
+    SecurityConstraintResult,
+)
 from mambo_power.results.tables import (
     BranchResult,
     BusResult,
@@ -74,11 +79,13 @@ __all__ = [
     "AgentOfferResult",
     "BranchResult",
     "BusLmpResult",
+    "CorrectiveActionResult",
     "BusResult",
     "BusRole",
     "DcPowerFlowResult",
     "FeasibilityReport",
     "GenCommitmentResult",
+    "GenCorrectionResult",
     "GenDispatchResult",
     "GenPeriodDispatchResult",
     "GenRedispatchResult",

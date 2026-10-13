@@ -130,6 +130,7 @@ def screen_n1_dispatch(
     options: N1Options,
     *,
     ptdf_matrix: FloatArray | None = None,
+    rating_mw: FloatArray | None = None,
 ) -> N1Screen:
     """:func:`screen_n1` for a caller-supplied dispatch instead of the network's declared one.
 
@@ -139,13 +140,30 @@ def screen_n1_dispatch(
     identity :func:`mambo_power.pf.dc.solve` solves for. This is the screen
     :func:`mambo_power.opf.scopf.scopf_dc` runs on each candidate dispatch (ADR-016); a
     precomputed ``ptdf_matrix`` is reused when given, since that loop screens the same network
-    many times.
+    many times. ``rating_mw`` replaces the post-contingency limit the screen holds flows to
+    (the emergency rating, ADR-020) — the corrective SCOPF (ADR-021) screens against the normal
+    rating with it.
     """
     ptdf_matrix = ptdf(arr) if ptdf_matrix is None else ptdf_matrix
+    base_flow_signed_mw = dispatch_flows_mw(arr, gen_p_mw, ptdf_matrix)
+    return screen_flows(
+        arr,
+        base_flow_signed_mw,
+        gen_p_mw,
+        options,
+        ptdf_matrix=ptdf_matrix,
+        rating_mw=rating_mw,
+    )
+
+
+def dispatch_flows_mw(
+    arr: NetworkArrays, gen_p_mw: FloatArray, ptdf_matrix: FloatArray
+) -> FloatArray:
+    """Signed base-case branch flows, MW, of a dispatch that balances the fixed load and shunts:
+    :func:`mambo_power.numerics.bbus.flow_from_ptdf` of the resulting injection."""
     gen_by_bus = np.bincount(arr.gen_bus, weights=gen_p_mw, minlength=arr.n_bus)
     injection_mw = gen_by_bus - (arr.p_load_pu + arr.g_shunt_pu) * arr.base_mva
-    base_flow_signed_mw = flow_from_ptdf(ptdf_matrix, injection_mw, arr)
-    return screen_flows(arr, base_flow_signed_mw, gen_p_mw, options, ptdf_matrix=ptdf_matrix)
+    return flow_from_ptdf(ptdf_matrix, injection_mw, arr)
 
 
 def screen_flows(
@@ -155,14 +173,15 @@ def screen_flows(
     options: N1Options,
     *,
     ptdf_matrix: FloatArray | None = None,
+    rating_mw: FloatArray | None = None,
 ) -> N1Screen:
     """The screen proper, over a given base case: signed branch flows and per-generator dispatch
     in ``arr`` order, both MW. :func:`screen_n1` and :func:`screen_n1_dispatch` differ only in
     where the base case comes from. The LODF, bridges and (when ``ptdf_matrix`` is not given)
-    the PTDF are computed here.
+    the PTDF are computed here. ``rating_mw`` overrides the limit flows are held to.
     """
     # post-contingency flows are held to the emergency rating where one is set (ADR-020)
-    rating_mva = arr.rating_emergency_pu * arr.base_mva
+    rating_mva = arr.rating_emergency_pu * arr.base_mva if rating_mw is None else rating_mw
     ptdf_matrix = ptdf(arr) if ptdf_matrix is None else ptdf_matrix
     lodf_matrix = lodf(arr, ptdf_matrix)
     bridge_positions = bridges(arr)

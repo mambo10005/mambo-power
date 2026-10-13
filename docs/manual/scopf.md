@@ -5,7 +5,8 @@ outage without a post-contingency overload — the **preventive** form of securi
 one dispatch has to hold for every contingency, with no corrective action after the fact. It is
 built from two things this package already has: the [DC-OPF](opf.md) LP builder, and the
 [N-1 screen](n1.md), under exactly the same DC model, the same LODF/PTDF estimates, the same
-slack-absorbs-the-loss rule for a lost unit and the same ratings. The decision record is
+slack-absorbs-the-loss rule for a lost unit and the same ratings — or, with `corrective`, the
+cheapest dispatch from which every outage can be *corrected*. The decision record is
 [ADR-016](../design/decisions.md).
 
 | Entry point | Returns |
@@ -86,6 +87,38 @@ jobs API this is the structured `INFEASIBLE_LP` failure, like an infeasible `opf
 suite's own 1 MVA-floor ratings make every bundled fixture but case14 infeasible this way; the
 bundled [`derived/case14_rated`](n1.md#rating-data) (30 MVA floor) is secured at a cost.
 
+## Corrective redispatch
+
+`ScopfOptions(corrective=True)` ([ADR-021](../design/decisions.md)) lets the dispatch *change*
+after a contingency. The preventive formulation asks one dispatch to hold every post-contingency
+flow inside its limit; the corrective one asks two things of every contingency \(c\):
+
+- the **immediate** flow — the base dispatch with the outage applied, the slack making up a lost
+  unit — fits the [emergency rating](n1.md#emergency-ratings), as above;
+- a **corrected** dispatch \(p^c\) exists, each unit within its `ramp_up_mw` / `ramp_down_mw`
+  of the base dispatch (`None` = unlimited), the lost unit at zero, the load served with no slack
+  pickup, under which every flow fits the **normal** rating.
+
+The corrected dispatch is a second column block per contingency in the same LP
+(`opf.dc_opf.CorrectiveRows`): its own balance row, its corrected flow rows and its ramp-coupling
+rows to the base dispatch. It carries no cost — the objective is still the base dispatch's — so
+what is minimised is the cost of a base dispatch from which every contingency can be corrected.
+The loop generates the corrected rows the same way as the immediate ones: a second screen holds
+each outage's flows to the normal rating, against the corrected dispatch where the outage already
+has one and the base dispatch where it does not, and every newly flagged pair becomes a corrected
+row (and a block, for an outage that had none).
+
+Three answers for one network bracket each other, and the test suite's triangle checks all three
+by hand: preventive at the normal rating (the immediate flow must already fit it) is the dearest;
+preventive at the emergency rating alone is the cheapest, and promises nothing about getting back
+under the normal rating; corrective sits between them. Without an emergency rating the corrective
+answer *is* the preventive one, because the immediate flow already has to fit the normal rating.
+
+The prices follow: a corrected balance row's dual joins the energy term (a marginal MW of load
+has to be served after each corrected contingency too) and a binding corrected flow row's dual
+the congestion term, so an LMP can carry the cost of a corrective ramp that binds —
+`lmp_decomposition(duals, ptdf, security, corrective)`.
+
 ## The result
 
 `ScopfDcResult` carries the DC-OPF rows (`generators`, `buses`, `branches` — base-case flows at
@@ -100,6 +133,12 @@ the secure dispatch) plus:
   prices the buses whose injections load the monitored branch in that contingency, exactly as a
   binding base-case limit does (`lmp_decomposition(duals, ptdf, security)`).
 - `iterations`, `n1`, `secure`, and `ac_check` (as `opf.dc`'s, on the secure dispatch).
+- With `corrective`: `corrections` — one `CorrectiveActionResult` per outage that needed a
+  redispatch, with every unit's corrected output and `delta_mw`, that outage's corrected-flow
+  rows (`rating_mva` the normal rating) and `confirmed_max_loading`, the largest loading in a
+  real DC re-solve with the outage applied and the redispatch in place; `corrected_secure` is
+  that confirmation's verdict over every correction, as `secure` is `n1`'s over the immediate
+  flows.
 
 ## Using it
 
@@ -134,6 +173,7 @@ is survivable too.
 
 ## Scope
 
-Preventive, single outages, DC, with a per-branch [emergency rating](n1.md#emergency-ratings) for
-the post-contingency rows. Corrective (post-contingency) redispatch, N-2 and an AC formulation
-are not modelled; the AC side is the same `ac_check` DC-OPF offers — a check, not a constraint.
+Single outages, DC, preventive or [corrective](#corrective-redispatch), with a per-branch
+[emergency rating](n1.md#emergency-ratings) for the immediate post-contingency flow. N-2, a cost
+on the corrective action itself, and an AC formulation are not modelled; the AC side is the same
+`ac_check` DC-OPF offers — a check, not a constraint.

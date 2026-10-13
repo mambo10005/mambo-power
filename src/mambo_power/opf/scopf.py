@@ -35,11 +35,23 @@ import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field
 
-from mambo_power.contingency.n1 import N1Options, N1Screen, screen_n1_dispatch
+from mambo_power.contingency.n1 import (
+    VIOLATION_TOL_MVA,
+    N1Options,
+    N1Screen,
+    dispatch_flows_mw,
+    screen_n1_dispatch,
+)
 from mambo_power.numerics import NetworkArrays, lodf
 from mambo_power.numerics import ptdf as compute_ptdf
 from mambo_power.numerics.bbus import p_shift, pf_shift
-from mambo_power.opf.dc_opf import OpfDcOptions, OpfSolution, SecurityRows, dc_opf
+from mambo_power.opf.dc_opf import (
+    CorrectiveRows,
+    OpfDcOptions,
+    OpfSolution,
+    SecurityRows,
+    dc_opf,
+)
 
 FloatArray = npt.NDArray[np.float64]
 OutageKind = Literal["branch", "generator"]
@@ -69,6 +81,12 @@ class ScopfOptions(BaseModel):
         default=False,
         description="Re-run pf.solve_ac on the secure dispatch and attach a "
         "results.FeasibilityReport, as opf.dc's ac_check does.",
+    )
+    corrective: bool = Field(
+        default=False,
+        description="Allow post-contingency redispatch (ADR-021): the immediate post-outage "
+        "flow is held to the emergency rating and a corrected dispatch, each unit moved by at "
+        "most its ramp_up_mw / ramp_down_mw, to the normal rating.",
     )
 
 
@@ -111,6 +129,66 @@ class ScopfSolution:
     post_contingency_flow_mw: FloatArray = field(default_factory=lambda: np.zeros(0))
     """Signed post-contingency flow of each constrained pair at the final dispatch, MW, aligned
     with ``contingencies``."""
+    corrected_outages: list[tuple[OutageKind, int]] = field(default_factory=list)
+    """The contingencies that have a corrected dispatch (ADR-021), one per
+    :class:`~mambo_power.opf.dc_opf.CorrectiveRows` block, in block order; empty without
+    ``options.corrective``."""
+    corrected_contingencies: list[Contingency] = field(default_factory=list)
+    """The pairs whose *corrected* flow is constrained, aligned with ``corrective`` and
+    ``solution.duals.corrective_flow``."""
+    corrective: CorrectiveRows | None = None
+    """The corrective block of the final solve; ``None`` without ``options.corrective``."""
+    corrected_flow_mw: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Signed corrected flow of each pair in ``corrected_contingencies`` at the final corrected
+    dispatches, MW."""
+
+
+def corrective_rows(
+    arr: NetworkArrays,
+    ptdf_matrix: FloatArray,
+    lodf_matrix: FloatArray,
+    outages: Sequence[tuple[OutageKind, int]],
+    contingencies: Sequence[Contingency],
+    ramp_up_mw: FloatArray,
+    ramp_down_mw: FloatArray,
+) -> CorrectiveRows:
+    """Build the :class:`~mambo_power.opf.dc_opf.CorrectiveRows` block (ADR-021): one block per
+    entry of *outages*, one corrected flow row per entry of *contingencies* (each of which names
+    an outage in *outages*), held to the **normal** rating. The sensitivities and constants are
+    :func:`security_rows`'s; the lost unit's column is zeroed by ``dc_opf`` itself.
+    """
+    block_index = {outage: b for b, outage in enumerate(outages)}
+    rows = security_rows(arr, ptdf_matrix, lodf_matrix, contingencies)
+    return CorrectiveRows(
+        lost_gen=np.array(
+            [outage if kind == "generator" else -1 for kind, outage in outages], dtype=np.int64
+        ),
+        ramp_up_mw=ramp_up_mw,
+        ramp_down_mw=ramp_down_mw,
+        block_of_row=np.array(
+            [block_index[(c.kind, c.outage)] for c in contingencies], dtype=np.int64
+        ),
+        bus_sensitivity=rows.bus_sensitivity,
+        const_mw=rows.const_mw,
+        rating_mw=(arr.rating_pu * arr.base_mva)[[c.monitored for c in contingencies]],
+    )
+
+
+def _corrected_flows_mw(
+    arr: NetworkArrays,
+    ptdf_matrix: FloatArray,
+    lodf_matrix: FloatArray,
+    outage: tuple[OutageKind, int],
+    dispatch_mw: FloatArray,
+) -> FloatArray:
+    """Signed flow of every branch under *outage* at a corrected *dispatch_mw*, which balances
+    the load with the lost unit at zero: no slack pickup, so a generator outage's flows are the
+    plain flows of that dispatch."""
+    flows = dispatch_flows_mw(arr, dispatch_mw, ptdf_matrix)
+    kind, k = outage
+    if kind == "branch":
+        flows = flows + lodf_matrix[:, k] * flows[k]
+    return flows
 
 
 def security_rows(
@@ -180,6 +258,9 @@ def scopf_dc(
     cost_coeffs: FloatArray,
     options: ScopfOptions,
     pwl_costs: Mapping[int, Sequence[tuple[float, float]]] | None = None,
+    *,
+    ramp_up_mw: FloatArray | None = None,
+    ramp_down_mw: FloatArray | None = None,
 ) -> ScopfSolution:
     """Security-constrained DC-OPF by constraint generation (module docstring).
 
@@ -188,21 +269,73 @@ def scopf_dc(
     every newly flagged (outage, branch) pair and re-solves, until the screen flags nothing that
     is not already constrained or ``options.max_iterations`` solves have run. Never raises for a
     non-Optimal LP — reported through ``status``/``message`` like ``dc_opf``.
+
+    With ``options.corrective`` (ADR-021) a second screen holds every outage's flows to the
+    *normal* rating, against the corrected dispatch of that outage where one exists and the
+    base dispatch where not; each newly flagged pair becomes a corrected flow row (and a
+    corrective block for an outage that had none). ``ramp_up_mw``/``ramp_down_mw`` are the
+    ``(n_gen,)`` corrective ramps, ``None``/``nan``/``inf`` marking an unlimited unit.
     """
     opf_options = OpfDcOptions()
     n1_options = N1Options(generator_outages=options.generator_outages)
     ptdf_matrix = compute_ptdf(arr)
     lodf_matrix = lodf(arr, ptdf_matrix)
+    n_gen = len(arr.gen_ids)
+    normal_rating_mw = arr.rating_pu * arr.base_mva
+    ramp_up = _corrective_ramp("ramp_up_mw", ramp_up_mw, n_gen)
+    ramp_down = _corrective_ramp("ramp_down_mw", ramp_down_mw, n_gen)
 
     constrained: list[Contingency] = []
     seen: set[Contingency] = set()
     security = security_rows(arr, ptdf_matrix, lodf_matrix, constrained)
+    outages: list[tuple[OutageKind, int]] = []
+    corrected: list[Contingency] = []
+    corrected_seen: set[Contingency] = set()
+    corrective: CorrectiveRows | None = None
     base_cost: float | None = None
     iterations = 0
+
+    def finish(
+        status: str, solution: OpfSolution, screen: N1Screen, message: str | None
+    ) -> ScopfSolution:
+        corrected_flows = np.array(
+            [
+                _corrected_flows_mw(
+                    arr,
+                    ptdf_matrix,
+                    lodf_matrix,
+                    (c.kind, c.outage),
+                    solution.corrective_dispatch_mw[outages.index((c.kind, c.outage))],
+                )[c.monitored]
+                for c in corrected
+            ]
+        )
+        return ScopfSolution(
+            status=status,
+            solution=solution,
+            contingencies=constrained,
+            security=security,
+            iterations=iterations,
+            base_objective_cost=base_cost if base_cost is not None else 0.0,
+            screen=screen,
+            message=message,
+            post_contingency_flow_mw=_post_contingency_flows(arr, security, solution.dispatch_mw),
+            corrected_outages=list(outages),
+            corrected_contingencies=list(corrected),
+            corrective=corrective,
+            corrected_flow_mw=corrected_flows,
+        )
+
     while True:
         iterations += 1
         solution = dc_opf(
-            arr, cost_coeffs, opf_options, pwl_costs=pwl_costs, ptdf=ptdf_matrix, security=security
+            arr,
+            cost_coeffs,
+            opf_options,
+            pwl_costs=pwl_costs,
+            ptdf=ptdf_matrix,
+            security=security,
+            corrective=corrective,
         )
         if base_cost is None:
             base_cost = solution.objective_cost
@@ -215,41 +348,78 @@ def scopf_dc(
                 iterations=iterations,
                 base_objective_cost=base_cost,
                 message=f"scopf_dc: iteration {iterations}: {solution.message}",
+                corrected_outages=list(outages),
+                corrected_contingencies=list(corrected),
+                corrective=corrective,
             )
+        # the immediate post-contingency flows, against the emergency rating
         screen = screen_n1_dispatch(arr, solution.dispatch_mw, n1_options, ptdf_matrix=ptdf_matrix)
         new = [c for c in _flagged_pairs(screen) if c not in seen]
-        if not new:
-            post = _post_contingency_flows(arr, security, solution.dispatch_mw)
-            return ScopfSolution(
-                status=_OPTIMAL,
-                solution=solution,
-                contingencies=constrained,
-                security=security,
-                iterations=iterations,
-                base_objective_cost=base_cost,
-                screen=screen,
-                post_contingency_flow_mw=post,
+        # the corrected flows, against the normal rating: a corrected dispatch where the outage
+        # has one, the base dispatch where it does not yet
+        new_corrected: list[Contingency] = []
+        if options.corrective:
+            normal_screen = screen_n1_dispatch(
+                arr,
+                solution.dispatch_mw,
+                n1_options,
+                ptdf_matrix=ptdf_matrix,
+                rating_mw=normal_rating_mw,
             )
+            for c in _flagged_pairs(normal_screen):
+                if (c.kind, c.outage) not in outages and c not in corrected_seen:
+                    new_corrected.append(c)
+            for b, outage in enumerate(outages):
+                flows = np.abs(
+                    _corrected_flows_mw(
+                        arr, ptdf_matrix, lodf_matrix, outage, solution.corrective_dispatch_mw[b]
+                    )
+                )
+                skip = outage[1] if outage[0] == "branch" else -1
+                for monitored in range(arr.n_branch):
+                    if monitored == skip:
+                        continue
+                    if flows[monitored] > normal_rating_mw[monitored] + VIOLATION_TOL_MVA:
+                        c = Contingency(outage[0], outage[1], monitored)
+                        if c not in corrected_seen:
+                            new_corrected.append(c)
+        if not new and not new_corrected:
+            return finish(_OPTIMAL, solution, screen, None)
         if iterations >= options.max_iterations:
-            return ScopfSolution(
-                status=ITERATION_LIMIT,
-                solution=solution,
-                contingencies=constrained,
-                security=security,
-                iterations=iterations,
-                base_objective_cost=base_cost,
-                screen=screen,
-                message=(
-                    f"scopf_dc: {iterations} solves reached options.max_iterations with "
-                    f"{len(new)} newly flagged (outage, branch) pairs still unconstrained"
-                ),
-                post_contingency_flow_mw=_post_contingency_flows(
-                    arr, security, solution.dispatch_mw
-                ),
+            return finish(
+                ITERATION_LIMIT,
+                solution,
+                screen,
+                f"scopf_dc: {iterations} solves reached options.max_iterations with "
+                f"{len(new) + len(new_corrected)} newly flagged (outage, branch) pairs still "
+                "unconstrained",
             )
         constrained.extend(new)
         seen.update(new)
         security = security_rows(arr, ptdf_matrix, lodf_matrix, constrained)
+        if new_corrected:
+            for c in new_corrected:
+                if (c.kind, c.outage) not in outages:
+                    outages.append((c.kind, c.outage))
+            corrected.extend(new_corrected)
+            corrected_seen.update(new_corrected)
+            corrective = corrective_rows(
+                arr, ptdf_matrix, lodf_matrix, outages, corrected, ramp_up, ramp_down
+            )
+
+
+def _corrective_ramp(name: str, values: FloatArray | None, n_gen: int) -> FloatArray:
+    """``(n_gen,)`` corrective ramp with ``inf`` where unlimited; ``None``, ``nan`` and ``inf``
+    all mean unlimited, a negative value is a ``ValueError``."""
+    if values is None:
+        return np.full(n_gen, np.inf)
+    out = np.asarray(values, dtype=np.float64).copy()
+    if out.shape != (n_gen,):
+        raise ValueError(f"{name} must have shape ({n_gen},), got {out.shape}")
+    out[np.isnan(out)] = np.inf
+    if np.any(out < 0):
+        raise ValueError(f"{name} must be >= 0 (inf or nan for an unlimited unit)")
+    return out
 
 
 def _post_contingency_flows(
