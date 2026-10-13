@@ -32,6 +32,20 @@ with ``period_load_mw=None`` -- which makes the builder's fixed-load and flow-co
 expressions *literally* ``dc_opf``'s, so the result is bit-for-bit ``market.nodal``'s (wave
 AC-4). It is not an error and not a special case; it is the degenerate end of the same code path.
 
+**Unit commitment (ADR-017).** With ``MarketMultiperiodOptions.unit_commitment`` the builder is
+handed a :class:`~mambo_power.opf.multiperiod.Commitment` block gathered here the way ramps are:
+start-up and shut-down costs from each generator's :class:`~mambo_power.model.GeneratorCost`
+(``startup``/``shutdown``, defaults 0), the status before the horizon from the unit's declared
+``p_mw`` — a unit dispatched above zero in the network's own state is on, one at zero is off —
+and a polynomial cost's constant term ``c0`` as the unit's **no-load** cost, paid only while on
+(the LP charges it in every period unconditionally, which is the right reading when nothing can
+be switched off). HiGHS solves MILPs, not MIQPs, so a quadratic cost is **linearised** here into
+``quadratic_segments`` equal-width convex chords between 0 and ``p_max`` and passed as a
+piecewise-linear cost; the reported ``objective_cost`` is the chord cost, a slight over-estimate
+of the quadratic one. The clearing becomes a MIP; the prices and settlement below are those of
+the LP left once the commitment is fixed at the optimum (the builder's own two-pass rule), and
+the result carries each unit's schedule in ``MarketMultiperiodResult.commitment``.
+
 **Settlement.** Payments, receipts and congestion rent are computed per period, directly from
 that period's LMPs and dispatch. Storage is settled as the third participant it physically is --
 it pays for what it stores and is paid for what it returns -- and
@@ -45,7 +59,7 @@ import time
 from datetime import UTC, datetime
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 import mambo_power
 from mambo_power.model import Network, Period, Scenario
@@ -58,9 +72,10 @@ from mambo_power.opf.dc_opf import (
     OpfDuals,
     lmp_decomposition,
 )
-from mambo_power.opf.multiperiod import MultiperiodSolution, multiperiod_dc_opf
+from mambo_power.opf.multiperiod import Commitment, MultiperiodSolution, multiperiod_dc_opf
 from mambo_power.results import (
     BusLmpResult,
+    GenCommitmentResult,
     GenPeriodDispatchResult,
     LoadDispatchResult,
     MarketMultiperiodResult,
@@ -92,6 +107,89 @@ class MarketMultiperiodOptions(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    unit_commitment: bool = Field(
+        default=False,
+        description="Clear with per-unit on/off decisions (ADR-017): start-up and shut-down "
+        "costs, no-load costs only while on, minimum output only while on; prices from the LP "
+        "with the commitment fixed.",
+    )
+    quadratic_segments: int = Field(
+        default=8,
+        ge=1,
+        description="With unit_commitment, the number of equal-width chords a quadratic "
+        "generator cost is linearised into between 0 and p_max (HiGHS has no MIQP).",
+    )
+
+
+def _commitment(
+    net: Network,
+    arr: NetworkArrays,
+    cost_coeffs: FloatArray,
+    pwl_costs: dict[int, list[tuple[float, float]]],
+    segments: int,
+) -> tuple[Commitment, FloatArray, dict[int, list[tuple[float, float]]]]:
+    """The :class:`~mambo_power.opf.multiperiod.Commitment` block of ``net`` (module docstring,
+    "Unit commitment") plus the cost arguments rewritten for it: ``c0`` moved into the block as
+    the no-load cost, and every quadratic cost linearised into ``segments`` chords of
+    ``c2·p² + c1·p`` between 0 and ``p_max`` and moved into the piecewise map. Returns
+    ``(commitment, cost_coeffs, pwl_costs)``; the inputs are not modified.
+    """
+    gens_by_id = {g.id: g for g in net.generators}
+    n_gen = len(arr.gen_ids)
+    startup = np.zeros(n_gen)
+    shutdown = np.zeros(n_gen)
+    initial_on = np.zeros(n_gen, dtype=np.bool_)
+    coeffs = np.array(cost_coeffs, dtype=np.float64, copy=True)
+    pwl = {i: list(points) for i, points in pwl_costs.items()}
+    no_load = coeffs[:, 2].copy()
+    coeffs[:, 2] = 0.0
+    p_max = arr.gen_p_max_pu * arr.base_mva
+    for i, gen_id in enumerate(arr.gen_ids):
+        gen = gens_by_id[gen_id]
+        if gen.cost is not None:
+            startup[i] = gen.cost.startup
+            shutdown[i] = gen.cost.shutdown
+        initial_on[i] = gen.p_mw > 0.0
+        c2, c1 = float(coeffs[i, 0]), float(coeffs[i, 1])
+        if c2 != 0.0:
+            grid = np.linspace(0.0, max(float(p_max[i]), 0.0), segments + 1)
+            pwl[i] = [(float(p), float(c2 * p * p + c1 * p)) for p in grid]
+            coeffs[i, :2] = 0.0
+    commitment = Commitment(
+        startup_cost=startup, shutdown_cost=shutdown, initial_on=initial_on, no_load_cost=no_load
+    )
+    return commitment, coeffs, pwl
+
+
+def _commitment_rows(
+    arr: NetworkArrays, solution: MultiperiodSolution, commitment: Commitment
+) -> list[GenCommitmentResult]:
+    """One :class:`~mambo_power.results.GenCommitmentResult` per generator."""
+    rows = []
+    for i, gen_id in enumerate(arr.gen_ids):
+        on = solution.committed[:, i]
+        started = solution.started[:, i]
+        stopped = solution.stopped[:, i]
+        rows.append(
+            GenCommitmentResult(
+                id=gen_id,
+                committable=bool(
+                    arr.gen_p_min_pu[i] > 0.0
+                    or commitment.no_load_cost[i] > 0.0
+                    or commitment.startup_cost[i] > 0.0
+                    or commitment.shutdown_cost[i] > 0.0
+                ),
+                initial_on=bool(commitment.initial_on[i]),
+                on=[bool(x) for x in on],
+                started=[bool(x) for x in started],
+                stopped=[bool(x) for x in stopped],
+                startup_cost=float(commitment.startup_cost[i] * np.sum(started)),
+                shutdown_cost=float(commitment.shutdown_cost[i] * np.sum(stopped)),
+                no_load_cost=float(commitment.no_load_cost[i] * np.sum(on)),
+            )
+        )
+    return rows
 
 
 def _period_load_mw(net: Network, arr: NetworkArrays, periods: list[Period]) -> FloatArray:
@@ -165,6 +263,7 @@ def _period_rows(
             # duals.ramp is (T-1, n_gen): row t-1 is the row coupling t-1 to t, so period 0 has
             # no row reaching into it and reports 0.0 rather than borrowing another period's.
             ramp_dual=float(duals.ramp[t - 1, i]) if t > 0 else 0.0,
+            committed=bool(solution.committed[t, i]) if solution.committed.size else True,
         )
         for i, gen_id in enumerate(arr.gen_ids)
     ]
@@ -272,6 +371,11 @@ def solve_multiperiod(
     # None (rather than a materialised copy of the network's own loads) is deliberate: it is what
     # makes the builder evaluate dc_opf's literal fixed-load expression, hence AC-4's exactness.
     fixed_load_mw = None if periods is None else _period_load_mw(net, arr, periods)
+    commitment = None
+    if opts.unit_commitment:
+        commitment, cost_coeffs, pwl_costs = _commitment(
+            net, arr, cost_coeffs, pwl_costs, opts.quadratic_segments
+        )
 
     solution = multiperiod_dc_opf(
         arr,
@@ -283,6 +387,7 @@ def solve_multiperiod(
         pwl_costs=pwl_costs or None,
         demand_bid_coeffs=demand_bid_coeffs or None,
         demand_pwl_bids=demand_pwl_bids or None,
+        commitment=commitment,
     )
     elapsed_s = time.perf_counter() - clock
     provenance = ResultProvenance(
@@ -326,4 +431,7 @@ def solve_multiperiod(
         total_storage_charge_payment=horizon("total_storage_charge_payment"),
         total_storage_discharge_revenue=horizon("total_storage_discharge_revenue"),
         congestion_rent=horizon("congestion_rent"),
+        commitment=_commitment_rows(arr, solution, commitment) if commitment is not None else [],
+        commitment_cost=solution.commitment_cost,
+        no_load_cost=solution.no_load_cost,
     )

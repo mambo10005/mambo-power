@@ -1,6 +1,6 @@
 # Examples
 
-Fourteen runnable scripts live under `examples/` in the repository. Each one is self-contained,
+Fifteen runnable scripts live under `examples/` in the repository. Each one is self-contained,
 reads only the bundled cases through `mambo_power.cases`, prints a short deterministic summary
 and exits 0 in about a second. They are executed on every push — by
 `tests/unit/test_examples_run.py` inside the test matrix and by the dedicated `examples` CI job —
@@ -31,6 +31,7 @@ python examples/02_ac_power_flow.py
 | [`12_agent_market.py`](#12-strategic-bidding) | `market.solve_agents`: generators offering through a `Strategy`, price-takers reproducing `solve_nodal` bit-exactly, a pivotal markup stopping at demand's own bid, the duopoly, `termination_reason`, `StrategyConfig` crossing `jobs` as JSON | [Agent-based bidding](../manual/agents.md) |
 | [`13_interop.py`](#13-interop) | pandapower JSON export solved by `pp.rundcpp`, pandapower's case14 imported losslessly, PyPSA export optimised by PyPSA against `solve_dc_opf`, PSS/E RAW import with `RAW_NO_COSTS`, a bit-exact CSV bundle round trip, and one deliberately lossy conversion with its `ExportReport`; additionally needs `pip install pandapower pypsa` | [File formats](../manual/formats.md) |
 | [`14_scopf.py`](#14-security-constrained-opf) | `opf.solve_scopf`: the cheapest dispatch no single outage can overload, what it costs, which contingencies bind, the confirming `contingency.n1` | [Security-constrained OPF](../manual/scopf.md) |
+| [`15_unit_commitment.py`](#15-unit-commitment) | `market.solve_multiperiod` with `unit_commitment=True`: start-up costs, minimum outputs, when a cheap unit is worth starting, prices with the commitment fixed | [Multiperiod market › Unit commitment](../manual/multiperiod.md#unit-commitment) |
 
 ## 1. Load and validate
 
@@ -165,7 +166,7 @@ two-agent duopoly reporting `converged`, the same run under an iteration cap rep
 
 ## 13. Interop
 
-Unlike the other thirteen, this script additionally needs `pip install pandapower pypsa` on top of
+Unlike the other fourteen, this script additionally needs `pip install pandapower pypsa` on top of
 `pip install mambo-power`, and takes about a minute rather than a second: it imports pandapower
 and PyPSA (their cold imports alone are ~20 s) and runs their solvers as the oracles.
 
@@ -196,6 +197,18 @@ dispatch, carried on the result, flags nothing.
 
 ``` { .python }
 --8<-- "examples/14_scopf.py"
+```
+
+## 15. Unit commitment
+
+One bus, a dear peaker and a cheap baseload unit with a 40 MW minimum that is off before the
+horizon. The LP runs the baseload unit for $1800 and never asks who starts it; under commitment
+the answer depends on the start-up cost — at $5000 the unit is started and kept on ($6800), at
+$8000 it stays off and the peaker serves everything ($9000) — and the LMPs are the restricted
+LP's, which do not recover the start-up.
+
+``` { .python }
+--8<-- "examples/15_unit_commitment.py"
 ```
 
 ## Conventions for examples

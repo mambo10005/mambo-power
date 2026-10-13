@@ -43,9 +43,10 @@ extends to a convex QP via `Highs.passHessian` (diagonal Hessian value `2·c2[g]
 `0.5·xᵀQx` convention) only when a nonzero `c2` is present. Duals are read identically either
 way — `Highs.getSolution().row_dual` / `col_dual` need no QP-specific handling.
 
-Startup/shutdown costs (`PolynomialCost.startup`/`shutdown`) are not modelled: this is a
+Startup/shutdown costs (`PolynomialCost.startup`/`shutdown`) are not modelled here: this is a
 single-period economic dispatch over already-committed generators, matching pandapower's
-`rundcopp`.
+`rundcopp`. They are modelled by the multiperiod market's [unit
+commitment](multiperiod.md#unit-commitment), where switching a unit on or off is a decision.
 
 ### Piecewise-linear costs
 

@@ -763,6 +763,69 @@ step with `dc_opf`, the duplication ADR-007 and ADR-008 exist to prevent; trusti
 screen as the proof of security — the brute-force agreement tests say it would be right, but the
 real `contingency.n1` on the result costs a few re-solves and leaves nothing to take on faith.
 
+## ADR-017 — Unit commitment is the multiperiod market with binaries, priced by the restricted LP
+
+**Status:** accepted 2026-10-12.
+
+**Context.** `PolynomialCost` and `PiecewiseCost` have carried `startup` and `shutdown` fields
+since M1 that nothing read; the DC-OPF manual said so. The multiperiod market (M5) clears a
+horizon as one LP, which cannot switch a unit off: a generator with `p_min_mw > 0` runs at its
+minimum in every period whether or not that is worth it, a constant cost term is charged in every
+period unconditionally, and a start-up never costs anything. For a fleet with real minimums and
+event costs that is not a schedule anyone could run. HiGHS solves MILPs, so the decision can be
+modelled without a new dependency.
+
+**Decision.** Unit commitment is an option of the multiperiod market, not a new solver or a new
+kind.
+
+1. **One builder, one more block.** `multiperiod_dc_opf` gains an optional `Commitment` block —
+   start-up, shut-down and no-load costs and the status before the horizon, per unit — and with
+   it three binary columns per unit per period (`on`, `started`, `stopped`) in a third column
+   tier, and four row families after tier 8: capacity and minimum against `on`, the start/stop
+   logic, and one event per period. Without the block the model is byte-for-byte the LP it was.
+   The ramp rows split into one-sided pairs relaxed on the period a unit starts or stops, so a
+   start to any output and a stop from any output are admissible; no minimum up/down time.
+2. **Only units with something to decide get binaries.** A unit with no minimum output, no
+   no-load cost and no event cost is the same on at 0 MW as off; it keeps its continuous column
+   and is reported always on. This is what keeps the MIP small and the schedules of idle free
+   units from flapping at zero cost.
+3. **MILP, not MIQP.** HiGHS has no MIQP, so the builder refuses a quadratic cost under
+   commitment, and the market wrapper linearises it into `quadratic_segments` convex chords of
+   `c2·p² + c1·p` between 0 and `p_max` and passes them as a piecewise-linear cost, with `c0`
+   moved into the block as the no-load cost. The epigraph rows carry the unit's `on` column so an
+   off unit's cost is exactly zero rather than the first chord's intercept. The reported cost is
+   the chord cost, an over-estimate by the chord error, documented as such.
+4. **Prices are the restricted LP's.** A MIP has no duals. After the MIP solves, the builder fixes
+   every binary at its solution and re-runs the model as an LP, and every dual the market reads —
+   LMPs, bound and ramp prices, settlement — is that LP's. This is the standard pricing run of a
+   unit-commitment market: the LMP is the marginal cost of energy given the committed fleet, and
+   start-up and no-load costs are not recovered through it. The result carries what an uplift
+   would need (`commitment_cost`, `no_load_cost`, per-unit event totals) and takes no position on
+   how to settle it.
+5. **Initial status is the declared dispatch.** A unit with `p_mw > 0` in the network's own state
+   is on before the horizon, one at zero is off — the one datum the model already carries that
+   means "running now". An explicit initial-status field is not added until a caller needs one.
+
+**Consequences.**
+
+1. **The same result, with a schedule.** `MarketMultiperiodResult` gains `commitment`,
+   `commitment_cost` and `no_load_cost` (defaults empty and zero) and each generator row a
+   `committed` flag (default true), so a result serialised before this ADR still validates and a
+   reader of the LP result reads the committed one. `market.multiperiod` stays the one kind.
+2. **Prices move with the linearisation.** Under commitment a quadratic fleet is priced from its
+   chords: slightly different LMPs than the QP's, converging with `quadratic_segments`. The LP
+   path is untouched.
+3. **Not modelled:** minimum up and down times, reserve requirements, start-up cost that depends
+   on how long the unit was off, and a configurable end-of-horizon status. Each is more rows or
+   columns on the same block and is recorded here as the next step.
+
+*Rejected:* a separate `market.unit_commitment` kind and result — a second copy of the period
+rows, settlement and LMP decomposition for one extra block of columns; solving the MIQP with a
+different solver — a new runtime dependency, which ADR-002 rules out; pricing from the MIP's LP
+relaxation — cheaper, but the relaxation's prices belong to a fleet that is fractionally
+committed and are not what any market settles on; charging `c0` unconditionally under commitment
+— the LP's reading, which under commitment would pay a unit for being off.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

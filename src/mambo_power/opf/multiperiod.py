@@ -96,15 +96,48 @@ switching or outage), consistent with the wave's Not-Doing list (research §2.2)
 does, under HiGHS's own convention ``reduced_cost_j = c_j - sum_r y_r * a_rj``. Per-period LMPs
 come from feeding :class:`MultiperiodDuals`' period ``t`` slice to
 :func:`~mambo_power.opf.dc_opf.lmp_decomposition`, unchanged from M3.
+
+**Unit commitment (ADR-017).** With a :class:`Commitment` block the same model becomes a MIP:
+three binary columns per generator per period — ``on`` (``u``), ``startup`` (``v``) and
+``shutdown`` (``w``) — in a third column tier after the PWL free variables, and three row
+families after tier 8:
+
+===== ======================================== ==================================================
+tier  family                                    rows
+===== ======================================== ==================================================
+9     capacity, ``p_g[t] − p_max·u_g[t] <= 0``  ``T*n_gen``
+10    minimum, ``p_g[t] − p_min·u_g[t] >= 0``   ``T*n_gen``
+11    logic, ``u[t] − u[t−1] − v[t] + w[t] == 0`` ``T*n_gen`` (``t = 0`` against ``initial_on``)
+12    ``v[t] + w[t] <= 1``                      ``T*n_gen`` (no start and stop in one period)
+===== ======================================== ==================================================
+
+A unit with ``p_min <= 0``, no no-load cost and no start-up or shut-down cost has nothing
+to commit — on at 0 MW and off are the same thing — so its binaries are fixed on and its
+events off, and it stays the continuous column it is in the LP; only the other units are
+*committable*. The generator columns' own lower bound drops to ``min(0, p_min)`` — the minimum
+is a row that applies only while committed — and the objective gains ``no_load_cost·u``,
+``startup_cost·v`` and ``shutdown_cost·w``. Tier 6 ramp rows split into one-sided pairs with a
+``−p_max·v[t]`` / ``+p_max·w[t]`` relaxation so a unit may start at any output up to its capacity
+and stop from any output; no minimum up/down time is modelled. HiGHS solves MILPs, not MIQPs, so
+a nonzero ``c2`` (or ``v2``) with a commitment block is a ``ValueError``: the caller linearises a
+quadratic cost into ``pwl_costs`` first, as :func:`mambo_power.market.multiperiod.solve_multiperiod`
+does. Tier 7 epigraph rows carry the unit's ``on`` column, ``cost_g >= slope_i·p_g +
+intercept_i·u_g``, so a committed unit's cost is its curve and an off unit's is exactly zero; the
+polynomial ``c0`` stays the unconditional per-period constant it is in the LP (a caller who means
+"no-load" moves it into ``Commitment.no_load_cost``, as the market wrapper does). After the MIP
+solves, the binaries are fixed at their solution and the model is re-run as an LP, which is where
+every dual above comes from — the restricted-LP prices a unit-commitment market settles on
+(ADR-017).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import highspy
 import numpy as np
+import numpy.typing as npt
 
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import p_shift, pf_shift
@@ -124,7 +157,28 @@ from mambo_power.opf.dc_opf import (
 
 _OPTIMAL = "Optimal"
 
-__all__ = ["MultiperiodDuals", "MultiperiodSolution", "multiperiod_dc_opf"]
+__all__ = ["Commitment", "MultiperiodDuals", "MultiperiodSolution", "multiperiod_dc_opf"]
+
+BoolArray = npt.NDArray[np.bool_]
+
+
+@dataclass(frozen=True)
+class Commitment:
+    """Unit-commitment data for :func:`multiperiod_dc_opf` (module docstring, "Unit commitment").
+
+    All three arrays are ``(n_gen,)`` in ``NetworkArrays`` generator order. ``initial_on`` is each
+    unit's status in the period before the horizon: a unit that is off there pays ``startup_cost``
+    to run in period 0, one that is on pays ``shutdown_cost`` to stop.
+    """
+
+    startup_cost: FloatArray
+    """Cost of a start-up, $ per event; ``>= 0``."""
+    shutdown_cost: FloatArray
+    """Cost of a shut-down, $ per event; ``>= 0``."""
+    initial_on: BoolArray
+    """Whether the unit is committed in the period before the horizon."""
+    no_load_cost: FloatArray
+    """Cost of being on for one period at any output, $; ``>= 0``."""
 
 
 @dataclass(frozen=True)
@@ -220,6 +274,18 @@ class MultiperiodSolution:
     """``None`` exactly when ``status != "Optimal"``."""
     message: str | None = None
     """Diagnostic when ``status != "Optimal"``; ``None`` otherwise."""
+    committed: BoolArray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.bool_))
+    """``(T, n_gen)`` commitment status per period (ADR-017); shape ``(0, 0)`` without a
+    :class:`Commitment` block."""
+    started: BoolArray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.bool_))
+    """``(T, n_gen)`` start-up events; ``started[0]`` is relative to ``Commitment.initial_on``."""
+    stopped: BoolArray = field(default_factory=lambda: np.zeros((0, 0), dtype=np.bool_))
+    """``(T, n_gen)`` shut-down events."""
+    commitment_cost: float = 0.0
+    """Start-up plus shut-down cost over the horizon, $, included in :attr:`objective_cost`."""
+    no_load_cost: float = 0.0
+    """``sum_t sum_g Commitment.no_load_cost_g · u_g[t]``, $, included in :attr:`objective_cost`;
+    0.0 without a :class:`Commitment` block."""
 
 
 def _sparse_rows(
@@ -287,6 +353,7 @@ def multiperiod_dc_opf(
     pwl_costs: Mapping[int, Sequence[tuple[float, float]]] | None = None,
     demand_bid_coeffs: Mapping[int, tuple[float, float, float]] | None = None,
     demand_pwl_bids: Mapping[int, Sequence[tuple[float, float]]] | None = None,
+    commitment: Commitment | None = None,
 ) -> MultiperiodSolution:
     """Solve ``n_periods`` coupled DC-OPF periods as one LP/QP (module docstring).
 
@@ -309,6 +376,10 @@ def multiperiod_dc_opf(
     non-concave bid, and :class:`ValueError` for a mis-shaped argument — all before any HiGHS
     object exists. Never raises for an infeasible or unbounded model: that is reported through
     ``status``/``message``, as in ``dc_opf``.
+
+    ``commitment`` (module docstring, "Unit commitment") turns the solve into a MIP over per-unit
+    on/start-up/shut-down binaries, with the duals read from the LP left once those binaries are
+    fixed at the optimum; ``None`` — every other caller — leaves the LP exactly as before.
     """
     n_gen = len(arr.gen_ids)
     n_load = len(arr.load_ids)
@@ -343,6 +414,30 @@ def multiperiod_dc_opf(
             )
     ramp_up = _checked_ramp("ramp_up_mw", ramp_up_mw, n_gen)
     ramp_down = _checked_ramp("ramp_down_mw", ramp_down_mw, n_gen)
+    if commitment is not None:
+        for name, values in (
+            ("startup_cost", commitment.startup_cost),
+            ("shutdown_cost", commitment.shutdown_cost),
+            ("initial_on", commitment.initial_on),
+            ("no_load_cost", commitment.no_load_cost),
+        ):
+            if np.asarray(values).shape != (n_gen,):
+                raise ValueError(
+                    f"commitment.{name} must have shape ({n_gen},) (NetworkArrays generator "
+                    f"order), got {np.asarray(values).shape}"
+                )
+        if (
+            np.any(commitment.startup_cost < 0)
+            or np.any(commitment.shutdown_cost < 0)
+            or np.any(commitment.no_load_cost < 0)
+        ):
+            raise ValueError("commitment start-up, shut-down and no-load costs must be >= 0")
+        if np.any(c2 != 0.0) or np.any(v2 != 0.0):
+            raise ValueError(
+                "unit commitment needs linear or piecewise-linear costs and bids: HiGHS solves "
+                "MILPs, not MIQPs; linearise a quadratic cost into pwl_costs first (the market "
+                "wrapper does this with MarketMultiperiodOptions.quadratic_segments)"
+            )
 
     # --- column layout (module docstring, "Column layout") -------------------------------------
     per_period_dispatch = n_gen + n_demand + 3 * n_storage
@@ -392,6 +487,9 @@ def multiperiod_dc_opf(
     # issues, repeated once per period, so a one-period solve is the identical call sequence).
     p_min = arr.gen_p_min_pu * arr.base_mva
     p_max = arr.gen_p_max_pu * arr.base_mva
+    # With commitment the minimum output is a row that applies only while the unit is on (tier
+    # 10); the column itself must admit 0 so the unit can be off.
+    p_col_min = np.minimum(p_min, 0.0) if commitment is not None else p_min
     elastic_idx_arr = np.asarray(elastic_load_idxs, dtype=np.int64)
     demand_p_min = arr.load_p_min_pu[elastic_idx_arr] * arr.base_mva
     # ``(n_periods, n_demand)``: a bid load's upper bound is **that period's** own demand, not the
@@ -415,7 +513,7 @@ def multiperiod_dc_opf(
 
     for t in range(n_periods):
         if n_gen:
-            h.addVars(n_gen, p_min, p_max)
+            h.addVars(n_gen, p_col_min, p_max)
             h.changeColsCost(n_gen, gen_cols[t], c1)
         if n_demand:
             h.addVars(n_demand, demand_p_min, demand_p_max[t])
@@ -453,6 +551,37 @@ def multiperiod_dc_opf(
                 np.full(n_demand_pwl, highspy.kHighsInf),
             )
             h.changeColsCost(n_demand_pwl, cols, -np.ones(n_demand_pwl))
+
+    # --- tier 3 columns (module docstring, "Unit commitment"): per period [on | startup |
+    # shutdown], binary, costed c0 / startup / shutdown. Appended after every continuous column
+    # so the Hessian prefix and the tier-2 layout above are untouched.
+    on_cols: list[ColArray] = []
+    start_cols: list[ColArray] = []
+    stop_cols: list[ColArray] = []
+    committable = np.zeros(n_gen, dtype=np.bool_)
+    if commitment is not None and n_gen:
+        committable = (
+            (p_min > 0.0)
+            | (commitment.no_load_cost > 0.0)
+            | (commitment.startup_cost > 0.0)
+            | (commitment.shutdown_cost > 0.0)
+        )
+        on_lower = np.where(committable, 0.0, 1.0)
+        event_upper = np.where(committable, 1.0, 0.0)
+        tier3_base = n_dispatch_total + n_periods * per_period_free
+        for t in range(n_periods):
+            base = tier3_base + t * 3 * n_gen
+            on_cols.append(_cols(base, 0, n_gen))
+            start_cols.append(_cols(base, n_gen, n_gen))
+            stop_cols.append(_cols(base, 2 * n_gen, n_gen))
+            for cols, cost, lower, upper in (
+                (on_cols[t], commitment.no_load_cost, on_lower, np.ones(n_gen)),
+                (start_cols[t], commitment.startup_cost, np.zeros(n_gen), event_upper),
+                (stop_cols[t], commitment.shutdown_cost, np.zeros(n_gen), event_upper),
+            ):
+                h.addVars(n_gen, lower, upper)
+                h.changeColsCost(n_gen, cols, np.asarray(cost, dtype=np.float64))
+                h.changeColsIntegrality(n_gen, cols, [highspy.HighsVarType.kInteger] * n_gen)
 
     # --- per-period fixed load, and the flow-row constant it drives -----------------------------
     # dc_opf's own arithmetic, evaluated once per period: the bus-aggregate fixed load minus each
@@ -562,28 +691,155 @@ def multiperiod_dc_opf(
     ramped = np.flatnonzero(np.isfinite(ramp_up) | np.isfinite(ramp_down))
     n_ramped = int(ramped.size)
     if n_ramped and n_periods > 1:
-        ramp_rows = [
-            [(int(gen_cols[t][g]), 1.0), (int(gen_cols[t - 1][g]), -1.0)]
-            for t in range(1, n_periods)
-            for g in ramped
-        ]
         down = np.where(np.isfinite(ramp_down[ramped]), -ramp_down[ramped], -highspy.kHighsInf)
         up = np.where(np.isfinite(ramp_up[ramped]), ramp_up[ramped], highspy.kHighsInf)
-        _add_rows(
-            h,
-            _sparse_rows(ramp_rows, np.tile(down, n_periods - 1), np.tile(up, n_periods - 1)),
-        )
+        if commitment is None:
+            ramp_rows = [
+                [(int(gen_cols[t][g]), 1.0), (int(gen_cols[t - 1][g]), -1.0)]
+                for t in range(1, n_periods)
+                for g in ramped
+            ]
+            _add_rows(
+                h,
+                _sparse_rows(ramp_rows, np.tile(down, n_periods - 1), np.tile(up, n_periods - 1)),
+            )
+        else:
+            # Two one-sided families, each relaxed by the unit's capacity on the period it
+            # starts (up side) or stops (down side), so a start-up to any output and a
+            # shut-down from any output are both admissible — the ramp applies between two
+            # committed periods only.
+            up_rows = [
+                [
+                    (int(gen_cols[t][g]), 1.0),
+                    (int(gen_cols[t - 1][g]), -1.0),
+                    (int(start_cols[t][g]), -float(p_max[g])),
+                ]
+                for t in range(1, n_periods)
+                for g in ramped
+            ]
+            down_rows = [
+                [
+                    (int(gen_cols[t][g]), 1.0),
+                    (int(gen_cols[t - 1][g]), -1.0),
+                    (int(stop_cols[t][g]), float(p_max[g])),
+                ]
+                for t in range(1, n_periods)
+                for g in ramped
+            ]
+            n_pairs = (n_periods - 1) * n_ramped
+            _add_rows(
+                h,
+                _sparse_rows(
+                    up_rows, np.full(n_pairs, -highspy.kHighsInf), np.tile(up, n_periods - 1)
+                ),
+            )
+            _add_rows(
+                h,
+                _sparse_rows(
+                    down_rows, np.tile(down, n_periods - 1), np.full(n_pairs, highspy.kHighsInf)
+                ),
+            )
 
-    # tiers 7-8: PWL epigraph / hypograph rows, appended last so no dual index above shifts.
+    # tiers 7-8: PWL epigraph / hypograph rows, appended after tier 6 so no dual index above
+    # shifts. With commitment the epigraph carries the unit's ``on`` column (module docstring,
+    # "Unit commitment") so an off unit's cost_g is pulled to exactly zero.
     for t in range(n_periods):
-        _add_rows(h, _epigraph_rows(segments_by_gen, gen_cols[t], cost_col_of[t]))
+        if commitment is None:
+            _add_rows(h, _epigraph_rows(segments_by_gen, gen_cols[t], cost_col_of[t]))
+        else:
+            rows = [
+                [
+                    (cost_col_of[t][g], 1.0),
+                    (int(gen_cols[t][g]), -slope),
+                    (int(on_cols[t][g]), -intercept),
+                ]
+                for g in sorted(segments_by_gen)
+                for slope, intercept in segments_by_gen[g]
+            ]
+            _add_rows(
+                h,
+                _sparse_rows(rows, np.zeros(len(rows)), np.full(len(rows), highspy.kHighsInf)),
+            )
     for t in range(n_periods):
         _add_rows(
             h, _hypograph_rows(demand_segments_by_load, demand_col_of[t], demand_val_col_of[t])
         )
 
+    # tiers 9-12 (module docstring, "Unit commitment"): capacity, minimum, logic and
+    # one-event-per-period rows.
+    n_commit_rows = 0
+    if commitment is not None and n_gen:
+        cap_rows = [
+            [(int(gen_cols[t][g]), 1.0), (int(on_cols[t][g]), -float(p_max[g]))]
+            for t in range(n_periods)
+            for g in range(n_gen)
+        ]
+        min_rows = [
+            [(int(gen_cols[t][g]), 1.0), (int(on_cols[t][g]), -float(p_min[g]))]
+            for t in range(n_periods)
+            for g in range(n_gen)
+        ]
+        logic_rows: list[list[tuple[int, float]]] = []
+        logic_rhs: list[float] = []
+        for t in range(n_periods):
+            for g in range(n_gen):
+                row = [
+                    (int(on_cols[t][g]), 1.0),
+                    (int(start_cols[t][g]), -1.0),
+                    (int(stop_cols[t][g]), 1.0),
+                ]
+                if t == 0:
+                    # a non-committable unit is always on, whatever its declared initial state
+                    on_initially = commitment.initial_on[g] or not committable[g]
+                    logic_rhs.append(1.0 if on_initially else 0.0)
+                else:
+                    row.append((int(on_cols[t - 1][g]), -1.0))
+                    logic_rhs.append(0.0)
+                logic_rows.append(row)
+        # Without this row a unit whose start and stop are both free could register one of each
+        # in the same period at no cost, which the logic row alone admits.
+        event_rows = [
+            [(int(start_cols[t][g]), 1.0), (int(stop_cols[t][g]), 1.0)]
+            for t in range(n_periods)
+            for g in range(n_gen)
+        ]
+        n_commit_rows = 4 * n_periods * n_gen
+        count = n_periods * n_gen
+        _add_rows(h, _sparse_rows(cap_rows, np.full(count, -highspy.kHighsInf), np.zeros(count)))
+        _add_rows(h, _sparse_rows(min_rows, np.zeros(count), np.full(count, highspy.kHighsInf)))
+        _add_rows(h, _sparse_rows(logic_rows, logic_rhs, logic_rhs))
+        _add_rows(h, _sparse_rows(event_rows, np.full(count, -highspy.kHighsInf), np.ones(count)))
+        # The default 1e-4 relative gap can leave a cheaper schedule unexplored; the problems
+        # built here are small, so ask for the optimum.
+        h.setOptionValue("mip_rel_gap", 1e-9)
+
     h.run()
     status = h.modelStatusToString(h.getModelStatus())
+
+    committed = np.zeros((0, 0), dtype=np.bool_)
+    started = np.zeros((0, 0), dtype=np.bool_)
+    stopped = np.zeros((0, 0), dtype=np.bool_)
+    if commitment is not None and n_gen and status == _OPTIMAL:
+        # Fix the binaries at the MIP optimum and re-run as an LP: the duals every caller reads
+        # below are this restricted LP's (module docstring, "Unit commitment").
+        mip_value = np.asarray(h.getSolution().col_value, dtype=np.float64)
+
+        def _bits(cols: list[ColArray]) -> BoolArray:
+            return np.array([mip_value[c] > 0.5 for c in cols], dtype=np.bool_)
+
+        committed, started, stopped = _bits(on_cols), _bits(start_cols), _bits(stop_cols)
+        for t in range(n_periods):
+            for cols, bits in (
+                (on_cols[t], committed[t]),
+                (start_cols[t], started[t]),
+                (stop_cols[t], stopped[t]),
+            ):
+                fixed = bits.astype(np.float64)
+                h.changeColsIntegrality(n_gen, cols, [highspy.HighsVarType.kContinuous] * n_gen)
+                h.changeColsBounds(n_gen, cols, fixed, fixed)
+        h.run()
+        status = h.modelStatusToString(h.getModelStatus())
+
     if status != _OPTIMAL:
         return MultiperiodSolution(
             status=status,
@@ -625,11 +881,13 @@ def multiperiod_dc_opf(
     # depend on anything happening to exist.
     n_epigraph = sum(len(segments_by_gen[i]) for i in pwl_gen_idxs)
     n_hypograph = sum(len(demand_segments_by_load[i]) for i in demand_pwl_idxs)
+    n_ramp_rows = (n_periods - 1) * n_ramped * (2 if commitment is not None else 1)
     expected_rows = (
         n_periods * (1 + n_branch + 2 * n_storage)  # tiers 1-4
         + n_storage  # tier 5 (cyclic), one per unit for the whole horizon
-        + (n_periods - 1) * n_ramped  # tier 6, empty at T == 1 or with nothing ramped
+        + n_ramp_rows  # tier 6, empty at T == 1 or with nothing ramped; two families committed
         + n_periods * (n_epigraph + n_hypograph)  # tiers 7-8, one row per segment per period
+        + n_commit_rows  # tiers 9-12 (ADR-017)
     )
     assert h.getNumRow() == expected_rows, (
         f"multiperiod_dc_opf built {h.getNumRow()} rows, but the row-order contract in this "
@@ -648,6 +906,12 @@ def multiperiod_dc_opf(
     if n_ramped and n_periods > 1:
         block = row_dual[ramp_base : ramp_base + (n_periods - 1) * n_ramped]
         ramp_duals[:, ramped] = block.reshape(n_periods - 1, n_ramped)
+        if commitment is not None:
+            # the two one-sided families price the same coupling; only one can bind per pair
+            down_block = row_dual[
+                ramp_base + (n_periods - 1) * n_ramped : ramp_base + 2 * (n_periods - 1) * n_ramped
+            ]
+            ramp_duals[:, ramped] += down_block.reshape(n_periods - 1, n_ramped)
 
     duals = MultiperiodDuals(
         balance=row_dual[:n_periods].copy(),
@@ -661,10 +925,17 @@ def multiperiod_dc_opf(
         cyclic=row_dual[cyclic_base:ramp_base].copy(),
     )
 
-    poly_gen_cost = float(np.sum(c2 * dispatch_mw**2 + c1 * dispatch_mw + c0))
     pwl_gen_cost = float(
         sum(col_value[cost_col_of[t][i]] for t in range(n_periods) for i in pwl_gen_idxs)
     )
+    poly_gen_cost = float(np.sum(c2 * dispatch_mw**2 + c1 * dispatch_mw + c0))
+    commitment_cost = 0.0
+    no_load_cost = 0.0
+    if commitment is not None:
+        no_load_cost = float(np.sum(commitment.no_load_cost * committed))
+        commitment_cost = float(
+            np.sum(commitment.startup_cost * started) + np.sum(commitment.shutdown_cost * stopped)
+        )
     return MultiperiodSolution(
         status=status,
         n_periods=n_periods,
@@ -674,7 +945,12 @@ def multiperiod_dc_opf(
         storage_discharge_mw=storage_discharge_mw,
         storage_soc_mwh=storage_soc_mwh,
         ptdf=ptdf_matrix,
-        objective_cost=poly_gen_cost + pwl_gen_cost,
+        objective_cost=poly_gen_cost + pwl_gen_cost + no_load_cost + commitment_cost,
         duals=duals,
         message=None,
+        committed=committed,
+        started=started,
+        stopped=stopped,
+        commitment_cost=commitment_cost,
+        no_load_cost=no_load_cost,
     )

@@ -56,6 +56,33 @@ class GenPeriodDispatchResult(GenDispatchResult):
         "0.0 in period 0 (no row reaches into it) and for any generator whose ramp_up_mw and "
         "ramp_down_mw are both None (no row is built at all).",
     )
+    committed: bool = Field(
+        default=True,
+        description="Whether the unit is committed (on) in this period; always True without "
+        "unit commitment (ADR-017).",
+    )
+
+
+class GenCommitmentResult(BaseModel):
+    """One generator's commitment schedule over the horizon (ADR-017, unit commitment)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    id: str = Field(description="Generator id from the network.")
+    committable: bool = Field(
+        description="Whether the unit had binaries at all: a unit with no minimum output, no "
+        "constant cost term and no start-up or shut-down cost is always on (on at 0 MW and off "
+        "are the same thing)."
+    )
+    initial_on: bool = Field(description="Status in the period before the horizon.")
+    on: list[bool] = Field(description="Commitment status per period.")
+    started: list[bool] = Field(description="Start-up event per period.")
+    stopped: list[bool] = Field(description="Shut-down event per period.")
+    startup_cost: float = Field(ge=0.0, description="Start-up costs paid over the horizon, $.")
+    shutdown_cost: float = Field(ge=0.0, description="Shut-down costs paid over the horizon, $.")
+    no_load_cost: float = Field(
+        description="Constant cost terms paid over the periods the unit is on, $."
+    )
 
 
 class StorageDispatchResult(BaseModel):
@@ -185,4 +212,20 @@ class MarketMultiperiodResult(BaseModel):
     )
     congestion_rent: float = Field(
         default=0.0, description="Horizon sum of the per-period congestion rents, $."
+    )
+    commitment: list[GenCommitmentResult] = Field(
+        default_factory=list,
+        description="Per-generator commitment schedules; empty unless "
+        "options.unit_commitment is on (ADR-017).",
+    )
+    commitment_cost: float = Field(
+        default=0.0,
+        description="Start-up plus shut-down costs over the horizon, $, included in "
+        "objective_cost; 0.0 without unit commitment.",
+    )
+    no_load_cost: float = Field(
+        default=0.0,
+        description="Constant cost terms of committed units over the horizon, $, included in "
+        "objective_cost. Without unit commitment every unit's constant term is charged in every "
+        "period, as a DC-OPF does.",
     )

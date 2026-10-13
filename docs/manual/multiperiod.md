@@ -104,6 +104,7 @@ re-derived for `T` periods rather than inherited from `dc_opf`:
 | 5 | cyclic `soc[T-1] == soc_initial` | after tier 4, `s` |
 | 6 | ramp coupling, per ramped generator per adjacent pair | after tier 5, `(t-1)*n_ramped + j` |
 | 7-8 | PWL epigraph / hypograph rows | last — an encoding detail, never part of the dual shape |
+| 9-12 | unit-commitment rows, only with `unit_commitment` | after tier 8 — see [Unit commitment](#unit-commitment) |
 
 ## Ramp coupling
 
@@ -291,6 +292,124 @@ so the assertion is a proof rather than a restatement of arithmetic already perf
 `MarketMultiperiodResult` carries no branch rows, so its flow duals `μ_k` are not reachable from
 the result object itself; a caller who wants to check the right-hand side has to go to
 `opf.multiperiod_dc_opf` for them.
+
+## Unit commitment
+
+`MarketMultiperiodOptions(unit_commitment=True)` turns the horizon clearing into a **mixed-integer**
+one ([ADR-017](../design/decisions.md)): each unit gets an on/off decision per period, with
+start-up and shut-down costs, a no-load cost paid only while on, and a minimum output that applies
+only while on. The LP above cannot switch anything off — a unit with `p_min_mw > 0` runs at its
+minimum every period whether or not that is worth it, and a start-up never costs anything — so
+for a fleet with real minimums and event costs the LP answer is not a schedule anyone could run.
+
+### What is decided, and what it costs
+
+Three binaries per committable unit per period, in a third column tier after the PWL free
+variables: `on` (\(u\)), `started` (\(v\)), `stopped` (\(w\)). Rows, after tier 8:
+
+| Tier | Family | Rows |
+| --- | --- | --- |
+| 9 | capacity, \(p_g[t] - p^{\max}_g u_g[t] \le 0\) | `T*n_gen` |
+| 10 | minimum, \(p_g[t] - p^{\min}_g u_g[t] \ge 0\) | `T*n_gen` |
+| 11 | logic, \(u[t] - u[t-1] - v[t] + w[t] = 0\) (`t = 0` against the initial status) | `T*n_gen` |
+| 12 | one event per period, \(v[t] + w[t] \le 1\) | `T*n_gen` |
+
+The objective gains \(\sum_t \sum_g \bigl(c^{\text{no-load}}_g u_g[t] + c^{\text{start}}_g v_g[t] +
+c^{\text{stop}}_g w_g[t]\bigr)\). The data comes off the model the way ramps do:
+
+- `PolynomialCost.startup` / `shutdown` (and `PiecewiseCost`'s) are the event costs, $ per event.
+- A polynomial cost's constant term `c0` becomes the **no-load** cost — charged per period the
+  unit is on, where the plain LP charges it every period unconditionally (the right reading when
+  nothing can be switched off, and exactly what a DC-OPF does).
+- The status before the horizon is the unit's declared `p_mw`: above zero means on, zero means
+  off — so a unit that is off before the horizon pays its start-up to run in period 0.
+
+A unit with no minimum output, no no-load cost and no event cost has **nothing to commit** — on at
+0 MW and off are the same thing — so it keeps its continuous column, is reported `committable =
+False` and always on, and never registers an event. Only the other units get binaries, which also
+keeps the MIP small. The ramp rows split into one-sided pairs relaxed by the unit's capacity on the
+period it starts (up side) or stops (down side): a unit may start at any output and stop from any
+output, and the ramp applies between two committed periods. No minimum up/down time is modelled.
+
+### Quadratic costs are linearised
+
+HiGHS solves MILPs, not MIQPs. A unit whose cost has a nonzero `c2` — every bundled MATPOWER case
+— is therefore linearised by the wrapper into `quadratic_segments` (default 8) equal-width convex
+chords of \(c_2 p^2 + c_1 p\) between 0 and `p_max_mw`, and handed to the builder as a piecewise-
+linear cost. The reported `objective_cost` is the chord cost, an over-estimate of the quadratic one
+by the chord error (0.3 % on case14 at 8 chords; more chords, less error). The array-level builder
+itself refuses a quadratic cost under commitment with a `ValueError` naming the reason.
+
+The epigraph rows that encode a piecewise-linear cost carry the unit's `on` column under
+commitment — \(\text{cost}_g \ge s_i p_g + b_i u_g\) — so a committed unit's cost is its curve and
+an off unit's is exactly zero, rather than whatever the first chord extrapolates to at 0 MW.
+
+### Prices with the commitment fixed
+
+A MIP has no duals. After the MIP solves, the builder fixes every binary at its solution and
+re-runs the model as an LP; the duals every price and settlement figure on this page are read
+from are that **restricted LP**'s — the standard pricing run of a unit-commitment market, where
+the LMP is the marginal cost of energy given the committed fleet. Start-up and no-load costs are
+not recovered through those prices (a unit's `total_generator_receipts` may fall short of its
+cost); that uplift is a settlement question this package does not take a position on, and the
+result carries what is needed to compute one: `commitment_cost`, `no_load_cost` and each unit's
+own event and no-load totals in `MarketMultiperiodResult.commitment`.
+
+### Using it
+
+One bus, two units, three periods of 50 / 80 / 50 MW. The `peaker` is small and dear
+($50/MWh) and on before the horizon; the `baseload` unit is cheap ($10/MWh) but has a 40 MW
+minimum and costs $5000 to start, and is off before the horizon.
+
+```python
+from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multiperiod
+from mambo_power.model import Bus, Generator, Load, Network, Period, PolynomialCost, Scenario
+
+
+def unit(gen_id, p_mw, p_min, p_max, marginal, startup=0.0):
+    return Generator(
+        id=gen_id, bus="b1", p_mw=p_mw, q_mvar=0.0, p_min_mw=p_min, p_max_mw=p_max,
+        q_min_mvar=0.0, q_max_mvar=0.0, v_set_pu=1.0,
+        cost=PolynomialCost(coefficients=[marginal, 0.0], startup=startup),
+    )  # fmt: skip
+
+
+net = Network(
+    base_mva=100.0,
+    buses=[Bus(id="b1", base_kv=138.0, type="slack")],
+    generators=[
+        unit("peaker", 10.0, 0.0, 100.0, 50.0),
+        unit("baseload", 0.0, 40.0, 200.0, 10.0, startup=5000.0),
+    ],
+    loads=[Load(id="ld", bus="b1", p_mw=50.0, q_mvar=0.0)],
+)
+scenario = Scenario(network=net, periods=[Period(load_p_mw={"ld": p}) for p in (50.0, 80.0, 50.0)])
+
+plain = solve_multiperiod(scenario)
+committed = solve_multiperiod(scenario, MarketMultiperiodOptions(unit_commitment=True))
+baseload_mw = [g.p_mw for p in plain.periods for g in p.generators if g.id == "baseload"]
+print("LP:", plain.objective_cost, baseload_mw)
+print("UC:", committed.objective_cost, committed.commitment_cost)
+for c in committed.commitment:
+    print(" ", c.id, "committable" if c.committable else "always on", c.on, c.started)
+print([round(p.buses[0].lmp, 2) for p in committed.periods])
+```
+
+```text
+LP: 1800.0 [50.0, 80.0, 50.0]
+UC: 6800.0 5000.0
+  peaker always on [True, True, True] [False, False, False]
+  baseload committable [True, True, True] [True, False, False]
+[10.0, 10.0, 10.0]
+```
+
+The LP runs `baseload` for $1800 and never asks who starts it. Under commitment the horizon costs
+$6800 — $1800 of energy plus the $5000 start-up — and that is still cheaper than the $9000 of
+serving everything from the `peaker`, so the unit is started in period 0 and kept on; raise the
+start-up to $8000 and the answer flips to the peaker alone at $9000, with the LMP at $50. The
+prices here are the restricted LP's: `baseload` is marginal at $10 in every period.
+
+Runnable script: [`15_unit_commitment.py`](../examples/index.md#15-unit-commitment).
 
 ## Degeneracy: one period is the nodal clearing
 

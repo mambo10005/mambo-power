@@ -921,5 +921,6 @@ def test_an_infeasible_horizon_is_reported_not_raised() -> None:
 def test_options_model_is_accepted_and_recorded_in_provenance() -> None:
     result = solve_multiperiod(_arbitrage_scenario(), MarketMultiperiodOptions())
     assert result.provenance.kind == "market.multiperiod"
-    assert result.provenance.options == {}
+    # the LP default: no unit commitment (ADR-017), so the chord count is inert
+    assert result.provenance.options == {"unit_commitment": False, "quadratic_segments": 8}
     assert result.provenance.engine == "mambo-power"

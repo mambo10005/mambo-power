@@ -20,7 +20,7 @@ flowchart TB
         pf["pf<br/>solve_dc, solve_ac, dc.solve"]
         ac["pf.ac_newton<br/>AcOptions, newton"]
         opf["opf<br/>solve_dc_opf, solve_scopf, dc_opf,<br/>lmp_decomposition, gen_cost_coeffs"]
-        opfmp["opf.multiperiod<br/>multiperiod_dc_opf<br/>(ramp, SoC, cyclic rows)"]
+        opfmp["opf.multiperiod<br/>multiperiod_dc_opf<br/>(ramp, SoC, cyclic,<br/>commitment rows)"]
         opfz["opf.zonal<br/>zonal_dc_opf<br/>(per-zone balance, corridor columns)"]
         opfrd["opf.redispatch<br/>redispatch_dc_opf<br/>(delta columns both sides)"]
         contingency["contingency<br/>n1, screen_n1, screen_n1_dispatch,<br/>confirm_n1, confirm_n1_generators"]
@@ -203,7 +203,7 @@ src/mambo_power/
   pf/               __init__.py (solve_dc, solve_ac), dc.py (solve, DcSolution), ac_newton.py, _common.py
   opf/              __init__.py (solve_dc_opf, solve_scopf, gen_cost_coeffs), dc_opf.py (dc_opf,
                     lmp_decomposition, SecurityRows), scopf.py (scopf_dc, security_rows),
-                    multiperiod.py (multiperiod_dc_opf), zonal.py (zonal_dc_opf),
+                    multiperiod.py (multiperiod_dc_opf, Commitment), zonal.py (zonal_dc_opf),
                     redispatch.py (redispatch_dc_opf)
   contingency/      __init__.py (n1), n1.py (screen_n1, screen_n1_dispatch, confirm_n1, confirm_n1_generators)
   market/           __init__.py, nodal.py (solve_nodal), multiperiod.py (solve_multiperiod),
