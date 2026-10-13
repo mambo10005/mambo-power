@@ -32,8 +32,13 @@ and not against pandapower.
 The tolerances carry a margin over the unit tier's measured agreement with MATPOWER (2e-6
 relative) for PIPS's own termination tolerance; the 0.5 MW dispatch margin covers the flat
 trade-off between near-equal marginal units the hand case in ``tests/unit/test_opf_ac.py``
-documents. case300 is skipped when PIPS itself does not converge on it (``OPFNotConverged``):
-no oracle, no comparison.
+documents. The voltage tolerance is the loosest, because the voltage profile is the one quantity
+the problem does not pin down: nothing prices reactive output, so at a generator bus whose unit
+sits inside its Q limits the magnitude is free along a flat direction of the cost, and two
+optimisers agree on cost and dispatch while differing there (measured: 5.9e-3 pu at case118's
+bus 112, a unit with no active dispatch, with cost and every P within tolerance). case300 is
+skipped when PIPS itself does not converge on it (``OPFNotConverged``): no oracle, no
+comparison.
 """
 
 from __future__ import annotations
@@ -55,7 +60,7 @@ from tests.parity.test_matpower_vs_pandapower import pandapower_from_raw
 
 COST_REL_TOL = 5e-5
 DISPATCH_ABS_TOL_MW = 0.5
-VOLTAGE_ABS_TOL_PU = 2e-3
+VOLTAGE_ABS_TOL_PU = 1e-2  # module docstring: voltages are not unique where Q is unpriced
 
 # case30 is excluded on purpose (module docstring): the one fixture whose ratings bind, where
 # pandapower's current-magnitude limit and our apparent-power limit are different constraints
