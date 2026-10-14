@@ -368,7 +368,7 @@ def test_three_winding_records_are_ignored_one_entry_each():
 
 
 def test_codes_are_exposed_and_closed():
-    assert set(psse_raw.CODES) == {
+    assert set(psse_raw.CODES) - set(psse_raw.EXPORT_CODES) == {
         "BASE_KV_REPLACED",
         "ISLAND_DEACTIVATED",
         "RAW_NO_COSTS",

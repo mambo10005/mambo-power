@@ -88,7 +88,7 @@ flowchart LR
     MP --> IO
     NJ --> IO
     PPJ <--> IO
-    RAW --> IO
+    RAW <--> IO
     CSV <--> IO
     IO --> PYPSA["PyPSA network (export)"]
     JOBS --> NB
@@ -104,7 +104,7 @@ flowchart LR
 | Install and run a first power flow | [Getting started](getting-started.md) |
 | Follow a guided walkthrough, start to finish | [Tutorials](tutorials/index.md) |
 | Understand the network model, its units and validation errors | [Manual › Network model](manual/model.md) |
-| Import a MATPOWER, pandapower or PSS/E RAW case; export to pandapower, PyPSA or a CSV bundle | [Manual › File formats](manual/formats.md) |
+| Import a MATPOWER, pandapower or PSS/E RAW case; export to pandapower, PyPSA, PSS/E RAW or a CSV bundle | [Manual › File formats](manual/formats.md) |
 | Build Ybus, Bbus, PTDF or LODF matrices | [Manual › Numerics](manual/numerics.md) |
 | Run a DC or AC power flow, understand Q-limits and effective roles | [Manual › Power flow](manual/power-flow.md) |
 | Solve DC-OPF for cost-minimising dispatch and LMPs | [Manual › DC-OPF](manual/opf.md) |
@@ -138,6 +138,6 @@ flowchart LR
 | M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
 | M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
-| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0); unit commitment on the multiperiod market (0.5.0); AC-OPF (0.6.0); minimum up/down times (0.7.0); emergency ratings (0.8.0); corrective SCOPF (0.9.0) | merged |
+| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0); unit commitment on the multiperiod market (0.5.0); AC-OPF (0.6.0); minimum up/down times (0.7.0); emergency ratings (0.8.0); corrective SCOPF (0.9.0); PSS/E RAW export (0.10.0) | merged |
 
 mambo-power is MIT licensed. Source: [github.com/mambo10005/mambo-power](https://github.com/mambo10005/mambo-power).

@@ -1,4 +1,5 @@
-"""PSS/E RAW version 33 importer (wave M8, W4).
+"""PSS/E RAW version 33 importer (wave M8, W4) — and, re-exported from
+:mod:`mambo_power.io.psse_raw_export`, the writer it reads back (ADR-022).
 
 A record parser for the v33 layout only (``REV`` must be 33). It reads the case identification
 (``SBASE``), bus, load, fixed shunt, generator, non-transformer branch, two-winding transformer
@@ -50,6 +51,13 @@ from os import PathLike
 from pathlib import Path
 from typing import Literal
 
+from mambo_power.io.psse_raw_export import (  # the writer, ADR-022
+    EXPORT_CODES,
+    dump,
+    dump_with_report,
+    dumps,
+    dumps_with_report,
+)
 from mambo_power.io.report import ImportReport
 from mambo_power.model import (
     Branch,
@@ -66,9 +74,14 @@ from mambo_power.model import (
 
 __all__ = [
     "CODES",
+    "EXPORT_CODES",
     "ImportReport",
     "RawImportCode",
     "RawImportError",
+    "dump",
+    "dump_with_report",
+    "dumps",
+    "dumps_with_report",
     "load",
     "load_with_report",
     "loads",
@@ -85,8 +98,10 @@ CODES: tuple[str, ...] = (
     "RAW_THREE_WINDING_IGNORED",
     "RAW_SWITCHED_SHUNT_IGNORED",
     "RAW_SECTION_IGNORED",
+    *EXPORT_CODES,
 )
-"""Every report code this importer can emit (its documented limitations)."""
+"""Every report code this module can emit: the importer's (its documented limitations) and,
+after them, the exporter's (:data:`mambo_power.io.psse_raw_export.CODES`)."""
 
 RawImportCode = Literal[
     "BAD_HEADER",

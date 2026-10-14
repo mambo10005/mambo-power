@@ -3,8 +3,8 @@
 `mambo_power.io` holds importers and exporters. Every format speaks only
 [`mambo_power.model`](model.md): an importer produces a validated `Network`, an exporter
 consumes one, and neither touches arrays or solvers. Six formats ship: the **native JSON**
-format, the **MATPOWER `.m`** importer, **pandapower JSON** both ways, **PyPSA** export, the
-**PSS/E RAW v33** importer and the **CSV bundle**. Every importer returns an `ImportReport` and
+format, the **MATPOWER `.m`** importer, **pandapower JSON** both ways, **PyPSA** export,
+**PSS/E RAW v33** both ways and the **CSV bundle**. Every importer returns an `ImportReport` and
 every exporter an `ExportReport` (see [`io.report`](../api/io-report.md)) with one rule: an
 empty report means the conversion was lossless; anything dropped, approximated or repaired is an
 issue naming the element id and the field. [`io.limitations.LIMITATIONS`](../api/io-limitations.md)
@@ -623,6 +623,92 @@ RAW_NO_COSTS: RAW carries no cost data; all 5 generators imported with cost=None
 The bundled `case14_v33.raw` is IEEE case14 re-spelled as a RAW file; its provenance,
 `PROVENANCE-raw.md`, ships beside it in the package. The repository's
 `tests/fixtures/synthetic_quirks_v33.raw` exercises every fold and skip above.
+
+## PSS/E RAW v33 export
+
+`mambo_power.io.psse_raw` also writes the v33 layout its importer reads
+([ADR-022](../design/decisions.md)); the writer lives in `io.psse_raw_export` and is
+re-exported under the same names as the other formats' writers.
+
+| Function | Does |
+| --- | --- |
+| `psse_raw.dumps(net) -> str` | RAW text; report discarded. |
+| `psse_raw.dump(net, path)` | Write a file. |
+| `psse_raw.dumps_with_report(net) -> (str, ExportReport)` | Text and what the format could not carry. |
+| `psse_raw.dump_with_report(net, path) -> ExportReport` | Write a file and return the report. |
+
+### What is written
+
+The three case-identification lines (`SBASE = base_mva`, `REV = 33`), then the bus, load, fixed
+shunt, generator, branch, two-winding transformer, area and zone sections, every other section
+present and empty, each ended by its `0` terminator and the file by `Q` — the one form the
+importer reads back without folding anything:
+
+| Model | RAW record | Notes |
+| --- | --- | --- |
+| `Bus` | bus | `IDE` 3/2/1 for slack/pv/pq, 4 when out of service; `VM`/`VA` from `vm_pu`/`va_deg` (1 / 0 when absent); `NVHI`/`NVLO` and `EVHI`/`EVLO` from `v_max_pu`/`v_min_pu` (1.1 / 0.9 when absent); `AREA`/`ZONE` numbered (below); `NAME` is the bus id. |
+| `Load` | load | Constant power (`PL`, `QL`; `IP IQ YP YQ = 0`). |
+| `Shunt` | fixed shunt | `GL = g_mw`, `BL = b_mvar`. |
+| `Generator` | generator | `PG QG QT QB VS PT PB`, `STAT`, `MBASE = base_mva`; the remaining fields at PSS/E's defaults. |
+| line `Branch` | branch | `R X B` pu on `SBASE`, `RATEA = rating_mva`, `RATEC = rating_emergency_mva` (0 when absent), `ST`; no end shunts. |
+| transformer `Branch` | transformer (4 lines) | `CW = CZ = CM = 1`: `R1-2 X1-2` pu on `SBASE`, `WINDV1 = tap_ratio`, `WINDV2 = 1`, `ANG1 = shift_deg`, `RATA1 = rating_mva`, `RATC1 = rating_emergency_mva`, no magnetising admittance. |
+| `Bus.area` | area | One record per distinct label, `ISW = 0`, `PDES = 0`, `PTOL = 999.99`, `ARNAME` the label. |
+| `Zone` | zone | `ZONAME = name` (the id when unnamed). |
+
+**Numbers and ids.** RAW addresses a bus by an integer and a load, shunt, generator or circuit
+by a one- or two-character `ID`. An id the importer produced — `bus-<I>`, `load-<I>-<ID>`,
+`gen-<I>-<ID>`, `shunt-<I>-<ID>`, `branch-<I>-<J>-<CKT>` — is taken apart again, so a network
+read from RAW writes back with the numbers it came with and the bundled `case14_v33.raw` is a
+fixed point of read → write → read. Any other id is numbered — buses by position from 1; loads,
+shunts, generators and circuits per bus (pair) from `1` — and reported once per table under
+`RAW_ID_RENUMBERED`, naming every element, since a reader of the file cannot recover the original
+ids. Area and zone labels that are positive integers keep them; the rest are numbered after the
+largest.
+
+### Warnings (dropped or defaulted, never silently)
+
+| Code | Means |
+| --- | --- |
+| `RAW_ID_RENUMBERED` | Ids without a RAW number were numbered (above); one entry per table, naming the elements. |
+| `COST_DROPPED` | Generator costs: RAW carries no economic data. One entry naming every costed generator. |
+| `BID_DROPPED` | Load bids, likewise. |
+| `ELEMENT_DROPPED` | Storage: RAW has no storage record. |
+| `FIELD_DROPPED` | A transformer's line charging `b` (a RAW transformer record carries none; the AC solution of the file differs by it), bus `geo`, and generator `ramp_up_mw` / `ramp_down_mw` / `min_up_periods` / `min_down_periods` / `initial_state_periods`. |
+| `FIELD_DEFAULTED` | Buses without a stored `vm_pu`/`va_deg` (written at 1 / 0) or without voltage limits (0.9 / 1.1); one entry per table. |
+
+The exporter raises nothing: a `Network` is already valid.
+
+### Limitations
+
+- Everything the importer skips is absent from the file too: no three-winding transformers,
+  switched shunts, DC lines, FACTS, owners or impedance-correction tables are ever written.
+- The importer reads `RATEC` on branch records only, so a transformer's
+  `rating_emergency_mva` is written (`RATC1`) but does not come back through this package's own
+  reader.
+- Branch order changes: RAW keeps transformers in their own section after the lines, so a
+  network whose transformers are interleaved with lines comes back with them last. The
+  bundled MATPOWER cases round-trip with the same AC solution (to 1e-12 pu), except case300,
+  whose transformers carry line charging.
+
+### Example
+
+```python
+from mambo_power import cases
+from mambo_power.io import psse_raw
+
+net = cases.load("case14")
+text, report = psse_raw.dumps_with_report(net)
+print(sorted(report.codes))
+print(text.splitlines()[3])
+back = psse_raw.loads(text)
+print(len(back.buses), len(back.branches), [b.id for b in back.branches if b.kind == "transformer"])
+```
+
+```text
+['COST_DROPPED', 'RAW_ID_RENUMBERED']
+     1,'bus-1       ',          1,3,   1,   1,   1,1.06,         0,1.06,0.94,1.06,0.94
+14 20 ['branch-4-7-1', 'branch-4-9-1', 'branch-5-6-1']
+```
 
 ## CSV bundle
 

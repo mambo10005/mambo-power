@@ -198,7 +198,7 @@ src/mambo_power/
   io/               matpower.py (load, loads, *_with_warnings), native.py (load, loads, save, dumps),
                     report.py (ImportReport, ExportReport), limitations.py (LIMITATIONS),
                     pandapower_json.py (load*, dump*), pypsa.py (to_network*),
-                    psse_raw.py (load*), csv_bundle.py (dump, load*)
+                    psse_raw.py (load*, dump*), psse_raw_export.py, csv_bundle.py (dump, load*)
   numerics/         arrays.py (NetworkArrays), ybus.py, bbus.py, ptdf.py, lodf.py, roles.py, errors.py
   pf/               __init__.py (solve_dc, solve_ac), dc.py (solve, DcSolution), ac_newton.py, _common.py
   opf/              __init__.py (solve_dc_opf, solve_ac_opf, solve_scopf, gen_cost_coeffs),

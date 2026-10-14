@@ -1027,6 +1027,47 @@ dispatch its own generation cost — it never runs unless the contingency happen
 expected-cost weighting that would make it meaningful needs outage probabilities the model does
 not carry.
 
+## ADR-022 — PSS/E RAW export: the writer the importer reads back
+
+**Status:** accepted 2026-10-13.
+
+**Context.** M8 shipped RAW v33 import only; pandapower JSON and the CSV bundle go both ways
+and PyPSA is export-only because it is a Python object, not a file. A case prepared here —
+rated, re-dispatched, secured — could not be handed to the planning tools that speak RAW.
+
+**Decision.** `io.psse_raw_export`, re-exported from `io.psse_raw` as `dump` / `dumps` /
+`*_with_report` like every other writer.
+
+1. **Write the form the importer reads without folding.** `CW = CZ = CM = 1`, constant-power
+   loads, no end shunts, no magnetising admittance: every value lands in the one field the
+   importer maps straight to the model, so read → write → read is the identity on the bundled
+   `case14_v33.raw` (tested, with an empty report) and on every bundled MATPOWER case the AC
+   solution is reproduced to 1e-12 pu.
+2. **Numbers from ids, or numbered and said so.** The importer's id grammar (`bus-<I>`,
+   `load-<I>-<ID>`, `branch-<I>-<J>-<CKT>`) is parsed back; any other id is numbered by
+   position and reported `RAW_ID_RENUMBERED` once per table, because a reader of the file
+   cannot recover the original ids.
+3. **The report rule, unchanged.** Costs, bids, storage, a transformer's line charging, bus
+   coordinates and generator ramps and minimum times have no RAW field and are reported under
+   the generic codes; defaults the format demands (bus state, voltage limits) are reported
+   `FIELD_DEFAULTED`.
+4. **Emergency ratings travel.** `RATEC` / `RATC1` are written from `rating_emergency_mva`
+   (ADR-020); the importer reads the branch one back.
+
+**Consequences.**
+
+1. **Every file format now round-trips** except PyPSA, which is not a file. The formats page
+   says which fields each direction loses.
+2. **Transformer charging is the one physical loss.** A RAW transformer record has no `B`; it
+   is dropped with a report rather than approximated as end shunts, which would sit outside the
+   tap and change the solution anyway. case300 is the bundled case it touches.
+3. **Branch order is the format's**, lines then transformers; ids carry the identity.
+
+*Rejected:* writing `CZ = 2` / `CW = 2` records with winding bases — more faithful to how PSS/E
+users author files, but every value then goes through the importer's scaling and the round trip
+is only approximately the identity; folding transformer charging into fixed shunts — see
+consequence 2.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).
