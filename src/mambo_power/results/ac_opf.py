@@ -70,6 +70,14 @@ class AcBranchFlowResult(_Row):
     flow_to_dual: float = Field(
         default=0.0, description="Dual of the to-side |S|² <= rating² row; 0 unless binding."
     )
+    angle_deg: float = Field(
+        default=0.0, description="Angle difference va(from) − va(to) at the optimum, degrees."
+    )
+    angle_dual: float = Field(
+        default=0.0,
+        description="Dual of the angle-difference limit (ADR-029), $/rad·h: negative when "
+        "angle_max_deg binds, positive when angle_min_deg does; 0 otherwise.",
+    )
 
 
 class OpfAcResult(BaseModel):

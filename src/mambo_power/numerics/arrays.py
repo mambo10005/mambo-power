@@ -60,6 +60,10 @@ class NetworkArrays:
     shift_rad: FloatArray
     rating_pu: FloatArray
     """Thermal rating in pu of ``base_mva``; ``inf`` where the branch has none."""
+    angle_min_rad: FloatArray
+    """Per-branch lower angle-difference limit, radians; ``-inf`` where none (ADR-029)."""
+    angle_max_rad: FloatArray
+    """Per-branch upper angle-difference limit, radians; ``inf`` where none."""
     rating_emergency_pu: FloatArray
     """Post-contingency rating in pu of ``base_mva`` (ADR-020): ``Branch.rating_emergency_mva``
     where set, else :attr:`rating_pu` (``inf`` on an unrated branch). Read by the N-1 screen
@@ -165,6 +169,22 @@ class NetworkArrays:
             np.float64,
             n_branch,
         )
+        angle_min_rad = np.fromiter(
+            (
+                -math.inf if br.angle_min_deg is None else math.radians(br.angle_min_deg)
+                for br in branches
+            ),
+            np.float64,
+            n_branch,
+        )
+        angle_max_rad = np.fromiter(
+            (
+                math.inf if br.angle_max_deg is None else math.radians(br.angle_max_deg)
+                for br in branches
+            ),
+            np.float64,
+            n_branch,
+        )
         rating_emergency_pu = np.fromiter(
             (
                 rating_pu[k] if br.rating_emergency_mva is None else br.rating_emergency_mva / base
@@ -241,6 +261,8 @@ class NetworkArrays:
             tap=tap,
             shift_rad=shift_rad,
             rating_pu=rating_pu,
+            angle_min_rad=angle_min_rad,
+            angle_max_rad=angle_max_rad,
             rating_emergency_pu=rating_emergency_pu,
             p_load_pu=p_load_pu,
             q_load_pu=q_load_pu,

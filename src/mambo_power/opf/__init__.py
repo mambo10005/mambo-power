@@ -601,6 +601,12 @@ def solve_ac_opf(net: Network, options: OpfAcOptions | None = None) -> OpfAcResu
                 ),
                 flow_from_dual=float(duals.flow_from[k]),
                 flow_to_dual=float(duals.flow_to[k]),
+                angle_deg=float(
+                    np.degrees(
+                        np.angle(solution.v[int(arr.f[k])]) - np.angle(solution.v[int(arr.t[k])])
+                    )
+                ),
+                angle_dual=float(duals.angle[k]) if duals.angle.size else 0.0,
             )
         )
     losses_mw = float(np.sum(solution.gen_p_mw) - np.sum(arr.p_load_pu) * base)

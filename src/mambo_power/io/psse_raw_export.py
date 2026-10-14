@@ -19,7 +19,8 @@ of the file cannot recover the original ids from it.
 **What the format cannot carry** is reported, never silently dropped: generator costs
 (``COST_DROPPED``) and load bids (``BID_DROPPED``) — RAW has no economic section; storage
 (``ELEMENT_DROPPED``); a transformer's line charging ``b`` (RAW transformers have none), bus
-``geo``, generator ramps and minimum up/down times (``FIELD_DROPPED``). A bus without a stored
+``geo``, branch angle-difference limits, generator ramps and minimum up/down times
+(``FIELD_DROPPED``). A bus without a stored
 state is written at ``VM = 1, VA = 0`` and one without voltage limits at ``1.1 / 0.9``, the
 format's own defaults (``FIELD_DEFAULTED``, one entry per bus table). ``rating_emergency_mva``
 is written as ``RATEC`` on a branch record and ``RATC1`` on a transformer's (the importer reads
@@ -277,7 +278,10 @@ class _Writer:
         transformer_lines: list[str] = []
         ckts = _circuit_ids(self.net.branches, self.number, self.warn)
         charging: list[str] = []
+        angled: list[str] = []
         for br in self.net.branches:
+            if br.angle_min_deg is not None or br.angle_max_deg is not None:
+                angled.append(br.id)
             i, j = self.number[br.from_bus], self.number[br.to_bus]
             ckt = _quoted(ckts[br.id], 2)
             rate_a = br.rating_mva or 0.0
@@ -311,6 +315,13 @@ class _Writer:
                 f"{len(charging)} transformer(s) with line charging b: a RAW transformer "
                 "record carries none",
                 element_ids=charging,
+            )
+        if angled:
+            self.warn(
+                "FIELD_DROPPED",
+                f"{len(angled)} branch(es) with angle-difference limits (angle_min_deg / "
+                "angle_max_deg): RAW carries none",
+                element_ids=angled,
             )
         return branch_lines, transformer_lines
 

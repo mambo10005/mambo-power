@@ -1028,6 +1028,9 @@ def _export_branches(
     for br in net.branches:
         if br.rating_emergency_mva is not None:
             dropped(br.id, "rating_emergency_mva", br.rating_emergency_mva)
+        for name in ("angle_min_deg", "angle_max_deg"):
+            if getattr(br, name) is not None:
+                dropped(br.id, name, getattr(br, name))
     if lines:
         zb = [bus_by_id[br.from_bus].base_kv ** 2 / net.base_mva for br in lines]
         pp.create_lines_from_parameters(

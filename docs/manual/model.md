@@ -89,6 +89,8 @@ A line or a transformer between two buses. The tap is on the **from** side (MATP
 | `b` | `float` | pu on `base_mva` | required | **Total** line-charging susceptance; builders apply `b/2` per end. |
 | `rating_mva` | `float \| None` | MVA | `None` | Thermal rating; `None` means unrated. Must be > 0 when given (`BAD_RANGE`). |
 | `rating_emergency_mva` | `float \| None` | MVA | `None` | Short-term rating a post-contingency flow is held to ([ADR-020](../design/decisions.md)); `None` means the normal rating applies after a contingency too. Needs a `rating_mva` and must not be below it (`BAD_RANGE`). Read by [`contingency.n1`](n1.md) and [`opf.solve_scopf`](scopf.md), never by a base-case solve. |
+| `angle_min_deg` | `float \| None` | degrees | `None` | Lower limit on the angle difference `va(from) − va(to)` ([ADR-029](../design/decisions.md)); `None` means none. Read by [`opf.solve_ac_opf`](ac-opf.md) only; within \([-360, 360]\) and not above `angle_max_deg` (`BAD_RANGE`). MATPOWER's `ANGMIN`. |
+| `angle_max_deg` | `float \| None` | degrees | `None` | Upper limit on the same angle difference; `None` means none. MATPOWER's `ANGMAX`. |
 | `tap_ratio` | `float \| None` | — | `None` | Off-nominal tap magnitude; `None` means 1.0. Must be > 0 when given (`BAD_RANGE`). |
 | `shift_deg` | `float \| None` | degrees | `None` | Phase shift; `None` means 0. |
 | `in_service` | `bool` | — | `True` | |
@@ -301,7 +303,7 @@ where a number is expected, an unknown field, `NaN` — still raise pydantic's
 | `DUPLICATE_ID` | Two elements in the same collection share an `id` (ids may repeat across collections). |
 | `DANGLING_REF` | `Branch.from_bus` / `to_bus`, `Generator.bus`, `Load.bus`, `Shunt.bus`, `Storage.bus` names a bus that does not exist; `Bus.zone` names a zone that does not exist. |
 | `BAD_BASE` | `base_mva <= 0`, or a bus with `base_kv <= 0`. |
-| `BAD_RANGE` | `v_min_pu > v_max_pu`; `from_bus == to_bus`; `tap_ratio <= 0`; `r == x == 0`; `rating_mva <= 0`; a `rating_emergency_mva` without a `rating_mva` or below it; a start-up tier without its partner field, hot and warm windows out of order, or tier costs decreasing with off time; `p_min_mw > p_max_mw`; `q_min_mvar > q_max_mvar`; a `ramp_up_mw` or `ramp_down_mw` that is given and not `> 0`; an empty polynomial cost or bid; a piecewise cost or bid with fewer than two points or non-increasing `p_mw`; `soc_initial` outside \([0, 1]\); an efficiency outside \((0, 1]\); a `Storage.p_max_mw` or `energy_mwh` not `> 0`. |
+| `BAD_RANGE` | `v_min_pu > v_max_pu`; `from_bus == to_bus`; `tap_ratio <= 0`; `r == x == 0`; `rating_mva <= 0`; a `rating_emergency_mva` without a `rating_mva` or below it; an angle limit outside \([-360, 360]\) or `angle_min_deg > angle_max_deg`; a start-up tier without its partner field, hot and warm windows out of order, or tier costs decreasing with off time; `p_min_mw > p_max_mw`; `q_min_mvar > q_max_mvar`; a `ramp_up_mw` or `ramp_down_mw` that is given and not `> 0`; an empty polynomial cost or bid; a piecewise cost or bid with fewer than two points or non-increasing `p_mw`; `soc_initial` outside \([0, 1]\); an efficiency outside \((0, 1]\); a `Storage.p_max_mw` or `energy_mwh` not `> 0`. |
 
 `ValidationCode` is the `Literal` of these seven strings.
 

@@ -143,6 +143,6 @@ flowchart LR
 | M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
 | M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
-| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0); unit commitment on the multiperiod market (0.5.0); AC-OPF (0.6.0); minimum up/down times (0.7.0); emergency ratings (0.8.0); corrective SCOPF (0.9.0); PSS/E RAW export (0.10.0); spinning reserve (0.11.0); N-2 screening and N-2 SCOPF (0.12.x); hot/warm/cold starts (0.13.0); command line (0.14.0); zonal reserve (0.15.0) | merged |
+| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0); unit commitment on the multiperiod market (0.5.0); AC-OPF (0.6.0); minimum up/down times (0.7.0); emergency ratings (0.8.0); corrective SCOPF (0.9.0); PSS/E RAW export (0.10.0); spinning reserve (0.11.0); N-2 screening and N-2 SCOPF (0.12.x); hot/warm/cold starts (0.13.0); command line (0.14.0); zonal reserve (0.15.0); angle-difference limits (0.16.0) | merged |
 
 mambo-power is MIT licensed. Source: [github.com/mambo10005/mambo-power](https://github.com/mambo10005/mambo-power).

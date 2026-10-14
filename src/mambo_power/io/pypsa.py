@@ -69,6 +69,7 @@ CODES: tuple[str, ...] = (
     "PYPSA_GEN_Q_LIMITS_DROPPED",
     "PYPSA_GEN_RAMP_DROPPED",
     "PYPSA_EMERGENCY_RATING_DROPPED",
+    "PYPSA_ANGLE_LIMIT_DROPPED",
     "PYPSA_GEN_VSET_CONFLICT",
     "PYPSA_UNRATED_S_NOM_DEFAULTED",
     "PYPSA_COST_NONCONVEX",
@@ -180,6 +181,16 @@ def _add_branches(
                     code="PYPSA_EMERGENCY_RATING_DROPPED",
                     message=f"branch {br.id!r}: PyPSA branches carry one s_nom; dropped "
                     f"rating_emergency_mva={br.rating_emergency_mva}",
+                    element_ids=[br.id],
+                )
+            )
+        if br.angle_min_deg is not None or br.angle_max_deg is not None:
+            warn(
+                ConversionIssue(
+                    code="PYPSA_ANGLE_LIMIT_DROPPED",
+                    message=f"branch {br.id!r}: PyPSA branches carry no angle-difference "
+                    f"limit; dropped angle_min_deg={br.angle_min_deg}, "
+                    f"angle_max_deg={br.angle_max_deg}",
                     element_ids=[br.id],
                 )
             )

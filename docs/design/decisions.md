@@ -1289,6 +1289,44 @@ builder, `zone_reserve_mw` with `gen_zone`.
 lacks (the zonal market's own reasoning in `market.zonal`); reserve as a share of zonal load — a per-period
 MW on `Period` is what is stated.
 
+## ADR-029 — Angle-difference limits as exact linear rows of the AC-OPF
+
+**Status:** accepted 2026-10-13.
+
+**Context.** MATPOWER's branch table carries `ANGMIN` / `ANGMAX`, a bound on
+\(\theta_f - \theta_t\) that operators use as a transient-stability proxy; the importer dropped
+the columns and the AC-OPF (ADR-018) listed the limit as unmodelled.
+
+**Decision.** `Branch.angle_min_deg` / `angle_max_deg` (degrees, `None` for none; `BAD_RANGE`
+outside \([-360, 360]\) or inverted), `NetworkArrays.angle_min_rad` / `angle_max_rad` (±∞
+where none), and in the AC-OPF one row per given bound.
+
+1. **Exact in every LP step.** The angle difference is linear in the decision vector, so the
+   row \(\Delta\theta_f - \Delta\theta_t \le \theta_\max - \theta_\text{now}\) is the
+   constraint itself, not a linearisation; it is carried with the same elastic slacks and
+   penalty as the flow limits so that an infeasible start still has a step, and it joins the
+   merit function's residual.
+2. **The dual is the limit's price**, \(\partial(\text{cost})/\partial\theta\) in $/rad·h,
+   read from the LP at the KKT point like every other dual: negative when the upper bound
+   binds, positive when the lower one does, on `AcOpfDuals.angle` and
+   `AcBranchFlowResult.angle_dual`; `angle_deg` reports the angle it bounds.
+3. **MATPOWER's two "no limit" spellings both read as `None`**: `(-360, 360)` and `(0, 0)` (the
+   caseformat's documented convention), and either side at ±360 alone. No bundled case states
+   a limit, so every published objective is unchanged.
+4. **Nowhere else.** The DC-OPF's angles are \(x \cdot P\), so a DC angle limit would be a
+   flow limit in disguise and the rating already is one; the exporters to pandapower, PyPSA and
+   RAW drop the fields with a named report code (`FIELD_DROPPED`, `PYPSA_ANGLE_LIMIT_DROPPED`).
+
+**Consequences.**
+
+1. **A degree of margin has a price.** The example in the manual prices case14's 6° cap on
+   `branch-2` at 77 $/h per degree, confirmed by a finite difference of the optimum.
+2. **A limit the flow cannot meet is infeasible**, reported through the elastic penalty and the
+   status like a flow limit, not silently relaxed.
+
+*Rejected:* an angle limit in the DC-OPF (redundant with the rating, see 4); a limit on the
+angle in the power flow (a power flow has no freedom to honour it).
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

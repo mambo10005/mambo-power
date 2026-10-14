@@ -69,6 +69,16 @@ class Branch(_Entity):
     x: float = Field(description="Series reactance, per unit on base_mva.")
     b: float = Field(description="Total line charging susceptance, per unit on base_mva.")
     rating_mva: float | None = Field(default=None, description="Thermal rating, MVA; None = none.")
+    angle_min_deg: float | None = Field(
+        default=None,
+        description="Lower limit on the angle difference va(from) − va(to), degrees (ADR-029; "
+        "MATPOWER ANGMIN); None = none. Enforced by opf.solve_ac_opf.",
+    )
+    angle_max_deg: float | None = Field(
+        default=None,
+        description="Upper limit on the angle difference va(from) − va(to), degrees (MATPOWER "
+        "ANGMAX); None = none.",
+    )
     rating_emergency_mva: float | None = Field(
         default=None,
         description="Short-term (post-contingency) rating, MVA, >= rating_mva (ADR-020); None = "

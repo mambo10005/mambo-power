@@ -149,6 +149,10 @@ class AcOpfDuals:
     """Per-branch dual of the from-side apparent-power limit, $/MVA²h; 0 unless binding."""
     flow_to: FloatArray
     """Per-branch dual of the to-side apparent-power limit; 0 unless binding."""
+    angle: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Per-branch dual of the angle-difference limit (ADR-029), $/rad·h: negative when the
+    upper limit binds, positive when the lower one does, 0 otherwise or on an unlimited
+    branch."""
 
 
 @dataclass(frozen=True)
@@ -280,6 +284,10 @@ def ac_opf(
     yf, yt = yf_yt(arr)
     f_idx, t_idx = arr.f, arr.t
     rated = np.flatnonzero(np.isfinite(arr.rating_pu))
+    # branches with an angle-difference limit (ADR-029): va[f] − va[t] within [min, max]
+    angled = np.flatnonzero(np.isfinite(arr.angle_min_rad) | np.isfinite(arr.angle_max_rad))
+    angle_lo = arr.angle_min_rad[angled]
+    angle_hi = arr.angle_max_rad[angled]
     rating_sq = arr.rating_pu[rated] ** 2
     p_load, q_load = arr.p_load_pu, arr.q_load_pu
     gen_bus = arr.gen_bus
@@ -326,12 +334,16 @@ def ac_opf(
         s_f = v[f_idx] * np.conj(yf @ v)
         s_t = v[t_idx] * np.conj(yt @ v)
         vm = np.abs(v)
+        va = np.angle(v)
+        theta = va[f_idx[angled]] - va[t_idx[angled]]
         viol = np.concatenate(
             [
                 np.abs(s_f[rated]) ** 2 - rating_sq,
                 np.abs(s_t[rated]) ** 2 - rating_sq,
                 v_min_pu - vm,  # a voltage outside its band is a violation like an overload
                 vm - v_max_pu,
+                np.where(np.isfinite(angle_lo), angle_lo - theta, 0.0),
+                np.where(np.isfinite(angle_hi), theta - angle_hi, 0.0),
             ]
         )
         return g_p, g_q, np.maximum(viol, 0.0), s_f, s_t
@@ -395,9 +407,12 @@ def ac_opf(
     col_sp_minus = col_sp_plus + n_bus
     col_sq_plus = col_sp_plus + 2 * n_bus
     col_sq_minus = col_sp_plus + 3 * n_bus
-    n_flow = 2 * rated.size
+    n_flow = 2 * rated.size + 2 * angled.size  # flow slacks, then angle slacks
     col_flow_slack = np.arange(
-        slack_base + 4 * n_bus, slack_base + 4 * n_bus + n_flow, dtype=np.int32
+        slack_base + 4 * n_bus, slack_base + 4 * n_bus + 2 * rated.size, dtype=np.int32
+    )
+    col_angle_slack = np.arange(
+        slack_base + 4 * n_bus + 2 * rated.size, slack_base + 4 * n_bus + n_flow, dtype=np.int32
     )
     cost_base = slack_base + 4 * n_bus + n_flow
     curved = sorted(set(pwl_gen_idxs) | set(np.flatnonzero(c2 != 0.0).tolist()))
@@ -525,6 +540,37 @@ def ac_opf(
                         rating_sq - np.abs(s_side[rated]) ** 2,
                     ),
                 )
+        # angle-difference limits (ADR-029), exact in the step: dva[f] − dva[t] − s⁺ <= max − θ,
+        # dva[f] − dva[t] + s⁻ >= min − θ, one elastic slack per side like a flow row
+        if angled.size:
+            theta_now = va[f_idx[angled]] - va[t_idx[angled]]
+            incidence = sparse.csc_matrix(
+                (
+                    np.concatenate([np.ones(angled.size), -np.ones(angled.size)]),
+                    (
+                        np.concatenate([np.arange(angled.size), np.arange(angled.size)]),
+                        np.concatenate([f_idx[angled], t_idx[angled]]),
+                    ),
+                ),
+                shape=(angled.size, n_bus),
+            )
+            eye_a = sparse.identity(angled.size, format="csc")
+            _add_rows(
+                h,
+                _rows_from_blocks(
+                    [(incidence, col_va), (-eye_a, col_angle_slack[: angled.size])],
+                    np.full(angled.size, -inf),
+                    np.where(np.isfinite(angle_hi), angle_hi - theta_now, inf),
+                ),
+            )
+            _add_rows(
+                h,
+                _rows_from_blocks(
+                    [(incidence, col_va), (eye_a, col_angle_slack[angled.size :])],
+                    np.where(np.isfinite(angle_lo), angle_lo - theta_now, -inf),
+                    np.full(angled.size, inf),
+                ),
+            )
         # epigraph rows, cost_g − slope·dpg >= slope·pg + intercept: a piecewise-linear cost's
         # own segments, a quadratic cost's chords through the current dispatch
         if curved:
@@ -594,6 +640,13 @@ def ac_opf(
             if rated.size:
                 flow_from[rated] = row_dual[2 * n_bus : 2 * n_bus + rated.size]
                 flow_to[rated] = row_dual[2 * n_bus + rated.size : 2 * n_bus + 2 * rated.size]
+            angle_dual = np.zeros(n_branch)
+            if angled.size:
+                angle_base = 2 * n_bus + 2 * rated.size
+                angle_dual[angled] = (
+                    row_dual[angle_base : angle_base + angled.size]
+                    + row_dual[angle_base + angled.size : angle_base + 2 * angled.size]
+                )
             # the balance row carries −C_g·dp/base: a $/pu·h dual on it is −base × the price
             # a column's reduced cost belongs to its physical bound only when the column sits
             # on that bound; on a trust-region bound it is an artefact of the last radius
@@ -608,6 +661,7 @@ def ac_opf(
                 v_bound=np.where(at_v, col_dual[col_vm], 0.0),
                 flow_from=flow_from,
                 flow_to=flow_to,
+                angle=angle_dual,
             )
             status = _OPTIMAL
             message = None

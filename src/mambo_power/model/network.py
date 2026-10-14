@@ -186,6 +186,16 @@ def validate_network(net: Network) -> list[ValidationIssue]:
                 f"branches[{index}].rating_mva",
                 f'branch "{branch.id}": rating_mva must be > 0 when given, got {branch.rating_mva}',
             )
+        lo, hi = branch.angle_min_deg, branch.angle_max_deg
+        if (lo is not None and hi is not None and lo > hi) or any(
+            a is not None and not -360.0 <= a <= 360.0 for a in (lo, hi)
+        ):
+            add(
+                "BAD_RANGE",
+                f"branches[{index}].angle_min_deg",
+                f'branch "{branch.id}": angle limits must satisfy -360 <= angle_min_deg <= '
+                f"angle_max_deg <= 360, got {lo} and {hi}",
+            )
         emergency = branch.rating_emergency_mva
         if emergency is not None and (branch.rating_mva is None or emergency < branch.rating_mva):
             add(

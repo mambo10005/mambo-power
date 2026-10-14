@@ -378,6 +378,9 @@ def _build(case: _Case) -> tuple[Network, list[ImportIssue]]:
             rating_mva=row[5] if row[5] > 0 else None,
             # RATE_C, MATPOWER's emergency rating, only where it says more than RATE_A
             rating_emergency_mva=row[7] if 0 < row[5] < row[7] else None,
+            # ANGMIN/ANGMAX: -360..360 (or 0, 0) is MATPOWER's "unconstrained"
+            angle_min_deg=_angle_limit(row, 11, -360.0),
+            angle_max_deg=_angle_limit(row, 12, 360.0),
             tap_ratio=row[8] if row[8] != 0 else None,
             shift_deg=row[9] if row[9] != 0 else None,
             in_service=row[10] > 0,
@@ -460,6 +463,18 @@ def _costs(
                 "BAD_NUMBER", f"mpc.gencost MODEL must be 1 or 2, got {model}", line
             )
     return costs
+
+
+def _angle_limit(row: list[float], column: int, unconstrained: float) -> float | None:
+    """``ANGMIN``/``ANGMAX`` as a model limit: ``None`` for MATPOWER's two "no limit" spellings
+    (``-360``/``360`` and ``0``/``0``), the value otherwise (ADR-029)."""
+    if len(row) <= 12:
+        return None
+    lo, hi = row[11], row[12]
+    if (lo, hi) == (0.0, 0.0):
+        return None
+    value = row[column]
+    return None if value == unconstrained else value
 
 
 def _label(value: float) -> str:

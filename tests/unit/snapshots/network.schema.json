@@ -47,6 +47,32 @@
           "description": "Thermal rating, MVA; None = none.",
           "title": "Rating Mva"
         },
+        "angle_min_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Lower limit on the angle difference va(from) \u2212 va(to), degrees (ADR-029; MATPOWER ANGMIN); None = none. Enforced by opf.solve_ac_opf.",
+          "title": "Angle Min Deg"
+        },
+        "angle_max_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Upper limit on the angle difference va(from) \u2212 va(to), degrees (MATPOWER ANGMAX); None = none.",
+          "title": "Angle Max Deg"
+        },
         "rating_emergency_mva": {
           "anyOf": [
             {

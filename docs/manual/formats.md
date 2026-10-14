@@ -147,7 +147,7 @@ string is a path or a document.
 | 9 | `TAP` | `tap_ratio` | `0` means nominal → `None` |
 | 10 | `SHIFT` | `shift_deg` | `0` → `None` |
 | 11 | `BR_STATUS` | `in_service` | `> 0` is in service |
-| 12–13 | `ANGMIN`, `ANGMAX` | dropped | angle-difference limits |
+| 12–13 | `ANGMIN`, `ANGMAX` | `angle_min_deg`, `angle_max_deg` | `None` for either of MATPOWER's "no limit" spellings (`-360`/`360`, or both `0`); otherwise the limit in degrees (ADR-029) |
 | 14–21 | `PF`…`MU_ANGMAX` | dropped | power-flow / OPF result columns |
 
 ### `mpc.gencost`
@@ -231,7 +231,7 @@ is left to `Network` validation and raises `NetworkValidationError`
 
 - Only the caseformat v2 column layout is supported; v1 files (no `mpc.` prefix, different
   branch columns) are not recognised.
-- Dropped columns (listed above): `MBASE`, `PC1`–`APF`, `RATE_B`/`RATE_C`, `ANGMIN`/`ANGMAX`,
+- Dropped columns (listed above): `MBASE`, `PC1`–`APF`, `RATE_B`,
   every `MU_*` / `LAM_*` and stored-result column. Re-exporting a case is therefore lossy
   for those fields (an exporter is not shipped yet).
 - `mpc.bus_name` is ignored because `Bus` carries no name field.
@@ -354,7 +354,7 @@ to compute its impedance — it re-imports as a rating.
 | `ELEMENT_DROPPED` | both | Import: a row of a table that is not read (`trafo3w`, `switch`, `storage`, ...) or a `poly_cost` / `pwl_cost` row that is not a generator's active-power cost. Export: a `Storage` unit (pandapower's `storage` has no efficiency columns). |
 | `FIELD_DEFAULTED` | both | Import: a missing or `NaN` limit column (`min/max_p_mw`, `min/max_q_mvar` on `ext_grid` / `gen` / `sgen`) set to the element's setpoint, so the limits pin the setpoint rather than invent a range. Export: an unrated transformer's `sn_mva` set to `base_mva`. |
 | `ISLAND_DEACTIVATED` | import | As for MATPOWER: buses that cannot reach the slack are switched off with their elements ([islands](#islands)). |
-| `FIELD_DROPPED` | export | A model field with no pandapower column: `Zone.name`, a stored `Bus.vm_pu` / `va_deg` on any bus but the slack (results tables are not written; one issue, `bus_ids` names them), generator `ramp_up_mw` / `ramp_down_mw` / `min_up_periods` / `min_down_periods` / `initial_state_periods` / `reserve_max_mw` / the `startup_hot_*` and `startup_warm_*` tiers, a branch's `rating_emergency_mva`, the slack generator's `p_mw` / `q_mvar` (`ext_grid` has no setpoint), a PV generator's `q_mvar`, an `sgen`'s `v_set_pu`, a transformer's `b` (no line charging on a trafo), `cost.startup` / `cost.shutdown`, and a piecewise cost's offset `points[0][1]`. |
+| `FIELD_DROPPED` | export | A model field with no pandapower column: `Zone.name`, a stored `Bus.vm_pu` / `va_deg` on any bus but the slack (results tables are not written; one issue, `bus_ids` names them), generator `ramp_up_mw` / `ramp_down_mw` / `min_up_periods` / `min_down_periods` / `initial_state_periods` / `reserve_max_mw` / the `startup_hot_*` and `startup_warm_*` tiers, a branch's `rating_emergency_mva` / `angle_min_deg` / `angle_max_deg`, the slack generator's `p_mw` / `q_mvar` (`ext_grid` has no setpoint), a PV generator's `q_mvar`, an `sgen`'s `v_set_pu`, a transformer's `b` (no line charging on a trafo), `cost.startup` / `cost.shutdown`, and a piecewise cost's offset `points[0][1]`. |
 | `COST_DROPPED` | export | A polynomial cost of degree > 2 (`poly_cost` holds `cp0..cp2`); dropped, never approximated. |
 | `BID_DROPPED` | export | A load's demand bid (pandapower has no elastic demand); the load is written as a fixed `p_mw`. |
 
@@ -445,6 +445,7 @@ objective on every bundled case (`tests/parity/test_pypsa_export_vs_pypsa.py`).
 | `PYPSA_GEN_Q_LIMITS_DROPPED` | `q_min_mvar` / `q_max_mvar` (PyPSA generators carry no reactive limits). |
 | `PYPSA_GEN_RAMP_DROPPED` | A ramp on a zero-capacity generator (cannot be a fraction of `p_nom = 0`). |
 | `PYPSA_EMERGENCY_RATING_DROPPED` | A branch with a `rating_emergency_mva`: PyPSA branches carry one `s_nom`. |
+| `PYPSA_ANGLE_LIMIT_DROPPED` | A branch with an `angle_min_deg` / `angle_max_deg`: PyPSA branches carry no angle-difference limit. |
 | `PYPSA_GEN_VSET_CONFLICT` | In-service generators at one bus disagreeing on `v_set_pu`; PyPSA has one `v_mag_pu_set` per bus, the first in-service generator's wins (out-of-service units do not take part). |
 | `PYPSA_COST_NONCONVEX` | A quadratic cost with `c2 < 0` (concave). Exported unchanged as `marginal_cost_quadratic` — nothing is dropped — but PyPSA's solver will reject the non-convex objective with its own error, so the report names the generator up front. |
 | `PYPSA_UNRATED_S_NOM_DEFAULTED` | A branch with `rating_mva = None`, written with `s_nom = 1e5` (`pypsa.UNRATED_S_NOM_MVA`); one entry per branch naming it and the sentinel. |
@@ -601,6 +602,7 @@ Anything wrong with the **network** raises `NetworkValidationError`, as for ever
   whose voltage profile relies on it solves to a different voltage.
 - Transformers have `b = 0`; the magnetising branch is a bus shunt, not line charging.
 - `RATEA` becomes `rating_mva` and, on branch records, `RATEC` becomes `rating_emergency_mva` where it exceeds `RATEA`; `RATEB` and a transformer's `RATB1` / `RATC1` are dropped.
+- RAW carries no angle-difference limits: a branch's `angle_min_deg` / `angle_max_deg` is dropped on export (`FIELD_DROPPED`).
 
 ### Example
 
