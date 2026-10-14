@@ -8,7 +8,10 @@ typed :class:`~mambo_power.results.N1Result`; the array-level split
 by LODF, generator outages by the PTDF column of the generator's bus (ADR-015); both are
 confirmed by a real DC re-solve.
 
-Note: this module deliberately binds the name ``n1`` twice — the submodule
+:func:`n2` is the branch-pair counterpart (ADR-024): the generalised-LODF screen of every pair
+of branch outages, confirmed the same way.
+
+Note: this module deliberately binds the names ``n1`` and ``n2`` twice — the submodule
 ``mambo_power.contingency.n1`` (imported below for its array-level functions) and the network-
 level function defined at the end of this file, which rebinds the package attribute ``n1`` to
 itself. After import, ``mambo_power.contingency.n1`` is the function; code that wants the
@@ -23,12 +26,13 @@ from datetime import UTC, datetime
 
 import mambo_power
 from mambo_power.contingency.n1 import N1Options, confirm_n1, confirm_n1_generators, screen_n1
+from mambo_power.contingency.n2 import N2Options, confirm_n2, screen_n2
 from mambo_power.model import Network
 from mambo_power.numerics import NetworkArrays
 from mambo_power.pf import dc as pfdc
-from mambo_power.results import N1Result, ResultProvenance
+from mambo_power.results import N1Result, N2Result, ResultProvenance
 
-__all__ = ["N1Options", "n1"]
+__all__ = ["N1Options", "N2Options", "n1", "n2"]
 
 
 def n1(net: Network, options: N1Options | None = None) -> N1Result:
@@ -70,4 +74,39 @@ def n1(net: Network, options: N1Options | None = None) -> N1Result:
         bridge_branch_ids=bridge_branch_ids,
         generator_outages=generator_outages,
         slack_generator_ids=slack_generator_ids,
+    )
+
+
+def n2(net: Network, options: N2Options | None = None) -> N2Result:
+    """Screen every pair of branch outages of *net* by the generalised LODF, then DC re-solve each
+    flagged pair (ADR-024; :mod:`mambo_power.contingency.n2`).
+
+    Pairs whose joint removal disconnects the network are reported as ``islanding_pairs`` rather
+    than estimated; the confirming re-solves stop at ``options.max_confirmed_pairs`` and the
+    result says so (``truncated``). *net* is not modified.
+    """
+    opts = options if options is not None else N2Options()
+    started_at = datetime.now(UTC)
+    clock = time.perf_counter()
+
+    arr = NetworkArrays.from_network(net)
+    screen = screen_n2(arr)
+    outages, truncated = confirm_n2(net, arr, screen, max_pairs=opts.max_confirmed_pairs)
+
+    provenance = ResultProvenance(
+        engine="mambo-power",
+        version=mambo_power.__version__,
+        kind="n2",
+        solver=pfdc.SOLVER,
+        started_at=started_at,
+        elapsed_s=time.perf_counter() - clock,
+        options=opts.model_dump(),
+    )
+    return N2Result(
+        provenance=provenance,
+        outages=outages,
+        islanding_pairs=[[arr.branch_ids[i], arr.branch_ids[j]] for i, j in screen.islanding],
+        bridge_branch_ids=[arr.branch_ids[p] for p in screen.bridge_positions],
+        n_pairs_screened=screen.n_pairs_screened,
+        truncated=truncated,
     )

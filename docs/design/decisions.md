@@ -1109,6 +1109,44 @@ operators state and what a scenario file can carry; a reserve offer price per un
 in the model prices capacity, and the opportunity-cost price a costless column yields is the
 standard co-optimisation result.
 
+## ADR-024 — N-2 branch pairs by the generalised LODF, with cut sets detected rather than estimated
+
+**Status:** accepted 2026-10-13.
+
+**Context.** ADR-016 and ADR-021 both list N-2 as the next contingency class. The N-1 screen's
+machinery — base case, LODF, bridges, confirming re-solves — covers everything but the pair
+arithmetic, and the DC model is linear, so the pair estimate is a closed form rather than a
+second re-solve.
+
+**Decision.** `contingency.n2`, the pair counterpart of `contingency.n1`.
+
+1. **The generalised LODF, vectorised.** For each branch \(i\), every pair \((i, j > i)\) is
+   estimated at once: the 2×2 system for the two shed flows, then every other branch's flow
+   from them — \(O(n^3)\) over the whole network, 0.2 s on case300.
+2. **A zero determinant is an answer.** \(1 - L_{ij} L_{ji} = 0\) means the pair disconnects
+   the network; such pairs are reported as `islanding_pairs` and never estimated, and a pair
+   with an N-1 bridge is skipped up front. The brute-force test checks the determinant test
+   against the model's own connectivity check on every pair of case14_rated.
+3. **Confirmed like N-1.** Every flagged pair is DC re-solved with both branches out, one deep
+   copy flipped and restored per pair; `max_confirmed_pairs` caps the re-solves and the result
+   says when it did. Emergency ratings (ADR-020) are the post-contingency limit.
+4. **A `jobs` kind.** `n2`, `N2Options` → `N2Result`, the eleventh kind.
+
+**Consequences.**
+
+1. **The same guarantee, one order up.** Flagged pairs confirmed to 1e-9 MW, unflagged pairs
+   proved non-violating, islanding pairs proved islanding — all by brute force on the rated
+   fixture.
+2. **It is a screen, not a constraint.** No N-2 security rows in the SCOPF; ADR-016's
+   constraint generation would take them unchanged (the pair row is linear in the dispatch),
+   recorded here as the next step along with generator pairs and mixed pairs.
+3. **The result can be large.** A weakly rated network flags thousands of pairs; the cap and
+   `truncated` keep the result bounded and honest.
+
+*Rejected:* N-2 by two successive N-1 LODF applications — wrong by the cross term whenever the
+two branches interact; re-solving every pair — \(O(n^2)\) factorisations, minutes on case300
+for a screen that costs a fifth of a second.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

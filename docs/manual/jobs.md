@@ -33,7 +33,7 @@ survive that boundary. `jobs` turns every outcome into data.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `kind` | `str` | One of the keys of `KINDS`: `"pf.ac"`, `"pf.dc"` in M2; `"opf.dc"`, `"n1"` in M3; `"market.nodal"` in M4; `"market.multiperiod"` in M5; `"market.zonal"` in M6; `"market.agents"` in M7; `"opf.scopf"` and `"opf.ac"` post-epic (ADR-016, ADR-018). |
+| `kind` | `str` | One of the keys of `KINDS`: `"pf.ac"`, `"pf.dc"` in M2; `"opf.dc"`, `"n1"` in M3; `"market.nodal"` in M4; `"market.multiperiod"` in M5; `"market.zonal"` in M6; `"market.agents"` in M7; `"opf.scopf"`, `"opf.ac"` and `"n2"` post-epic (ADR-016, ADR-018, ADR-024). |
 | `network` | `Network \| None` | The network to solve (inline; the request is self-contained). Mutually exclusive with `scenario`. |
 | `scenario` | `Scenario \| None` | The scenario to solve — a network plus its `periods`. Mutually exclusive with `network`. |
 | `options` | `dict[str, Any]` | Kind-specific options, validated against the kind's options model (`AcOptions` for `pf.ac`; none for `pf.dc`). Unknown keys are a failure, not silently ignored. Default `{}`. |
@@ -73,7 +73,7 @@ an unbounded list in a network-facing model is an unbounded solve.
 | `kind` | `str` | Echo of the request kind (`""` when the request text could not be read at all). |
 | `job_id` | `str \| None` | Echo of the request `job_id`. |
 | `status` | `"ok" \| "failed"` | Outcome. |
-| `result` | kind's result model or `None` | The registered kind's own model — `AcPowerFlowResult` / `DcPowerFlowResult` for the power-flow kinds, `OpfDcResult`, `N1Result`, `MarketNodalResult`, `MarketMultiperiodResult`, `MarketZonalResult`, `MarketAgentsResult` for the rest. Present exactly when `status == "ok"`. |
+| `result` | kind's result model or `None` | The registered kind's own model — `AcPowerFlowResult` / `DcPowerFlowResult` for the power-flow kinds, `OpfDcResult`, `N1Result`, `N2Result`, `MarketNodalResult`, `MarketMultiperiodResult`, `MarketZonalResult`, `MarketAgentsResult` for the rest. Present exactly when `status == "ok"`. |
 | `error` | `StructuredError \| None` | Present exactly when `status == "failed"`. |
 | `provenance` | `ResultProvenance \| None` | The solver's stamp on success; a minimal stamp on failure; `None` only when not even the kind was readable. |
 | `warnings` | `list[str]` | Every warning emitted during the solve, as `"Category: message"` strings. |
@@ -202,13 +202,14 @@ for name, spec in jobs.KINDS.items():
 ```
 
 ```text
-['market.agents', 'market.multiperiod', 'market.nodal', 'market.zonal', 'n1', 'opf.ac', 'opf.dc', 'opf.scopf', 'pf.ac', 'pf.dc']
+['market.agents', 'market.multiperiod', 'market.nodal', 'market.zonal', 'n1', 'n2', 'opf.ac', 'opf.dc', 'opf.scopf', 'pf.ac', 'pf.dc']
 pf.ac AcOptions AcPowerFlowResult
 pf.dc None DcPowerFlowResult
 opf.dc OpfDcOptions OpfDcResult
 opf.ac OpfAcOptions OpfAcResult
 opf.scopf ScopfOptions ScopfDcResult
 n1 N1Options N1Result
+n2 N2Options N2Result
 market.nodal MarketNodalOptions MarketNodalResult
 market.multiperiod MarketMultiperiodOptions MarketMultiperiodResult
 market.zonal MarketZonalOptions MarketZonalResult
@@ -268,7 +269,7 @@ print(noslack.status, noslack.error.code, "|", noslack.error.message)
 ```
 
 ```text
-failed UNKNOWN_KIND | unknown kind "pf.telepathy"; registered kinds: market.agents, market.multiperiod, market.nodal, market.zonal, n1, opf.ac, opf.dc, opf.scopf, pf.ac, pf.dc
+failed UNKNOWN_KIND | unknown kind "pf.telepathy"; registered kinds: market.agents, market.multiperiod, market.nodal, market.zonal, n1, n2, opf.ac, opf.dc, opf.scopf, pf.ac, pf.dc
 failed BAD_OPTIONS | [{'type': 'float_parsing', 'loc': ['tol'], 'msg': 'Input should be a valid number, unable to parse string as a number'}]
 failed VALIDATION | ['DANGLING_REF at branches[0].to_bus: branch "branch-1": to_bus references missing bus "bus-999"']
 failed NO_SLACK_GENERATOR | slack bus "bus-1" (position 0) has no in-service generator; a power flow cannot close the balance

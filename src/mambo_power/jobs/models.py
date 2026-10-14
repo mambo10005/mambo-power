@@ -37,6 +37,7 @@ from mambo_power.results import (
     MarketNodalResult,
     MarketZonalResult,
     N1Result,
+    N2Result,
     OpfAcResult,
     OpfDcResult,
     ResultProvenance,
@@ -50,6 +51,7 @@ ResultModel = (
     | OpfAcResult
     | ScopfDcResult
     | N1Result
+    | N2Result
     | MarketNodalResult
     | MarketMultiperiodResult
     | MarketZonalResult

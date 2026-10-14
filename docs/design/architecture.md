@@ -23,7 +23,7 @@ flowchart TB
         opfmp["opf.multiperiod<br/>multiperiod_dc_opf<br/>(ramp, SoC, cyclic,<br/>commitment rows)"]
         opfz["opf.zonal<br/>zonal_dc_opf<br/>(per-zone balance, corridor columns)"]
         opfrd["opf.redispatch<br/>redispatch_dc_opf<br/>(delta columns both sides)"]
-        contingency["contingency<br/>n1, screen_n1, screen_n1_dispatch,<br/>confirm_n1, confirm_n1_generators"]
+        contingency["contingency<br/>n1, screen_n1, screen_n1_dispatch,<br/>confirm_n1, confirm_n1_generators,<br/>n2, screen_n2, confirm_n2"]
         market["market<br/>solve_nodal (one period),<br/>solve_multiperiod (a horizon),<br/>solve_zonal (zonal + redispatch)"]
         marketstrategy["market.strategy<br/>Observation, Strategy,<br/>PriceTakerStrategy, MarkupStrategy,<br/>StrategyConfig, build_strategy"]
         marketagents["market.agents<br/>solve_agents, AgentSetError<br/>(the fixed-point loop over offers)"]
@@ -151,6 +151,7 @@ consumers honest when the owner changes.
 | Result provenance | `results.ResultProvenance` | jobs, docs | `provenance.version == mambo_power.__version__` |
 | DC-OPF formulation | `opf` (M3) | market.*, jobs | parity against pandapower `rundcopp` (primary) and PyPSA `optimize` (secondary) |
 | N-1 screen-vs-confirm | `contingency.n1` (M3; generator outages ADR-015) | jobs | brute-force all-outage sweeps (branches and generators) agree with the LODF/PTDF screen + DC re-solve on every fixture |
+| N-2 pair screen-vs-confirm | `contingency.n2` (ADR-024) | jobs | brute-force all-pair sweep of case14_rated agrees with the generalised-LODF screen + DC re-solve; islanding pairs agree with the connectivity check |
 | LMP / congestion rent | `market.nodal` (M4) | zonal comparison, multiperiod, agents | settlement identities; LMP(slack) = λ |
 | Ramp / SoC / cyclic row families | `opf.multiperiod` (M5) | sole caller `market.multiperiod` | hand-derived ramp optimum; analytic 2-bus/2-period arbitrage; PyPSA multi-period parity |
 | Cost/bid extraction and the convexity guards | `opf.dc_opf._extract_and_validate` (M6) | `dc_opf`, `opf.multiperiod`, `opf.zonal`, `opf.redispatch` | the whole prior suite passes with zero test edits on a tree differing only in the unified files |
@@ -206,12 +207,12 @@ src/mambo_power/
                     scopf.py (scopf_dc, security_rows),
                     multiperiod.py (multiperiod_dc_opf, Commitment), zonal.py (zonal_dc_opf),
                     redispatch.py (redispatch_dc_opf)
-  contingency/      __init__.py (n1), n1.py (screen_n1, screen_n1_dispatch, confirm_n1, confirm_n1_generators)
+  contingency/      __init__.py (n1, n2), n1.py (screen_n1, screen_n1_dispatch, confirm_n1, confirm_n1_generators), n2.py (screen_n2, confirm_n2)
   market/           __init__.py, nodal.py (solve_nodal), multiperiod.py (solve_multiperiod),
                     zonal.py (solve_zonal, CorridorLimit),
                     strategy.py (Observation, Strategy, PriceTakerStrategy, MarkupStrategy,
                                  StrategyConfig, build_strategy)
-  results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, ac_opf.py, scopf.py, n1.py,
+  results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, ac_opf.py, scopf.py, n1.py, n2.py,
                     feasibility.py, market.py, multiperiod.py, zonal.py
   jobs/             __init__.py, models.py (SolveRequest, SolveResult), registry.py (KINDS), run.py (run, run_json)
 ```

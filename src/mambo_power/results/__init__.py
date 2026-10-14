@@ -38,6 +38,7 @@ from mambo_power.results.n1 import (
     N1OutageResult,
     N1Result,
 )
+from mambo_power.results.n2 import N2OutageResult, N2Result
 from mambo_power.results.opf import (
     BusLmpResult,
     GenDispatchResult,
@@ -101,6 +102,8 @@ __all__ = [
     "N1GeneratorOutageResult",
     "N1OutageResult",
     "N1Result",
+    "N2OutageResult",
+    "N2Result",
     "OpfAcResult",
     "OpfBranchFlowResult",
     "OpfDcResult",

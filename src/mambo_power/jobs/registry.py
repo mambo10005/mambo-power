@@ -28,7 +28,7 @@ from typing import NoReturn
 
 from pydantic import BaseModel
 
-from mambo_power.contingency import N1Options, n1
+from mambo_power.contingency import N1Options, N2Options, n1, n2
 from mambo_power.market.agents import AgentSetError, MarketAgentsOptions, solve_agents
 from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multiperiod
 from mambo_power.market.nodal import MarketNodalOptions, solve_nodal
@@ -51,6 +51,7 @@ from mambo_power.results import (
     MarketNodalResult,
     MarketZonalResult,
     N1Result,
+    N2Result,
     OpfAcResult,
     OpfDcResult,
     ScopfDcResult,
@@ -169,6 +170,12 @@ def _run_opf_scopf(scenario: Scenario, options: BaseModel | None) -> BaseModel:
     if result.status != "Optimal":
         _translate_non_optimal_status("opf.scopf", result.status, result.message)
     return result
+
+
+def _run_n2(scenario: Scenario, options: BaseModel | None) -> BaseModel:
+    """Runner for ``n2``: :func:`mambo_power.contingency.n2` (ADR-024)."""
+    assert isinstance(options, N2Options)  # guaranteed by run(): validated into options_model
+    return n2(scenario.network, options=options)
 
 
 def _run_n1(scenario: Scenario, options: BaseModel | None) -> BaseModel:
@@ -337,6 +344,7 @@ register(
     )
 )
 register(KindSpec(kind="n1", options_model=N1Options, result_model=N1Result, runner=_run_n1))
+register(KindSpec(kind="n2", options_model=N2Options, result_model=N2Result, runner=_run_n2))
 register(
     KindSpec(
         kind="market.nodal",
