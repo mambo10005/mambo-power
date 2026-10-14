@@ -1221,6 +1221,41 @@ event binaries.
 time-dependent start-up cost curves (an exponential in off time) — the three-tier form is what
 operators state and what the piecewise formulation handles exactly.
 
+## ADR-027 — A command line over the jobs surface, adding no behaviour of its own
+
+**Status:** accepted 2026-10-13.
+
+**Context.** Everything the package does is reachable from Python and, through `jobs.run`,
+from one JSON request — the surface a service sits on (ADR-004). Nothing was reachable from a
+shell: a CI step, a batch script or a colleague without a notebook had to write Python to run
+an analysis or convert a file.
+
+**Decision.** `mambo_power.cli`, installed as the `mambo-power` console script and run by
+`python -m mambo_power`.
+
+1. **Five subcommands, all wrappers.** `run` is `jobs.run_json`; `solve` builds the
+   `SolveRequest` from a case name or file and runs it; `convert` is the importers and
+   exporters; `kinds` and `cases` are the two registries. No subcommand does anything a
+   function does not, so the command line cannot drift from the package.
+2. **The jobs contract on the wire.** A failed job is a well-formed `SolveResult` on stdout
+   and exit status 1, never a traceback; usage errors go to stderr with status 1, argparse's
+   own with 2.
+3. **Reports are never silent.** `convert` prints every import and export issue on stderr;
+   `--strict` makes any issue a failure, for a pipeline that must not lose a field quietly.
+4. **No dependency.** argparse and the standard library; pandapower JSON needs pandapower, as
+   in Python, and says so.
+
+**Consequences.**
+
+1. **A console script in `pyproject.toml`** (`[project.scripts]`), the first; the lock file is
+   unchanged since no dependency is.
+2. **Format inference by extension**, with `--from` / `--to` for the ambiguous `.json`.
+3. **Not provided:** a `pf`/`opf` shorthand with inline network edits, a watch mode, or any
+   output other than the result JSON — a service or a script reads the JSON.
+
+*Rejected:* a Click or Typer front end — a dependency for argument parsing the standard
+library does; a REST server in the package — ADR-003 keeps the service a separate repository.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

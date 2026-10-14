@@ -215,6 +215,7 @@ src/mambo_power/
   results/          tables.py, provenance.py, power_flow.py, from_arrays.py, opf.py, ac_opf.py, scopf.py, n1.py, n2.py,
                     feasibility.py, market.py, multiperiod.py, zonal.py
   jobs/             __init__.py, models.py (SolveRequest, SolveResult), registry.py (KINDS), run.py (run, run_json)
+  cli.py            the mambo-power command line over jobs and io (ADR-027); __main__.py runs it
 ```
 
 The test suite mirrors the boundaries: `tests/unit` exercises each module hermetically,

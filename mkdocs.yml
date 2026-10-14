@@ -138,6 +138,7 @@ nav:
       - Agent-based bidding: manual/agents.md
       - Results: manual/results.md
       - Jobs API: manual/jobs.md
+      - Command line: manual/cli.md
   - Examples: examples/index.md
   - API reference:
       - mambo_power.model: api/model.md
@@ -157,6 +158,7 @@ nav:
       - mambo_power.market: api/market.md
       - mambo_power.results: api/results.md
       - mambo_power.jobs: api/jobs.md
+      - mambo_power.cli: api/cli.md
   - Design:
       - Architecture: design/architecture.md
       - Data model: design/data-model.md

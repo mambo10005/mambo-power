@@ -17,6 +17,9 @@ dependencies = [
   "pydantic>=2",
 ]
 
+[project.scripts]
+mambo-power = "mambo_power.cli:main"
+
 [dependency-groups]
 dev = [
   "pytest",
