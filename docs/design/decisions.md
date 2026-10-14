@@ -1256,6 +1256,39 @@ an analysis or convert a file.
 *Rejected:* a Click or Typer front end — a dependency for argument parsing the standard
 library does; a REST server in the package — ADR-003 keeps the service a separate repository.
 
+## ADR-028 — Zonal reserve as one more requirement row per zone over the same columns
+
+**Status:** accepted 2026-10-13.
+
+**Context.** ADR-023's reserve is system-wide: headroom anywhere counts. Operators also require
+reserve that can be *delivered*, which in a zonal design means reserve held inside each zone;
+ADR-023 listed it.
+
+**Decision.** `Period.zone_reserve_mw` (keyed by `Zone` id, checked by `Scenario`) and, on the
+builder, `zone_reserve_mw` with `gen_zone`.
+
+1. **The same columns, one more row family.** Tier 19: per named zone per period,
+   \(\sum_{g \in z} r_g[t] \ge R_z[t]\) over the existing reserve columns, so a unit's reserve
+   counts towards its zone and the system at once; a zonal requirement alone builds the columns
+   with a zero system requirement.
+2. **A premium, not a second price.** The zone row's dual is what a unit in that zone earns on
+   top of the system price; the zone's premium times its units' reserve joins
+   `total_reserve_payment`.
+3. **Deliverability is the point.** Headroom in another zone counts for nothing, and a zone
+   whose own units cannot hold its requirement is infeasible, reported as such.
+
+**Consequences.**
+
+1. **No corridor model.** Zonal reserve is a membership constraint, not a flow one; the DC
+   deliverability of reserve across a corridor is the zonal market's question (`market.zonal`)
+   and is not modelled here.
+2. **A zone a period does not name requires nothing**, and a bus with no zone contributes to
+   no zonal row.
+
+*Rejected:* a reserve corridor capacity — a transfer-capacity entity the model deliberately
+lacks (the zonal market's own reasoning in `market.zonal`); reserve as a share of zonal load — a per-period
+MW on `Period` is what is stated.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

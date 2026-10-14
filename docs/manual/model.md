@@ -237,9 +237,11 @@ network to clear, plus the horizon to clear it over.
 eight negative loads, and an override may not be narrower than the field it overrides); only
 non-finite values are rejected. Every key must resolve to a `Load` id in the scenario's network,
 checked by `Scenario` rather than by `Period`, which has no network to check against. See
-[Multiperiod market](multiperiod.md#the-horizon-scenarioperiods-and-period). Its other field,
-`reserve_mw: float | None`, is the spinning reserve the fleet must hold in that period
-([ADR-023](../design/decisions.md)); see [Spinning reserve](multiperiod.md#spinning-reserve).
+[Multiperiod market](multiperiod.md#the-horizon-scenarioperiods-and-period). Its other fields,
+`reserve_mw: float | None` and `zone_reserve_mw: dict[str, float] | None`, are the spinning
+reserve the fleet must hold in that period, system-wide and inside each named zone
+([ADR-023](../design/decisions.md), [ADR-028](../design/decisions.md)); see [Spinning
+reserve](multiperiod.md#spinning-reserve). A zone key must resolve to `network.zones`.
 
 ## `Zone`
 

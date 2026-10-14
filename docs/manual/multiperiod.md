@@ -24,7 +24,8 @@ period; `market.nodal.load_bid_coeffs` supplies the load bids, shared rather tha
 
 ```text
 Scenario(network: Network, periods: list[Period] | None = None)
-Period(load_p_mw: dict[str, float], reserve_mw: float | None = None)
+Period(load_p_mw: dict[str, float], reserve_mw: float | None = None,
+       zone_reserve_mw: dict[str, float] | None = None)
 ```
 
 `Period.load_p_mw` is an id-keyed **override** of each `Load.p_mw` for that period, not a scale
@@ -106,6 +107,7 @@ re-derived for `T` periods rather than inherited from `dc_opf`:
 | 7-8 | PWL epigraph / hypograph rows | last — an encoding detail, never part of the dual shape |
 | 9-14 | unit-commitment rows, only with `unit_commitment` | after tier 8 — see [Unit commitment](#unit-commitment) and [Minimum up and down times](#minimum-up-and-down-times) |
 | 15-16 | reserve rows, only where a period states a `reserve_mw` | last — see [Spinning reserve](#spinning-reserve) |
+| 19 | zonal reserve rows, only where a period states a `zone_reserve_mw` | after tier 16 — see [Zonal reserve](#zonal-reserve) |
 | 17-18 | start-up tier rows, only for units with hot/warm tiers | before the reserve rows — see [Hot, warm and cold starts](#hot-warm-and-cold-starts) |
 
 ## Ramp coupling
@@ -524,9 +526,23 @@ cheap unit off so a dear one covers its energy. The hand case in
 150 MW; 60 MW of reserve costs nothing while either may hold it, and $40/MW once only the cheap
 unit may, since every MW it holds is a MW the dear unit must generate.
 
+### Zonal reserve
+
+Reserve held on the far side of a congested corridor cannot be delivered, so operators also
+require reserve *inside* a zone: `Period.zone_reserve_mw` ([ADR-028](../design/decisions.md)),
+keyed by `Zone` id, adds one row per named zone per period (tier 19) over the reserve columns
+of the generators at that zone's buses, \(\sum_{g \in z} r_g[t] \ge R_z[t]\), on top of the
+system-wide requirement — a unit's reserve counts towards both at once. The zone row's dual is
+the premium a unit in that zone earns above `reserve_price`, nonzero only when the zone's own
+headroom is short; headroom in another zone counts for nothing, and a zonal requirement the
+zone's units cannot hold makes the problem infeasible even with the rest of the fleet idle. The
+test suite's two-zone case prices zone A's shortage at the same $40/MW the system-wide case
+does, as that zone's premium, while zone B's requirement is free.
+
 The result carries each unit's `reserve_mw` per period, each period's `reserve_requirement_mw`,
-`reserve_price` and `total_reserve_payment` (price × reserve held), and the horizon
-`total_reserve_payment`. Reserve payments are an uplift settled **outside** the energy identity
+`reserve_price` and `total_reserve_payment` (price × reserve held, plus each zone's premium
+× the reserve its units hold), `zone_reserve_requirements_mw` and `zone_reserve_prices`, and
+the horizon `total_reserve_payment`. Reserve payments are an uplift settled **outside** the energy identity
 below: the LMPs, load payments, generator receipts and congestion rent are the energy
 market's, exactly as without a requirement. The array-level builder takes `reserve_mw`
 (`(T,)`) and `reserve_max_mw` (`(n_gen,)`) and returns `MultiperiodSolution.reserve_mw` and

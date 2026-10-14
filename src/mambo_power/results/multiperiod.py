@@ -185,8 +185,19 @@ class MarketPeriodResult(BaseModel):
     )
     total_reserve_payment: float = Field(
         default=0.0,
-        description="reserve_price times the reserve held, $/h: what generators are paid for "
-        "reserve in this period, outside the energy settlement and the congestion rent.",
+        description="reserve_price times the reserve held, plus each zone's premium times the "
+        "reserve its units hold, $/h: what generators are paid for reserve in this period, "
+        "outside the energy settlement and the congestion rent.",
+    )
+    zone_reserve_requirements_mw: dict[str, float] = Field(
+        default_factory=dict,
+        description="Spinning reserve required inside each zone this period, MW, keyed by zone "
+        "id (ADR-028); empty when no period states one.",
+    )
+    zone_reserve_prices: dict[str, float] = Field(
+        default_factory=dict,
+        description="Dual of each zone's reserve row, $/MW: the premium a unit in that zone "
+        "earns on top of reserve_price, nonzero only when the zone's own headroom is short.",
     )
     congestion_rent: float = Field(
         default=0.0,

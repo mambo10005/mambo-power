@@ -49,6 +49,13 @@ class Period(BaseModel):
         "(ADR-023), met from generators' unused capacity and priced by its own dual; None = "
         "no requirement.",
     )
+    zone_reserve_mw: dict[str, float] | None = Field(
+        default=None,
+        description="Spinning reserve that must be held *inside* each named zone this period, "
+        "MW, keyed by Zone id (ADR-028): a zone's requirement is met only by generators at its "
+        "buses, on top of the system-wide reserve_mw, and priced by its own dual. A zone "
+        "absent from the dict requires nothing; None = no zonal requirement.",
+    )
 
 
 class Scenario(BaseModel):
@@ -102,4 +109,25 @@ class Scenario(BaseModel):
             raise ValueError(
                 f"periods reference load id(s) not present in network.loads: {dangling}"
             )
+        zone_ids = {zone.id for zone in self.network.zones}
+        dangling_zones = sorted(
+            {
+                zone_id
+                for period in self.periods
+                if period.zone_reserve_mw is not None
+                for zone_id in period.zone_reserve_mw
+                if zone_id not in zone_ids
+            }
+        )
+        if dangling_zones:
+            raise ValueError(
+                f"periods reference zone id(s) not present in network.zones: {dangling_zones}"
+            )
+        if any(
+            value < 0
+            for period in self.periods
+            if period.zone_reserve_mw is not None
+            for value in period.zone_reserve_mw.values()
+        ):
+            raise ValueError("zone_reserve_mw values must be >= 0")
         return self

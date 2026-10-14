@@ -189,3 +189,93 @@ def test_result_round_trips_and_the_jobs_kind_carries_the_reserve() -> None:
     reply = run(SolveRequest(kind="market.multiperiod", scenario=scenario))
     assert reply.status == "ok" and isinstance(reply.result, MarketMultiperiodResult)
     assert reply.result.periods[0].reserve_price == pytest.approx(40.0)
+
+
+# --- zonal reserve (ADR-028) -------------------------------------------------------------------
+#
+# Two zones on two buses joined by an unlimited line: ``cheap`` ($10/MWh, 0–200 MW) in zone A,
+# ``dear`` ($50/MWh, 0–100 MW) in zone B, 150 MW of load in B. Without a requirement cheap
+# serves everything (1500 $/h) and dear sits on 100 MW of headroom.
+
+
+def _zonal(
+    zone_a: float | None, zone_b: float | None, *, cheap_cap: float | None = None
+) -> Scenario:
+    from mambo_power.model import Branch, Zone
+
+    def unit(gen_id: str, bus: str, p_max: float, cost: float) -> Generator:
+        return Generator(
+            id=gen_id,
+            bus=bus,
+            p_mw=0.0,
+            q_mvar=0.0,
+            p_min_mw=0.0,
+            p_max_mw=p_max,
+            q_min_mvar=0.0,
+            q_max_mvar=0.0,
+            v_set_pu=1.0,
+            reserve_max_mw=cheap_cap if gen_id == "cheap" else None,
+            cost=PolynomialCost(coefficients=[cost, 0.0]),
+        )
+
+    net = Network(
+        base_mva=100.0,
+        zones=[Zone(id="A"), Zone(id="B")],
+        buses=[
+            Bus(id="a", base_kv=138.0, type="slack", zone="A"),
+            Bus(id="b", base_kv=138.0, type="pq", zone="B"),
+        ],
+        branches=[Branch(id="ab", from_bus="a", to_bus="b", r=0.0, x=0.1, b=0.0)],
+        generators=[unit("cheap", "a", 200.0, 10.0), unit("dear", "b", 100.0, 50.0)],
+        loads=[Load(id="ld", bus="b", p_mw=150.0, q_mvar=0.0)],
+    )
+    zones = {k: v for k, v in (("A", zone_a), ("B", zone_b)) if v is not None}
+    return Scenario(
+        network=net, periods=[Period(load_p_mw={"ld": 150.0}, zone_reserve_mw=zones or None)]
+    )
+
+
+def test_a_zonal_requirement_is_met_inside_the_zone_and_priced_there() -> None:
+    # zone A needs 60 MW held by cheap alone: cheap backs off to 140 and dear serves 10 at
+    # $50 — the same $40/MW the system-wide case prices, now as zone A's premium; zone B's
+    # 30 MW is free (dear has 100 MW of headroom)
+    result = solve_multiperiod(_zonal(60.0, 30.0))
+
+    assert result.status == "Optimal"
+    assert result.objective_cost == pytest.approx(1900.0)
+    period = result.periods[0]
+    assert period.reserve_requirement_mw == 0.0 and period.reserve_price == 0.0
+    assert period.zone_reserve_requirements_mw == {"A": 60.0, "B": 30.0}
+    assert period.zone_reserve_prices == pytest.approx({"A": 40.0, "B": 0.0})
+    assert _gen(result, 0, "cheap").reserve_mw == pytest.approx(60.0)
+    assert _gen(result, 0, "dear").reserve_mw >= 30.0 - 1e-9
+    assert period.total_reserve_payment == pytest.approx(40.0 * 60.0)
+    assert result.total_reserve_payment == pytest.approx(2400.0)
+
+
+def test_headroom_in_another_zone_does_not_deliver() -> None:
+    # cheap may hold at most 50 MW; zone A needs 60: dear's 100 MW of headroom is in zone B
+    # and counts for nothing there — no feasible dispatch, reported as such
+    result = solve_multiperiod(_zonal(60.0, None, cheap_cap=50.0))
+    assert result.status != "Optimal"
+    # the same cap with a system-wide requirement instead is fine: dear's headroom counts
+    system = _zonal(None, None, cheap_cap=50.0)
+    assert system.periods is not None
+    system.periods[0].reserve_mw = 60.0
+    assert solve_multiperiod(system).status == "Optimal"
+
+
+def test_zone_references_are_checked_on_the_scenario() -> None:
+    scenario = _zonal(60.0, None)
+    assert scenario.periods is not None
+    with pytest.raises(ValueError, match="zone id\\(s\\) not present"):
+        Scenario(
+            network=scenario.network,
+            periods=[Period(load_p_mw={"ld": 150.0}, zone_reserve_mw={"C": 1.0})],
+        )
+    with pytest.raises(ValueError, match=">= 0"):
+        Scenario(
+            network=scenario.network,
+            periods=[Period(load_p_mw={"ld": 150.0}, zone_reserve_mw={"A": -1.0})],
+        )
+    assert Scenario.model_validate_json(scenario.model_dump_json()) == scenario

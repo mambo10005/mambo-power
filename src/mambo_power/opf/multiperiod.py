@@ -152,6 +152,11 @@ tier  family                                    rows
 16    headroom, ``p_g[t] + r_g[t] − p_max·u_g[t] <= 0`` ``T*n_gen`` (``u = 1`` without commitment)
 ===== ======================================== ==================================================
 
+A zonal requirement (``zone_reserve_mw``, ADR-028) adds tier 19 after these: one row per zone
+per period, ``Σ_{g in zone} r_g[t] >= zone_reserve[t, z]``, over the same reserve columns, so a
+unit's reserve counts towards its zone and the system at once and the zone row's dual is the
+premium a zone short of its own headroom pays on top of the system price.
+
 Reserve is held in a unit's unused capacity, so an uncommitted unit holds none, and a unit
 cannot be dispatched to its ceiling while holding any. The requirement row's dual
 (:attr:`MultiperiodDuals.reserve`) is the reserve price, nonnegative, nonzero when the fleet's
@@ -299,6 +304,10 @@ class MultiperiodDuals:
     reserve: FloatArray = field(default_factory=lambda: np.zeros(0))
     """``(T,)`` — dual of each period's reserve-requirement row (ADR-023), $/MW: the reserve
     price, ``>= 0``. Length 0 without a ``reserve_mw`` argument."""
+    zone_reserve: FloatArray = field(default_factory=lambda: np.zeros((0, 0)))
+    """``(T, n_zones)`` — dual of each zone's reserve row (ADR-028), $/MW: the zonal reserve
+    price a unit in that zone earns on top of :attr:`reserve`; shape ``(0, 0)`` without a
+    ``zone_reserve_mw`` argument."""
 
 
 @dataclass(frozen=True)
@@ -455,6 +464,8 @@ def multiperiod_dc_opf(
     commitment: Commitment | None = None,
     reserve_mw: FloatArray | None = None,
     reserve_max_mw: FloatArray | None = None,
+    zone_reserve_mw: FloatArray | None = None,
+    gen_zone: IntArray | None = None,
 ) -> MultiperiodSolution:
     """Solve ``n_periods`` coupled DC-OPF periods as one LP/QP (module docstring).
 
@@ -485,7 +496,11 @@ def multiperiod_dc_opf(
     ``reserve_mw`` (module docstring, "Spinning reserve") is the ``(T,)`` reserve requirement,
     met from committed units' headroom and priced by its own row; ``reserve_max_mw`` caps each
     unit's contribution (``(n_gen,)``; ``None``, ``nan`` and ``inf`` mean uncapped, 0 excludes
-    the unit). ``None`` builds no reserve column or row.
+    the unit). ``None`` builds no reserve column or row. ``zone_reserve_mw`` (ADR-028) is a
+    ``(T, n_zones)`` requirement held inside each zone by the generators ``gen_zone``
+    (``(n_gen,)`` zone index, ``-1`` for a unit in no zone) places there, on top of the
+    system-wide one; giving it alone (``reserve_mw=None``) builds the reserve columns with a zero
+    system requirement.
     """
     n_gen = len(arr.gen_ids)
     n_load = len(arr.load_ids)
@@ -589,6 +604,26 @@ def multiperiod_dc_opf(
         if np.any(reserve < 0) or not np.all(np.isfinite(reserve)):
             raise ValueError("reserve_mw must be finite and >= 0")
     reserve_cap = _checked_ramp("reserve_max_mw", reserve_max_mw, n_gen, allow_zero=True)
+    zone_reserve: FloatArray | None = None
+    zone_of_gen = np.full(n_gen, -1, dtype=np.int64)
+    if zone_reserve_mw is not None:
+        zone_reserve = np.asarray(zone_reserve_mw, dtype=np.float64)
+        if zone_reserve.ndim != 2 or zone_reserve.shape[0] != n_periods:
+            raise ValueError(
+                f"zone_reserve_mw must have shape ({n_periods}, n_zones), got {zone_reserve.shape}"
+            )
+        if np.any(zone_reserve < 0) or not np.all(np.isfinite(zone_reserve)):
+            raise ValueError("zone_reserve_mw must be finite and >= 0")
+        if gen_zone is None:
+            raise ValueError("zone_reserve_mw needs gen_zone (the zone index of every generator)")
+        zone_of_gen = np.asarray(gen_zone, dtype=np.int64)
+        if zone_of_gen.shape != (n_gen,) or np.any(zone_of_gen >= zone_reserve.shape[1]):
+            raise ValueError(
+                f"gen_zone must have shape ({n_gen},) with entries below "
+                f"{zone_reserve.shape[1]} (or -1 for no zone)"
+            )
+        if reserve is None:
+            reserve = np.zeros(n_periods)
 
     # --- column layout (module docstring, "Column layout") -------------------------------------
     per_period_dispatch = n_gen + n_demand + 3 * n_storage
@@ -1089,6 +1124,22 @@ def multiperiod_dc_opf(
             ),
         )
         n_reserve_rows = n_periods * (1 + n_gen)
+        # tier 19 (ADR-028): the zonal requirement, one row per zone per period, over the
+        # reserve columns of the units in that zone
+        if zone_reserve is not None and zone_reserve.shape[1]:
+            n_zones = zone_reserve.shape[1]
+            zone_rows = [
+                [(int(reserve_cols[t][g]), 1.0) for g in range(n_gen) if zone_of_gen[g] == z]
+                for t in range(n_periods)
+                for z in range(n_zones)
+            ]
+            _add_rows(
+                h,
+                _sparse_rows(
+                    zone_rows, zone_reserve.reshape(-1), np.full(len(zone_rows), highspy.kHighsInf)
+                ),
+            )
+            n_reserve_rows += len(zone_rows)
 
     h.run()
     status = h.modelStatusToString(h.getModelStatus())
@@ -1212,6 +1263,13 @@ def multiperiod_dc_opf(
             )
             if n_reserve_rows
             else np.zeros(0)
+        ),
+        zone_reserve=(
+            np.maximum(
+                row_dual[expected_rows - n_periods * zone_reserve.shape[1] : expected_rows], 0.0
+            ).reshape(n_periods, zone_reserve.shape[1])
+            if zone_reserve is not None and zone_reserve.shape[1]
+            else np.zeros((0, 0))
         ),
     )
     reserve_held = _read(reserve_cols, col_value) if reserve_cols else np.zeros((0, 0))

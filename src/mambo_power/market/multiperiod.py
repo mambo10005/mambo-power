@@ -57,6 +57,10 @@ period's requirement (a period that states none requires 0 once any period does)
 period's ``reserve_price`` (the requirement row's dual) and ``total_reserve_payment``, which is
 settled outside the energy identity below.
 
+A ``Period.zone_reserve_mw`` (ADR-028) adds a requirement held inside each named zone by the
+units at its buses, priced by its own dual on top of the system price; the zone's premium times
+the reserve its units hold joins ``total_reserve_payment``.
+
 **Settlement.** Payments, receipts and congestion rent are computed per period, directly from
 that period's LMPs and dispatch. Storage is settled as the third participant it physically is --
 it pays for what it stores and is paid for what it returns -- and
@@ -67,6 +71,7 @@ decorative, together with the general form's ``pf_shift``/``g_shunt`` correction
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import numpy as np
@@ -241,16 +246,35 @@ def _commitment_rows(
     return rows
 
 
-def _reserve(
-    net: Network, arr: NetworkArrays, periods: list[Period] | None
-) -> tuple[FloatArray | None, FloatArray | None]:
-    """``(reserve_mw, reserve_max_mw)`` for the builder (ADR-023): the per-period requirement
-    (a period that states none requires 0) and each unit's cap in ``arr`` order (``None`` →
-    uncapped). ``(None, None)`` when no period states a requirement, so the LP is untouched."""
-    if periods is None or all(p.reserve_mw is None for p in periods):
-        return None, None
+@dataclass(frozen=True)
+class _Reserve:
+    """The reserve arguments gathered for the builder (ADR-023, ADR-028)."""
+
+    requirement: FloatArray | None
+    caps: FloatArray | None
+    zone_ids: list[str]
+    zone_requirement: FloatArray | None
+    gen_zone: IntArray | None
+
+
+def _reserve(net: Network, arr: NetworkArrays, periods: list[Period] | None) -> _Reserve:
+    """The reserve arguments for the builder: the per-period system requirement (a period that
+    states none requires 0) and each unit's cap in ``arr`` order (``None`` → uncapped), plus the
+    zonal requirements (ADR-028) over the zones any period names, in id order, and each unit's
+    zone index (its bus's zone, ``-1`` where the bus has none or the zone is not named). All
+    ``None`` when no period states any requirement, so the LP is untouched."""
+    if periods is None:
+        return _Reserve(None, None, [], None, None)
+    system = any(p.reserve_mw is not None for p in periods)
+    zone_ids = sorted({z for p in periods if p.zone_reserve_mw for z in p.zone_reserve_mw})
+    if not system and not zone_ids:
+        return _Reserve(None, None, [], None, None)
     gens_by_id = {g.id: g for g in net.generators}
-    requirement = np.array([0.0 if p.reserve_mw is None else p.reserve_mw for p in periods])
+    requirement = (
+        np.array([0.0 if p.reserve_mw is None else p.reserve_mw for p in periods])
+        if system
+        else None
+    )
     caps = np.array(
         [
             np.inf if gens_by_id[g].reserve_max_mw is None else gens_by_id[g].reserve_max_mw
@@ -258,7 +282,18 @@ def _reserve(
         ],
         dtype=np.float64,
     )
-    return requirement, caps
+    if not zone_ids:
+        return _Reserve(requirement, caps, [], None, None)
+    zone_index = {z: k for k, z in enumerate(zone_ids)}
+    zone_requirement = np.array(
+        [[(p.zone_reserve_mw or {}).get(z, 0.0) for z in zone_ids] for p in periods]
+    )
+    zone_of_bus = {b.id: b.zone for b in net.buses}
+    gen_zone = np.array(
+        [zone_index.get(zone_of_bus[gens_by_id[g].bus] or "", -1) for g in arr.gen_ids],
+        dtype=np.int64,
+    )
+    return _Reserve(requirement, caps, zone_ids, zone_requirement, gen_zone)
 
 
 def _period_load_mw(net: Network, arr: NetworkArrays, periods: list[Period]) -> FloatArray:
@@ -307,6 +342,7 @@ def _period_rows(
     fixed_load_mw: FloatArray | None,
     elastic_pos: dict[int, int],
     reserve_requirement: float = 0.0,
+    zone_reserve: _Reserve | None = None,
 ) -> MarketPeriodResult:
     """Assemble period ``t``'s rows and settlement from the horizon solution."""
     duals = solution.duals
@@ -397,6 +433,23 @@ def _period_rows(
     )
     reserve_price = float(duals.reserve[t]) if duals.reserve.size else 0.0
     reserve_held = float(sum(row.reserve_mw for row in generators))
+    zone_prices: dict[str, float] = {}
+    zone_requirements: dict[str, float] = {}
+    zone_payment = 0.0
+    if zone_reserve is not None and zone_reserve.zone_ids and duals.zone_reserve.size:
+        assert zone_reserve.zone_requirement is not None
+        assert zone_reserve.gen_zone is not None
+        zone_prices = {
+            z: float(duals.zone_reserve[t, k]) for k, z in enumerate(zone_reserve.zone_ids)
+        }
+        zone_requirements = {
+            z: float(zone_reserve.zone_requirement[t, k])
+            for k, z in enumerate(zone_reserve.zone_ids)
+        }
+        for i, row in enumerate(generators):
+            k = int(zone_reserve.gen_zone[i])
+            if k >= 0:
+                zone_payment += zone_prices[zone_reserve.zone_ids[k]] * row.reserve_mw
 
     return MarketPeriodResult(
         period=t,
@@ -411,7 +464,9 @@ def _period_rows(
         congestion_rent=congestion_rent,
         reserve_requirement_mw=reserve_requirement,
         reserve_price=reserve_price,
-        total_reserve_payment=reserve_price * reserve_held,
+        total_reserve_payment=reserve_price * reserve_held + zone_payment,
+        zone_reserve_requirements_mw=zone_requirements,
+        zone_reserve_prices=zone_prices,
     )
 
 
@@ -453,7 +508,8 @@ def solve_multiperiod(
             net, arr, cost_coeffs, pwl_costs, opts.quadratic_segments
         )
 
-    reserve_mw, reserve_max_mw = _reserve(net, arr, periods)
+    reserve = _reserve(net, arr, periods)
+    reserve_mw, reserve_max_mw = reserve.requirement, reserve.caps
 
     solution = multiperiod_dc_opf(
         arr,
@@ -468,6 +524,8 @@ def solve_multiperiod(
         commitment=commitment,
         reserve_mw=reserve_mw,
         reserve_max_mw=reserve_max_mw,
+        zone_reserve_mw=reserve.zone_requirement,
+        gen_zone=reserve.gen_zone,
     )
     elapsed_s = time.perf_counter() - clock
     provenance = ResultProvenance(
@@ -500,6 +558,7 @@ def solve_multiperiod(
             fixed_load_mw=fixed_load_mw,
             elastic_pos=elastic_pos,
             reserve_requirement=0.0 if reserve_mw is None else float(reserve_mw[t]),
+            zone_reserve=reserve,
         )
         for t in range(n_periods)
     ]
