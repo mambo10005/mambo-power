@@ -147,6 +147,8 @@ flow needs no schema bump; no power-flow solver reads it.
 | `ramp_down_mw` | `float \| None` | MW | `None` | Max decrease from the previous period; same rules. |
 | `min_up_periods` | `int \| None` | periods | `None` | Minimum consecutive periods on once started; `None` or 1 = none. Read by [unit commitment](multiperiod.md#minimum-up-and-down-times). |
 | `min_down_periods` | `int \| None` | periods | `None` | Minimum consecutive periods off once stopped; same rules. |
+| `startup_hot_cost`, `startup_hot_periods` | `float \| None`, `int \| None` | $, periods | `None` | A hot start: the cost of a start after at most `startup_hot_periods` off ([ADR-026](../design/decisions.md)); given together. |
+| `startup_warm_cost`, `startup_warm_periods` | `float \| None`, `int \| None` | $, periods | `None` | A warm start, after more than the hot window and at most `startup_warm_periods` off; given together, `> startup_hot_periods`. Costs must not decrease hot → warm → `cost.startup` (the cold cost) (`BAD_RANGE`). Read by [unit commitment](multiperiod.md#hot-warm-and-cold-starts). |
 | `reserve_max_mw` | `float \| None` | MW | `None` | Most spinning reserve the unit can hold in a period; `None` = its full headroom, 0 = none. Read by [reserve co-optimisation](multiperiod.md#spinning-reserve). |
 | `initial_state_periods` | `int \| None` | periods | `None` | How long the unit has already been in its pre-horizon state (on if `p_mw > 0`), counting the period just before the horizon. `None` = long enough that no up/down obligation carries into the horizon. |
 
@@ -297,7 +299,7 @@ where a number is expected, an unknown field, `NaN` — still raise pydantic's
 | `DUPLICATE_ID` | Two elements in the same collection share an `id` (ids may repeat across collections). |
 | `DANGLING_REF` | `Branch.from_bus` / `to_bus`, `Generator.bus`, `Load.bus`, `Shunt.bus`, `Storage.bus` names a bus that does not exist; `Bus.zone` names a zone that does not exist. |
 | `BAD_BASE` | `base_mva <= 0`, or a bus with `base_kv <= 0`. |
-| `BAD_RANGE` | `v_min_pu > v_max_pu`; `from_bus == to_bus`; `tap_ratio <= 0`; `r == x == 0`; `rating_mva <= 0`; a `rating_emergency_mva` without a `rating_mva` or below it; `p_min_mw > p_max_mw`; `q_min_mvar > q_max_mvar`; a `ramp_up_mw` or `ramp_down_mw` that is given and not `> 0`; an empty polynomial cost or bid; a piecewise cost or bid with fewer than two points or non-increasing `p_mw`; `soc_initial` outside \([0, 1]\); an efficiency outside \((0, 1]\); a `Storage.p_max_mw` or `energy_mwh` not `> 0`. |
+| `BAD_RANGE` | `v_min_pu > v_max_pu`; `from_bus == to_bus`; `tap_ratio <= 0`; `r == x == 0`; `rating_mva <= 0`; a `rating_emergency_mva` without a `rating_mva` or below it; a start-up tier without its partner field, hot and warm windows out of order, or tier costs decreasing with off time; `p_min_mw > p_max_mw`; `q_min_mvar > q_max_mvar`; a `ramp_up_mw` or `ramp_down_mw` that is given and not `> 0`; an empty polynomial cost or bid; a piecewise cost or bid with fewer than two points or non-increasing `p_mw`; `soc_initial` outside \([0, 1]\); an efficiency outside \((0, 1]\); a `Storage.p_max_mw` or `energy_mwh` not `> 0`. |
 
 `ValidationCode` is the `Literal` of these seven strings.
 

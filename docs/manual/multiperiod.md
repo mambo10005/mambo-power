@@ -106,6 +106,7 @@ re-derived for `T` periods rather than inherited from `dc_opf`:
 | 7-8 | PWL epigraph / hypograph rows | last — an encoding detail, never part of the dual shape |
 | 9-14 | unit-commitment rows, only with `unit_commitment` | after tier 8 — see [Unit commitment](#unit-commitment) and [Minimum up and down times](#minimum-up-and-down-times) |
 | 15-16 | reserve rows, only where a period states a `reserve_mw` | last — see [Spinning reserve](#spinning-reserve) |
+| 17-18 | start-up tier rows, only for units with hot/warm tiers | before the reserve rows — see [Hot, warm and cold starts](#hot-warm-and-cold-starts) |
 
 ## Ramp coupling
 
@@ -382,6 +383,43 @@ down and up times carried in from before the horizon — against PyPSA's committ
 `stand_by_cost` where the installed PyPSA has it) and checks that the two land on the same
 objective, the same schedule and the same dispatch. The two formulations share nothing but the
 problem.
+
+### Hot, warm and cold starts
+
+A unit that has only just stopped is still hot, and restarting it costs a fraction of a start
+from cold. Four optional fields on `Generator` ([ADR-026](../design/decisions.md)):
+
+```python
+Generator(..., startup_hot_cost: float | None = None, startup_hot_periods: int | None = None,
+          startup_warm_cost: float | None = None, startup_warm_periods: int | None = None)
+```
+
+A start after at most `startup_hot_periods` off pays `startup_hot_cost`; after more than that
+and at most `startup_warm_periods`, `startup_warm_cost`; after longer, `cost.startup` — the
+cold cost, which is what every unit pays with no tiers. Costs may not decrease with off time and
+the hot window must be shorter than the warm one (`BAD_RANGE`). Either tier may be given alone.
+
+The builder drops such a unit's start-up cost from its `started` column and adds one costless-
+to-declare, 0–1 continuous column per tier (hot, warm, cold) per period, with two row families:
+
+| Tier | Family | Rows |
+| --- | --- | --- |
+| 17 | one tier per start, \(\sum_s \delta_s[t] = v[t]\) | `T` per tiered unit |
+| 18 | window, \(\delta_s[t] \le \sum_{d \in \text{window}_s} w[t-d] + \text{rhs}_s[t]\) | `T` per tiered unit per hot/warm tier |
+
+A tier's window is the off durations it covers; the row says a start may be of that tier only if
+a shut-down happened that many periods before. A shut-down before the horizon is the constant
+on the right: with `initial_state_periods` stated for a unit that is off, the off duration at
+period \(t\) is \(t + k\), and the tier whose window holds it is allowed; a unit off with no
+stated history is cold. The cold tier has no window row. Because the costs rise with off time a
+minimiser picks the hottest allowed tier, so the continuous columns sit at 0/1 without being
+integer. `GenCommitmentResult.startup_costs` reports what each start paid, period by period.
+
+The hand case in `tests/unit/test_market_unit_commitment.py`: a unit worth switching off for
+$800 a period and worth having on for $1200 at the peak, hot at $1000 within two periods,
+warm at $3000 within four, cold at $8000 — a two-period dip is bridged by a hot restart, a
+three-period one is not worth a warm restart, and the pre-horizon history alone decides whether
+the first start is hot, warm or cold.
 
 ### Quadratic costs are linearised
 

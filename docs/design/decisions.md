@@ -1182,6 +1182,45 @@ the dispatch. ADR-016 and ADR-021 had both listed N-2 as the next contingency cl
 *Rejected:* enumerating every pair row — ADR-016's rejection, cubed; a separate `n2` loop
 after the `n1` one converges — two loops where one screen call per solve does the same.
 
+## ADR-026 — Hot, warm and cold start-up costs as tier columns with shut-down windows
+
+**Status:** accepted 2026-10-13.
+
+**Context.** ADR-017's start-up cost is one number; ADR-019 and ADR-023 have since closed the
+other gaps that ADR listed, leaving the start-up cost that depends on how long the unit has
+been off — the one a thermal unit's operator states as hot / warm / cold.
+
+**Decision.** Four fields on `Generator` (`startup_hot_cost` / `_periods`, `startup_warm_cost`
+/ `_periods`), `Commitment.startup_tiers`, and the standard tier formulation on the existing
+event binaries.
+
+1. **A column per tier, continuous.** The unit's `started` column loses its cost; per period one
+   0–1 column per tier (hot, warm, cold) carries that tier's cost, \(\sum_s \delta_s = v\)
+   ties them to the start, and a hot/warm tier is allowed only if a shut-down fell inside its
+   window of off durations (\(\delta_s[t] \le \sum_{d \in \text{win}_s} w[t-d]\)). With
+   costs non-decreasing in off time the minimiser takes the hottest allowed tier, so no new
+   integrality is needed.
+2. **The pre-horizon shut-down is a constant.** `initial_state_periods` places it at \(-k\);
+   whichever window holds \(t + k\) is allowed at \(t\). No stated history means cold, the
+   conservative reading and the same one ADR-019 takes for obligations.
+3. **Validated on the model.** Tier fields come in pairs, windows nest, costs do not decrease
+   towards `cost.startup`, which stays the cold cost and the only cost a unit without tiers
+   pays.
+4. **Reported per start.** `GenCommitmentResult.startup_costs` says what each start paid.
+
+**Consequences.**
+
+1. **Two fields a tier, not a list.** Scalars on `Generator` travel through every format and
+   the CSV bundle unchanged; a list of tiers would need its own side table. Two tiers plus cold
+   is the universal convention; a third would be two more scalars.
+2. **Exporters drop them** (pandapower, RAW, PyPSA have no such field) and say so.
+3. **Not modelled:** start-up and shut-down ramp trajectories, and a start-up cost that
+   depends on the horizon's own clock rather than on off time.
+
+*Rejected:* integer tier columns — unnecessary given the cost ordering, and a larger MIP;
+time-dependent start-up cost curves (an exponential in off time) — the three-tier form is what
+operators state and what the piecewise formulation handles exactly.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

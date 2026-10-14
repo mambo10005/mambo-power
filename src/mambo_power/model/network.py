@@ -62,6 +62,32 @@ class _AtBus(Protocol):
 _AddIssue = Callable[[ValidationCode, str, str], None]
 
 
+def _startup_tier_problems(gen: Generator) -> list[str]:
+    """What is wrong with a generator's hot/warm start-up tiers (ADR-026), if anything: each
+    tier's cost and period count come together, the hot window is shorter than the warm one, and
+    the costs do not decrease with off time up to the cold ``cost.startup``."""
+    problems: list[str] = []
+    hot = (gen.startup_hot_cost, gen.startup_hot_periods)
+    warm = (gen.startup_warm_cost, gen.startup_warm_periods)
+    for name, (cost, periods) in (("hot", hot), ("warm", warm)):
+        if (cost is None) != (periods is None):
+            problems.append(
+                f"startup_{name}_cost and startup_{name}_periods must be given together"
+            )
+    if problems:
+        return problems
+    cold = gen.cost.startup if gen.cost is not None else None
+    tiers = [(p, c, n) for (c, p), n in ((hot, "hot"), (warm, "warm")) if c is not None]
+    if hot[0] is not None and warm[0] is not None and hot[1] >= warm[1]:  # type: ignore[operator]
+        problems.append("startup_hot_periods must be < startup_warm_periods")
+    costs = [c for _, c, _ in tiers]
+    if any(a > b for a, b in zip(costs, costs[1:], strict=False)):
+        problems.append("start-up tier costs must not decrease with off time (hot <= warm)")
+    if tiers and cold is not None and costs[-1] > cold:
+        problems.append(f"the warmest tier's cost {costs[-1]} exceeds the cold cost.startup {cold}")
+    return problems
+
+
 def validate_network(net: Network) -> list[ValidationIssue]:
     """Run every cross-entity invariant and return all issues found (empty = valid)."""
     issues: list[ValidationIssue] = []
@@ -180,6 +206,12 @@ def validate_network(net: Network) -> list[ValidationIssue]:
                 "BAD_RANGE",
                 f"generators[{index}].q_min_mvar",
                 f'generator "{gen.id}": q_min_mvar {gen.q_min_mvar} > q_max_mvar {gen.q_max_mvar}',
+            )
+        for problem in _startup_tier_problems(gen):
+            add(
+                "BAD_RANGE",
+                f"generators[{index}].startup_hot_cost",
+                f'generator "{gen.id}": {problem}',
             )
         for field in ("ramp_up_mw", "ramp_down_mw"):
             ramp: float | None = getattr(gen, field)

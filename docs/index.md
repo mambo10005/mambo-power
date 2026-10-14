@@ -117,6 +117,7 @@ flowchart LR
 | Hold a started unit on, or a stopped unit off, for a minimum number of periods | [Manual › Minimum up and down times](manual/multiperiod.md#minimum-up-and-down-times) |
 | Rate a line higher for the minutes after a contingency | [Manual › Emergency ratings](manual/n1.md#emergency-ratings) |
 | Let the dispatch move after an outage, within each unit's ramp | [Manual › Corrective redispatch](manual/scopf.md#corrective-redispatch) |
+| Charge a restart by how long the unit has been off | [Manual › Hot, warm and cold starts](manual/multiperiod.md#hot-warm-and-cold-starts) |
 | Require the fleet to hold spinning reserve, and price it | [Manual › Spinning reserve](manual/multiperiod.md#spinning-reserve) |
 | Screen every pair of branch outages | [Manual › N-2 branch pairs](manual/n1.md#n-2-branch-pairs) |
 | Secure the dispatch against every pair of branch outages | [Manual › SCOPF N-2](manual/scopf.md#n-2-branch-pairs) |
@@ -141,6 +142,6 @@ flowchart LR
 | M7 | Agent-based bidding: strategies, offered-vs-true cost overlay, fixed-point loop | merged |
 | M8 | Interchange: pandapower JSON, PyPSA, PSS/E RAW, CSV bundle | merged |
 | M9 | Tutorials, semantic-release changelog, PyPI 0.1.0 trusted publishing | merged |
-| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0); unit commitment on the multiperiod market (0.5.0); AC-OPF (0.6.0); minimum up/down times (0.7.0); emergency ratings (0.8.0); corrective SCOPF (0.9.0); PSS/E RAW export (0.10.0); spinning reserve (0.11.0); N-2 screening and N-2 SCOPF (0.12.x) | merged |
+| post-epic | Bundled cases in the wheel (0.2.0); generator-outage N-1 and the rated `case14_rated` case (0.3.x); security-constrained DC-OPF (0.4.0); unit commitment on the multiperiod market (0.5.0); AC-OPF (0.6.0); minimum up/down times (0.7.0); emergency ratings (0.8.0); corrective SCOPF (0.9.0); PSS/E RAW export (0.10.0); spinning reserve (0.11.0); N-2 screening and N-2 SCOPF (0.12.x); hot/warm/cold starts (0.13.0) | merged |
 
 mambo-power is MIT licensed. Source: [github.com/mambo10005/mambo-power](https://github.com/mambo10005/mambo-power).

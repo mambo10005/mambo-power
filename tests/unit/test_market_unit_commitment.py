@@ -525,3 +525,113 @@ def test_minimum_times_round_trip_through_json_and_csv() -> None:
     assert back.generators == net.generators
     with pytest.raises(ValueError):
         Generator.model_validate({**big.model_dump(), "min_up_periods": 0})
+
+
+# --- hot, warm and cold start-up costs (ADR-026) ------------------------------------------------
+#
+# ``_tiered_scenario``: the same bus, ``small`` ($50/MWh, 0-100 MW, on) and ``big`` ($10/MWh,
+# 40-200 MW, a $2800 no-load cost, a cold start at $8000, hot at $1000 after at most 2 periods
+# off and warm at $3000 after at most 4). At 50 MW ``big`` on costs 500 + 2800 = 3300 against
+# 2500 on ``small``, so it is worth 800 a period to switch off; at 100 MW it costs 3800 against
+# 5000, worth 1200 a period to have on.
+
+
+def _tiered_scenario(
+    loads: tuple[float, ...], *, big_on: bool, history: int | None = None
+) -> Scenario:
+    big = _unit("big", 50.0 if big_on else 0.0, 40.0, 200.0, 10.0).model_copy(
+        update={
+            "cost": PolynomialCost(coefficients=[10.0, 2800.0], startup=8000.0),
+            "startup_hot_cost": 1000.0,
+            "startup_hot_periods": 2,
+            "startup_warm_cost": 3000.0,
+            "startup_warm_periods": 4,
+            "initial_state_periods": history,
+        }
+    )
+    net = Network(
+        base_mva=100.0,
+        buses=[Bus(id="b1", base_kv=138.0, type="slack")],
+        generators=[_unit("small", 10.0, 0.0, 100.0, 50.0), big],
+        loads=[Load(id="ld", bus="b1", p_mw=50.0, q_mvar=0.0)],
+    )
+    return Scenario(network=net, periods=[Period(load_p_mw={"ld": p}) for p in loads])
+
+
+def test_a_short_outage_restarts_hot_and_a_long_one_is_not_worth_it() -> None:
+    # off for two periods saves 1600 and the hot restart costs 1000: stop, restart hot
+    # (3800 + 2500 + 2500 + 3800 + 1000 = 13600 against 14200 on throughout). Off for three,
+    # the restart would be warm at 3000, more than the 1200 the last period saves: stop and
+    # stay off (3800 + 3·2500 + 5000 = 16300, against 17500 on throughout and 18100 restarting)
+    short = solve_multiperiod(_tiered_scenario((100.0, 50.0, 50.0, 100.0), big_on=True), UC)
+    long = solve_multiperiod(_tiered_scenario((100.0, 50.0, 50.0, 50.0, 100.0), big_on=True), UC)
+
+    assert short.objective_cost == pytest.approx(13600.0)
+    assert _schedule(short, "big") == [1, 0, 0, 1]
+    big = next(c for c in short.commitment if c.id == "big")
+    assert big.startup_costs == pytest.approx([0.0, 0.0, 0.0, 1000.0])
+    assert big.startup_cost == pytest.approx(1000.0)
+    assert short.commitment_cost == pytest.approx(1000.0)
+    assert long.objective_cost == pytest.approx(16300.0)
+    assert _schedule(long, "big") == [1, 0, 0, 0, 0]
+
+
+def test_the_history_before_the_horizon_sets_the_tier_of_the_first_start() -> None:
+    # off for 1 period before the horizon and a 100 MW period 1: a start there is 2 periods
+    # into the outage, hot (2500 + 4800 + 2500 = 9800 against 10000); off for 3, it is warm and
+    # not worth it; with no stated history the unit is cold
+    hot = solve_multiperiod(_tiered_scenario((50.0, 100.0, 50.0), big_on=False, history=1), UC)
+    warm = solve_multiperiod(_tiered_scenario((50.0, 100.0, 50.0), big_on=False, history=3), UC)
+    cold = solve_multiperiod(_tiered_scenario((50.0, 100.0, 50.0), big_on=False), UC)
+
+    assert hot.objective_cost == pytest.approx(9800.0)
+    assert _schedule(hot, "big") == [0, 1, 0]
+    assert next(c for c in hot.commitment if c.id == "big").startup_costs == pytest.approx(
+        [0.0, 1000.0, 0.0]
+    )
+    assert warm.objective_cost == pytest.approx(10000.0)
+    assert _schedule(warm, "big") == [0, 0, 0]
+    assert cold.objective_cost == pytest.approx(10000.0)
+    # a start that is worth even the cold price pays the cold price
+    big_load = solve_multiperiod(_tiered_scenario((200.0, 200.0, 200.0), big_on=False), UC)
+    assert _schedule(big_load, "big") == [1, 1, 1]
+    assert next(c for c in big_load.commitment if c.id == "big").startup_costs[0] == 8000.0
+
+
+def test_tiers_are_validated_on_the_model_and_in_the_builder() -> None:
+    from mambo_power.model import validate_network
+
+    net = _tiered_scenario((50.0,), big_on=True).network
+    big = net.generators[1]
+    assert [i for i in validate_network(net) if i.code == "BAD_RANGE"] == []
+    big.startup_warm_periods = 2
+    assert any("hot_periods must be <" in i.message for i in validate_network(net))
+    big.startup_warm_periods = 4
+    big.startup_hot_cost = 3500.0
+    assert any("must not decrease" in i.message for i in validate_network(net))
+    big.startup_hot_cost = 1000.0
+    big.startup_warm_cost = 9000.0
+    assert any("exceeds the cold" in i.message for i in validate_network(net))
+    big.startup_warm_cost = None
+    assert any("given together" in i.message for i in validate_network(net))
+
+    arr = NetworkArrays.from_network(_two_unit_scenario(big_startup=1.0).network)
+    cost_coeffs, _ = gen_cost_coeffs(_two_unit_scenario(big_startup=1.0).network, arr)
+    block = Commitment(
+        startup_cost=np.array([0.0, 5000.0]),
+        shutdown_cost=np.zeros(2),
+        initial_on=np.array([True, False]),
+        no_load_cost=np.zeros(2),
+        startup_tiers=[[], [(3, 1000.0), (2, 2000.0)]],
+    )
+    with pytest.raises(ValueError, match="strictly increasing"):
+        multiperiod_dc_opf(arr, cost_coeffs, 1, commitment=block)
+    block = Commitment(
+        startup_cost=np.array([0.0, 500.0]),
+        shutdown_cost=np.zeros(2),
+        initial_on=np.array([True, False]),
+        no_load_cost=np.zeros(2),
+        startup_tiers=[[], [(2, 1000.0)]],
+    )
+    with pytest.raises(ValueError, match="non-decreasing"):
+        multiperiod_dc_opf(arr, cost_coeffs, 1, commitment=block)

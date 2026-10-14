@@ -91,6 +91,11 @@ class GenCommitmentResult(BaseModel):
     started: list[bool] = Field(description="Start-up event per period.")
     stopped: list[bool] = Field(description="Shut-down event per period.")
     startup_cost: float = Field(ge=0.0, description="Start-up costs paid over the horizon, $.")
+    startup_costs: list[float] = Field(
+        default_factory=list,
+        description="Start-up cost paid per period, $: the hot, warm or cold tier's where the "
+        "unit has tiers (ADR-026), cost.startup otherwise; 0 in a period without a start.",
+    )
     shutdown_cost: float = Field(ge=0.0, description="Shut-down costs paid over the horizon, $.")
     no_load_cost: float = Field(
         description="Constant cost terms paid over the periods the unit is on, $."

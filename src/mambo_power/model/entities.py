@@ -209,6 +209,30 @@ class Generator(_Entity):
         description="Minimum number of consecutive periods the unit stays off once stopped "
         "(unit commitment, ADR-019); None or 1 = none.",
     )
+    startup_hot_cost: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Start-up cost after at most startup_hot_periods off, $ (ADR-026); None = "
+        "no hot tier. Must be <= startup_warm_cost (if any) <= cost.startup, the cold cost.",
+    )
+    startup_hot_periods: int | None = Field(
+        default=None,
+        ge=1,
+        description="Longest off time, in periods, that still counts as a hot start; given "
+        "together with startup_hot_cost.",
+    )
+    startup_warm_cost: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Start-up cost after at most startup_warm_periods off (and more than "
+        "startup_hot_periods), $; None = no warm tier.",
+    )
+    startup_warm_periods: int | None = Field(
+        default=None,
+        ge=1,
+        description="Longest off time, in periods, that still counts as a warm start; given "
+        "together with startup_warm_cost and > startup_hot_periods.",
+    )
     reserve_max_mw: float | None = Field(
         default=None,
         ge=0.0,

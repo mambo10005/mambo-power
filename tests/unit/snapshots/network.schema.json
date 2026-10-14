@@ -374,6 +374,62 @@
           "description": "Minimum number of consecutive periods the unit stays off once stopped (unit commitment, ADR-019); None or 1 = none.",
           "title": "Min Down Periods"
         },
+        "startup_hot_cost": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Start-up cost after at most startup_hot_periods off, $ (ADR-026); None = no hot tier. Must be <= startup_warm_cost (if any) <= cost.startup, the cold cost.",
+          "title": "Startup Hot Cost"
+        },
+        "startup_hot_periods": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Longest off time, in periods, that still counts as a hot start; given together with startup_hot_cost.",
+          "title": "Startup Hot Periods"
+        },
+        "startup_warm_cost": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Start-up cost after at most startup_warm_periods off (and more than startup_hot_periods), $; None = no warm tier.",
+          "title": "Startup Warm Cost"
+        },
+        "startup_warm_periods": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Longest off time, in periods, that still counts as a warm start; given together with startup_warm_cost and > startup_hot_periods.",
+          "title": "Startup Warm Periods"
+        },
         "reserve_max_mw": {
           "anyOf": [
             {

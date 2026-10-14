@@ -354,7 +354,7 @@ to compute its impedance — it re-imports as a rating.
 | `ELEMENT_DROPPED` | both | Import: a row of a table that is not read (`trafo3w`, `switch`, `storage`, ...) or a `poly_cost` / `pwl_cost` row that is not a generator's active-power cost. Export: a `Storage` unit (pandapower's `storage` has no efficiency columns). |
 | `FIELD_DEFAULTED` | both | Import: a missing or `NaN` limit column (`min/max_p_mw`, `min/max_q_mvar` on `ext_grid` / `gen` / `sgen`) set to the element's setpoint, so the limits pin the setpoint rather than invent a range. Export: an unrated transformer's `sn_mva` set to `base_mva`. |
 | `ISLAND_DEACTIVATED` | import | As for MATPOWER: buses that cannot reach the slack are switched off with their elements ([islands](#islands)). |
-| `FIELD_DROPPED` | export | A model field with no pandapower column: `Zone.name`, a stored `Bus.vm_pu` / `va_deg` on any bus but the slack (results tables are not written; one issue, `bus_ids` names them), generator `ramp_up_mw` / `ramp_down_mw` / `min_up_periods` / `min_down_periods` / `initial_state_periods` / `reserve_max_mw`, a branch's `rating_emergency_mva`, the slack generator's `p_mw` / `q_mvar` (`ext_grid` has no setpoint), a PV generator's `q_mvar`, an `sgen`'s `v_set_pu`, a transformer's `b` (no line charging on a trafo), `cost.startup` / `cost.shutdown`, and a piecewise cost's offset `points[0][1]`. |
+| `FIELD_DROPPED` | export | A model field with no pandapower column: `Zone.name`, a stored `Bus.vm_pu` / `va_deg` on any bus but the slack (results tables are not written; one issue, `bus_ids` names them), generator `ramp_up_mw` / `ramp_down_mw` / `min_up_periods` / `min_down_periods` / `initial_state_periods` / `reserve_max_mw` / the `startup_hot_*` and `startup_warm_*` tiers, a branch's `rating_emergency_mva`, the slack generator's `p_mw` / `q_mvar` (`ext_grid` has no setpoint), a PV generator's `q_mvar`, an `sgen`'s `v_set_pu`, a transformer's `b` (no line charging on a trafo), `cost.startup` / `cost.shutdown`, and a piecewise cost's offset `points[0][1]`. |
 | `COST_DROPPED` | export | A polynomial cost of degree > 2 (`poly_cost` holds `cp0..cp2`); dropped, never approximated. |
 | `BID_DROPPED` | export | A load's demand bid (pandapower has no elastic demand); the load is written as a fixed `p_mw`. |
 
@@ -673,7 +673,7 @@ largest.
 | `COST_DROPPED` | Generator costs: RAW carries no economic data. One entry naming every costed generator. |
 | `BID_DROPPED` | Load bids, likewise. |
 | `ELEMENT_DROPPED` | Storage: RAW has no storage record. |
-| `FIELD_DROPPED` | A transformer's line charging `b` (a RAW transformer record carries none; the AC solution of the file differs by it), bus `geo`, and generator `ramp_up_mw` / `ramp_down_mw` / `min_up_periods` / `min_down_periods` / `initial_state_periods` / `reserve_max_mw`. |
+| `FIELD_DROPPED` | A transformer's line charging `b` (a RAW transformer record carries none; the AC solution of the file differs by it), bus `geo`, and generator `ramp_up_mw` / `ramp_down_mw` / `min_up_periods` / `min_down_periods` / `initial_state_periods` / `reserve_max_mw` / the `startup_hot_*` and `startup_warm_*` tiers. |
 | `FIELD_DEFAULTED` | Buses without a stored `vm_pu`/`va_deg` (written at 1 / 0) or without voltage limits (0.9 / 1.1); one entry per table. |
 
 The exporter raises nothing: a `Network` is already valid.

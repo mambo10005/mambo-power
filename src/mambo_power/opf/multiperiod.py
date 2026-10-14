@@ -119,6 +119,27 @@ stopped inside it is still off. A minimum of 1 is what the logic row already say
 row. An obligation from before the horizon (``Commitment.initial_state_periods``) is a fixed
 ``on`` column over the periods it covers, not a row.
 
+**Tiered start-up costs (ADR-026).** A unit with ``Commitment.startup_tiers`` pays for a start
+by how long it has been off. Its ``startup`` column loses its cost and gains, per period, one
+continuous column ``δ_s[t] ∈ [0, 1]`` per tier — the hot/warm tiers and the cold one — costed at
+that tier's price, with two row families after tier 16 (or wherever the previous family ends):
+
+===== ======================================== ==================================================
+tier  family                                    rows
+===== ======================================== ==================================================
+17    one tier per start, ``Σ_s δ_s[t] − v[t] == 0`` ``T`` per tiered unit
+18    window, ``δ_s[t] − Σ_{d∈win_s} w[t−d] <= rhs``   ``T`` per tiered unit per hot/warm tier
+===== ======================================== ==================================================
+
+Tier ``s``'s window is the off durations ``d`` it covers, ``max_off_{s−1} < d <= max_off_s``: a
+start at ``t`` may be of tier ``s`` only if a shut-down happened ``d`` periods earlier for some
+``d`` in the window. A shut-down before the horizon is a constant on the right-hand side:
+``rhs_s[t] = 1`` when the unit is off initially with ``initial_state_periods = k`` and ``t + k``
+falls in the window, 0 otherwise (a unit off with no stated history is cold). The cold tier has
+no window row. Because the tiers' costs rise with off time, a minimiser picks the hottest tier
+the windows allow, so the continuous ``δ`` take 0/1 values at a vertex without being declared
+integer.
+
 **Spinning reserve (ADR-023).** With ``reserve_mw`` (``(T,)``, the MW the fleet must hold in
 each period) one reserve column ``r_g[t]`` per generator per period is appended after every
 other column, bounded ``[0, reserve_max_mw[g]]`` (``inf`` where unlimited), costless, and two
@@ -212,6 +233,12 @@ class Commitment:
     unit on in the period it starts."""
     min_down_periods: IntArray | None = None
     """``(n_gen,)`` minimum consecutive periods off once stopped; ``>= 1``, 1 meaning none."""
+    startup_tiers: Sequence[Sequence[tuple[int, float]]] | None = None
+    """Per generator (``n_gen`` entries), the hot/warm start-up tiers (ADR-026) as
+    ``(max_off_periods, cost)`` pairs, off time ascending and cost non-decreasing: a start after
+    at most ``max_off_periods`` off (and more than the previous tier's) costs ``cost`` instead of
+    :attr:`startup_cost`, which stays the cold cost beyond the last tier. An empty sequence is a
+    unit with one start-up cost; ``None`` is that for every unit."""
     initial_state_periods: IntArray | None = None
     """``(n_gen,)`` how many periods each unit has already spent in its ``initial_on`` state
     before the horizon, ``>= 1`` (the period just before the horizon counts). ``None`` means
@@ -331,6 +358,10 @@ class MultiperiodSolution:
     reserve_mw: FloatArray = field(default_factory=lambda: np.zeros((0, 0)))
     """``(T, n_gen)`` spinning reserve each unit holds per period (ADR-023); shape ``(0, 0)``
     without a ``reserve_mw`` requirement."""
+    startup_cost_paid: FloatArray = field(default_factory=lambda: np.zeros((0, 0)))
+    """``(T, n_gen)`` start-up cost paid per period, $ — the tier's cost where the unit has
+    tiers (ADR-026), ``Commitment.startup_cost`` otherwise; shape ``(0, 0)`` without a
+    :class:`Commitment` block."""
 
 
 def _sparse_rows(
@@ -523,6 +554,31 @@ def multiperiod_dc_opf(
             )
         )
 
+    startup_tiers: list[list[tuple[int, float]]] = [[] for _ in range(n_gen)]
+    if commitment is not None and commitment.startup_tiers is not None:
+        if len(commitment.startup_tiers) != n_gen:
+            raise ValueError(
+                f"commitment.startup_tiers must have {n_gen} entries (NetworkArrays generator "
+                f"order), got {len(commitment.startup_tiers)}"
+            )
+        for g, tiers in enumerate(commitment.startup_tiers):
+            parsed = [(int(off), float(cost)) for off, cost in tiers]
+            offs = [off for off, _ in parsed]
+            costs = [cost for _, cost in parsed] + [float(commitment.startup_cost[g])]
+            if any(off < 1 for off in offs) or offs != sorted(set(offs)):
+                raise ValueError(
+                    f"commitment.startup_tiers[{g}]: max_off_periods must be >= 1 and strictly "
+                    "increasing"
+                )
+            if any(a > b for a, b in zip(costs, costs[1:], strict=False)) or any(
+                c < 0 for c in costs
+            ):
+                raise ValueError(
+                    f"commitment.startup_tiers[{g}]: costs must be >= 0 and non-decreasing with "
+                    "off time, the cold startup_cost last"
+                )
+            startup_tiers[g] = parsed
+
     reserve: FloatArray | None = None
     if reserve_mw is not None:
         reserve = np.asarray(reserve_mw, dtype=np.float64)
@@ -669,9 +725,11 @@ def multiperiod_dc_opf(
             on_cols.append(_cols(base, 0, n_gen))
             start_cols.append(_cols(base, n_gen, n_gen))
             stop_cols.append(_cols(base, 2 * n_gen, n_gen))
+            tiered = np.array([bool(startup_tiers[g]) for g in range(n_gen)])
+            start_cost = np.where(tiered, 0.0, commitment.startup_cost)
             for cols, cost, lower, upper in (
                 (on_cols[t], commitment.no_load_cost, on_lower, np.ones(n_gen)),
-                (start_cols[t], commitment.startup_cost, np.zeros(n_gen), event_upper),
+                (start_cols[t], start_cost, np.zeros(n_gen), event_upper),
                 (stop_cols[t], commitment.shutdown_cost, np.zeros(n_gen), event_upper),
             ):
                 h.addVars(n_gen, lower, upper)
@@ -946,6 +1004,61 @@ def multiperiod_dc_opf(
         # built here are small, so ask for the optimum.
         h.setOptionValue("mip_rel_gap", 1e-9)
 
+    # tiers 17-18 (module docstring, "Tiered start-up costs"): per tiered unit, one δ column per
+    # tier per period, the one-tier-per-start equality and the hot/warm window rows.
+    n_tier_rows = 0
+    tier_cols: dict[int, list[list[int]]] = {}  # g -> per period, the δ columns (tiers + cold)
+    tier_costs: dict[int, list[float]] = {}
+    if commitment is not None and n_gen:
+        for g in range(n_gen):
+            tiers = startup_tiers[g]
+            if not tiers or not committable[g]:
+                continue
+            costs = [cost for _, cost in tiers] + [float(commitment.startup_cost[g])]
+            tier_costs[g] = costs
+            per_period: list[list[int]] = []
+            for _t in range(n_periods):
+                base = h.getNumCol()
+                h.addVars(len(costs), np.zeros(len(costs)), np.ones(len(costs)))
+                new_cols = list(range(base, base + len(costs)))
+                h.changeColsCost(
+                    len(costs),
+                    np.array(new_cols, dtype=np.int32),
+                    np.array(costs, dtype=np.float64),
+                )
+                per_period.append(new_cols)
+            tier_cols[g] = per_period
+            one_per_start = [
+                [(c, 1.0) for c in per_period[t]] + [(int(start_cols[t][g]), -1.0)]
+                for t in range(n_periods)
+            ]
+            _add_rows(h, _sparse_rows(one_per_start, np.zeros(n_periods), np.zeros(n_periods)))
+            off_initially = not bool(commitment.initial_on[g])
+            history = None if initial_periods is None else int(initial_periods[g])
+            window_rows: list[list[tuple[int, float]]] = []
+            rhs: list[float] = []
+            previous_off = 0
+            for s_idx, (max_off, _) in enumerate(tiers):
+                for t in range(n_periods):
+                    row = [(per_period[t][s_idx], 1.0)]
+                    allowed = 0.0
+                    for d in range(previous_off + 1, max_off + 1):
+                        if t - d >= 0:
+                            row.append((int(stop_cols[t - d][g]), -1.0))
+                        elif off_initially and history is not None and t + history == d:
+                            # the shut-down before the horizon sits at -history: off for
+                            # history + t periods at t
+                            allowed = 1.0
+                    window_rows.append(row)
+                    rhs.append(allowed)
+                previous_off = max_off
+            n_rows_here = len(window_rows)
+            _add_rows(
+                h,
+                _sparse_rows(window_rows, np.full(n_rows_here, -highspy.kHighsInf), np.array(rhs)),
+            )
+            n_tier_rows += n_periods + n_rows_here
+
     # tiers 15-16 (module docstring, "Spinning reserve"): reserve columns after every other
     # column, the requirement row per period and the headroom row per generator per period.
     reserve_cols: list[ColArray] = []
@@ -1052,6 +1165,7 @@ def multiperiod_dc_opf(
         + n_ramp_rows  # tier 6, empty at T == 1 or with nothing ramped; two families committed
         + n_periods * (n_epigraph + n_hypograph)  # tiers 7-8, one row per segment per period
         + n_commit_rows  # tiers 9-14 (ADR-017, ADR-019)
+        + n_tier_rows  # tiers 17-18 (ADR-026), built before the reserve rows
         + n_reserve_rows  # tiers 15-16 (ADR-023)
     )
     assert h.getNumRow() == expected_rows, (
@@ -1108,11 +1222,19 @@ def multiperiod_dc_opf(
     poly_gen_cost = float(np.sum(c2 * dispatch_mw**2 + c1 * dispatch_mw + c0))
     commitment_cost = 0.0
     no_load_cost = 0.0
+    startup_paid = np.zeros((0, 0))
     if commitment is not None:
         no_load_cost = float(np.sum(commitment.no_load_cost * committed))
-        commitment_cost = float(
-            np.sum(commitment.startup_cost * started) + np.sum(commitment.shutdown_cost * stopped)
-        )
+        startup_paid = commitment.startup_cost * started
+        for g, per_period in tier_cols.items():
+            for t in range(n_periods):
+                startup_paid[t, g] = float(
+                    sum(
+                        c * col_value[col]
+                        for c, col in zip(tier_costs[g], per_period[t], strict=True)
+                    )
+                )
+        commitment_cost = float(np.sum(startup_paid) + np.sum(commitment.shutdown_cost * stopped))
     return MultiperiodSolution(
         status=status,
         n_periods=n_periods,
@@ -1131,4 +1253,5 @@ def multiperiod_dc_opf(
         commitment_cost=commitment_cost,
         no_load_cost=no_load_cost,
         reserve_mw=reserve_held,
+        startup_cost_paid=startup_paid,
     )

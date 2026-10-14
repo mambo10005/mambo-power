@@ -47,7 +47,9 @@ the LP left once the commitment is fixed at the optimum (the builder's own two-p
 the result carries each unit's schedule in ``MarketMultiperiodResult.commitment``. Minimum up
 and down times (ADR-019) come off ``Generator.min_up_periods`` / ``min_down_periods``, and the
 obligation a unit brings into the horizon off ``initial_state_periods``: a unit that states no
-history is taken to have been in its state long enough that none carries in.
+history is taken to have been in its state long enough that none carries in. Hot and warm
+start-up tiers (ADR-026) come off ``startup_hot_cost`` / ``startup_hot_periods`` and
+``startup_warm_cost`` / ``startup_warm_periods``, the cold cost staying ``cost.startup``.
 
 **Spinning reserve (ADR-023).** A ``Period.reserve_mw`` is handed to the builder as that
 period's requirement (a period that states none requires 0 once any period does), each unit's
@@ -181,6 +183,17 @@ def _commitment(
         shutdown_cost=shutdown,
         initial_on=initial_on,
         no_load_cost=no_load,
+        startup_tiers=[
+            [
+                (periods, cost)
+                for cost, periods in (
+                    (g.startup_hot_cost, g.startup_hot_periods),
+                    (g.startup_warm_cost, g.startup_warm_periods),
+                )
+                if cost is not None and periods is not None
+            ]
+            for g in gens
+        ],
         min_up_periods=np.array([g.min_up_periods or 1 for g in gens], dtype=np.int64),
         min_down_periods=np.array([g.min_down_periods or 1 for g in gens], dtype=np.int64),
         # a unit that states no history carries no obligation in: "long enough" is the horizon
@@ -219,7 +232,8 @@ def _commitment_rows(
                 on=[bool(x) for x in on],
                 started=[bool(x) for x in started],
                 stopped=[bool(x) for x in stopped],
-                startup_cost=float(commitment.startup_cost[i] * np.sum(started)),
+                startup_cost=float(np.sum(solution.startup_cost_paid[:, i])),
+                startup_costs=[float(x) for x in solution.startup_cost_paid[:, i]],
                 shutdown_cost=float(commitment.shutdown_cost[i] * np.sum(stopped)),
                 no_load_cost=float(commitment.no_load_cost[i] * np.sum(on)),
             )

@@ -242,6 +242,10 @@ class _Writer:
                     "min_down_periods",
                     "initial_state_periods",
                     "reserve_max_mw",
+                    "startup_hot_cost",
+                    "startup_hot_periods",
+                    "startup_warm_cost",
+                    "startup_warm_periods",
                 )
                 if getattr(gen, name) is not None
             ]
