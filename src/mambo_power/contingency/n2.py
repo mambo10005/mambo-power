@@ -39,7 +39,16 @@ from mambo_power.numerics import NetworkArrays, bridges, lodf, ptdf
 from mambo_power.pf import dc as pfdc
 from mambo_power.results import N1BranchFlag, N2OutageResult
 
-__all__ = ["ISLAND_DET_TOL", "N2Options", "N2Screen", "confirm_n2", "pair_flows_mw", "screen_n2"]
+__all__ = [
+    "ISLAND_DET_TOL",
+    "N2Options",
+    "N2Screen",
+    "confirm_n2",
+    "pair_flows_mw",
+    "pair_weights",
+    "screen_n2",
+    "screen_n2_flows",
+]
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -88,16 +97,34 @@ def screen_n2(arr: NetworkArrays) -> N2Screen:
     the pair's two shed flows from the 2×2 system, every other branch's flow from them, and a
     flag wherever an estimate exceeds the branch's emergency (else normal) rating by more than
     :data:`~mambo_power.contingency.n1.VIOLATION_TOL_MVA`. The two outaged branches themselves
-    are never flagged.
+    are never flagged. :func:`screen_n2_flows` is the screen proper over a given base case.
     """
-    n = arr.n_branch
     base_sol = pfdc.solve(arr)
     base_flow = np.asarray(base_sol.p_from_pu, dtype=np.float64) * arr.base_mva
-    ptdf_matrix = ptdf(arr)
-    lodf_matrix = lodf(arr, ptdf_matrix)
+    return screen_n2_flows(arr, base_flow)
+
+
+def screen_n2_flows(
+    arr: NetworkArrays,
+    base_flow_signed_mw: FloatArray,
+    *,
+    ptdf_matrix: FloatArray | None = None,
+    lodf_matrix: FloatArray | None = None,
+    rating_mw: FloatArray | None = None,
+) -> N2Screen:
+    """The pair screen over a given base case (signed branch flows, MW): what :func:`screen_n2`
+    runs on the network's own dispatch and :func:`mambo_power.opf.scopf.scopf_dc` on each
+    candidate dispatch (ADR-025). A precomputed PTDF/LODF is reused when given; ``rating_mw``
+    overrides the post-contingency limit (the emergency rating, ADR-020).
+    """
+    n = arr.n_branch
+    base_flow = np.asarray(base_flow_signed_mw, dtype=np.float64)
+    ptdf_matrix = ptdf(arr) if ptdf_matrix is None else ptdf_matrix
+    lodf_matrix = lodf(arr, ptdf_matrix) if lodf_matrix is None else lodf_matrix
     bridge_positions = bridges(arr)
     bridge_set = set(bridge_positions)
-    rating_mw = arr.rating_emergency_pu * arr.base_mva
+    if rating_mw is None:
+        rating_mw = arr.rating_emergency_pu * arr.base_mva
     limit = rating_mw + VIOLATION_TOL_MVA
     candidates = np.array([k for k in range(n) if k not in bridge_set], dtype=np.int64)
 
@@ -190,17 +217,29 @@ def confirm_n2(
     return results, truncated
 
 
+def pair_weights(lodf_matrix: FloatArray, i: int, j: int) -> tuple[FloatArray, FloatArray] | None:
+    """``(w_i, w_j)``, each ``(n_branch,)``, such that every branch's flow with ``i`` and ``j``
+    out is ``f + w_i·f_i + w_j·f_j`` (module docstring: ``L[:, i]``/``L[:, j]`` composed with the
+    inverse of the 2×2 system); ``None`` when the pair is a cut set. The weights are what makes a
+    pair's post-contingency flow linear in the dispatch — the SCOPF's pair rows (ADR-025)."""
+    det = 1.0 - lodf_matrix[i, j] * lodf_matrix[j, i]
+    if abs(det) <= ISLAND_DET_TOL:
+        return None
+    col_i, col_j = lodf_matrix[:, i], lodf_matrix[:, j]
+    w_i = (col_i + col_j * lodf_matrix[j, i]) / det
+    w_j = (col_j + col_i * lodf_matrix[i, j]) / det
+    return np.asarray(w_i, dtype=np.float64), np.asarray(w_j, dtype=np.float64)
+
+
 def pair_flows_mw(arr: NetworkArrays, i: int, j: int) -> FloatArray:
     """Signed flow of every branch with ``i`` and ``j`` out, by the generalised LODF (module
     docstring) — the closed form the screen uses, for one pair; ``nan`` everywhere when the pair
     is a cut set."""
     base_flow = np.asarray(pfdc.solve(arr).p_from_pu, dtype=np.float64) * arr.base_mva
-    lodf_matrix = lodf(arr, ptdf(arr))
-    det = 1.0 - lodf_matrix[i, j] * lodf_matrix[j, i]
-    if abs(det) <= ISLAND_DET_TOL:
+    weights = pair_weights(lodf(arr, ptdf(arr)), i, j)
+    if weights is None:
         return np.full(arr.n_branch, np.nan)
-    x_i = (base_flow[i] + lodf_matrix[i, j] * base_flow[j]) / det
-    x_j = (base_flow[j] + lodf_matrix[j, i] * base_flow[i]) / det
-    post = base_flow + lodf_matrix[:, i] * x_i + lodf_matrix[:, j] * x_j
+    w_i, w_j = weights
+    post = base_flow + w_i * base_flow[i] + w_j * base_flow[j]
     post[[i, j]] = 0.0
     return np.asarray(post, dtype=np.float64)

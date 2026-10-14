@@ -1147,6 +1147,41 @@ second re-solve.
 two branches interact; re-solving every pair — \(O(n^2)\) factorisations, minutes on case300
 for a screen that costs a fifth of a second.
 
+## ADR-025 — N-2 security rows in the SCOPF, generated from the pair screen
+
+**Status:** accepted 2026-10-13.
+
+**Context.** ADR-024 shipped the N-2 screen and recorded that its rows would slot into
+ADR-016's constraint generation unchanged, because a pair's post-contingency flow is linear in
+the dispatch. ADR-016 and ADR-021 had both listed N-2 as the next contingency class.
+
+**Decision.** `ScopfOptions.branch_pairs`.
+
+1. **One more row kind.** `Contingency` gains ``kind="pair"`` and ``outage2``; `security_rows`
+   builds the row from the generalised-LODF weights
+   (`contingency.n2.pair_weights`): sensitivity \(\text{PTDF}[l] + w_i\,\text{PTDF}[i] +
+   w_j\,\text{PTDF}[j]\), constant likewise. A cut-set pair is refused with a `ValueError`;
+   the loop never asks for one.
+2. **The same loop, a second screen.** Each candidate dispatch is screened by
+   `screen_n2_flows` next to `screen_n1_dispatch`; newly flagged (pair, branch) triples become
+   rows. Finite termination is ADR-016's argument over a larger finite set.
+3. **Preventive, at the emergency rating.** Corrective redispatch (ADR-021) stays with single
+   outages; pair rows hold the immediate flow to the emergency rating.
+4. **Confirmed by `contingency.n2`.** The result carries `n2` next to `n1`, and `secure`
+   requires both.
+
+**Consequences.**
+
+1. **"N-1 at the normal rating, N-2 at the emergency rating" is one call.** The common planning
+   criterion, and the one case14_rated can meet: infeasible at the normal ratings, $8457/h at a
+   30 % emergency rating against $8314/h for N-1 alone.
+2. **Rows stay few.** Constraint generation added 210 pair rows of 2 934 possible on
+   case14_rated, in two solves.
+3. **Not modelled:** generator pairs, corrective action after a pair, N-k beyond two.
+
+*Rejected:* enumerating every pair row — ADR-016's rejection, cubed; a separate `n2` loop
+after the `n1` one converges — two loops where one screen call per solve does the same.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

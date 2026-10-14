@@ -38,7 +38,7 @@ import numpy as np
 import numpy.typing as npt
 
 import mambo_power
-from mambo_power.contingency import N1Options, n1
+from mambo_power.contingency import N1Options, n1, n2
 from mambo_power.model import GeneratorCost, Network
 from mambo_power.numerics.arrays import NetworkArrays
 from mambo_power.numerics.bbus import flow_from_ptdf
@@ -385,7 +385,10 @@ def solve_scopf(net: Network, options: ScopfOptions | None = None) -> ScopfDcRes
     constraints = [
         SecurityConstraintResult(
             outage_kind=c.kind,
-            outage_id=(arr.branch_ids if c.kind == "branch" else arr.gen_ids)[c.outage],
+            outage_id=(arr.gen_ids if c.kind == "generator" else arr.branch_ids)[c.outage],
+            outage_ids=(
+                [arr.branch_ids[c.outage], arr.branch_ids[c.outage2]] if c.kind == "pair" else []
+            ),
             branch_id=arr.branch_ids[c.monitored],
             rating_mva=float(secured.security.rating_mw[r]),
             post_contingency_flow_mw=float(secured.post_contingency_flow_mw[r]),
@@ -399,6 +402,9 @@ def solve_scopf(net: Network, options: ScopfOptions | None = None) -> ScopfDcRes
     secure = not any(o.confirmed_violating for o in confirmation.outages) and not any(
         o.confirmed_violating for o in confirmation.generator_outages
     )
+    pair_confirmation = n2(dispatched) if opts.branch_pairs else None
+    if pair_confirmation is not None:
+        secure = secure and not any(o.confirmed_violating for o in pair_confirmation.outages)
     corrections = _corrections(net, arr, secured)
     ac_check = feasibility_report(solve_ac(dispatched), dispatched) if opts.ac_check else None
     return ScopfDcResult(
@@ -416,6 +422,7 @@ def solve_scopf(net: Network, options: ScopfOptions | None = None) -> ScopfDcRes
         branches=branches,
         constraints=constraints,
         n1=confirmation,
+        n2=pair_confirmation,
         ac_check=ac_check,
         corrections=corrections,
         corrected_secure=all(c.confirmed_max_loading <= 1.0 + 1e-9 for c in corrections),
@@ -469,7 +476,7 @@ def _corrections(
         loading = flows / arr_k.rating_pu  # inf rating -> 0
         out.append(
             CorrectiveActionResult(
-                outage_kind=kind,
+                outage_kind="branch" if kind == "branch" else "generator",
                 outage_id=outage_id,
                 redispatch=[
                     GenCorrectionResult(

@@ -126,6 +126,24 @@ has to be served after each corrected contingency too) and a binding corrected f
 the congestion term, so an LMP can carry the cost of a corrective ramp that binds —
 `lmp_decomposition(duals, ptdf, security, corrective)`.
 
+## N-2 branch pairs
+
+`ScopfOptions(branch_pairs=True)` ([ADR-025](../design/decisions.md)) secures the dispatch
+against every **pair** of branch outages as well. The [N-2 screen](n1.md#n-2-branch-pairs) gives
+a pair's post-contingency flow in closed form, \(f_l + w_i f_i + w_j f_j\) with the generalised-LODF
+weights, and \(f\) is linear in the dispatch — so a flagged (pair, branch) is one more row of
+the same shape, with sensitivity \(\text{PTDF}[l] + w_i\,\text{PTDF}[i] + w_j\,\text{PTDF}[j]\).
+The loop runs the pair screen on every candidate dispatch next to the single-outage one and
+generates rows the same way; pairs are secured preventively, at the emergency rating, and a pair
+that disconnects the network is skipped, as the screen skips it, since no dispatch survives it.
+The confirmation runs `contingency.n2` on the secure dispatch too (`ScopfDcResult.n2`), and
+`secure` requires both verdicts.
+
+On `derived/case14_rated` no dispatch survives every pair at the normal ratings — some pair
+leaves a load with a single path rated below it, and the result says `Infeasible`. With a 30 %
+emergency rating the N-2-secure dispatch costs $8457/h against $8314/h for N-1 alone and $7643/h
+unsecured, found in two solves with 224 rows, 210 of them pair rows; four pair rows bind.
+
 ## The result
 
 `ScopfDcResult` carries the DC-OPF rows (`generators`, `buses`, `branches` — base-case flows at
@@ -139,7 +157,9 @@ the secure dispatch) plus:
 - `buses[*].congestion` includes the binding post-contingency rows: a binding security row
   prices the buses whose injections load the monitored branch in that contingency, exactly as a
   binding base-case limit does (`lmp_decomposition(duals, ptdf, security)`).
-- `iterations`, `n1`, `secure`, and `ac_check` (as `opf.dc`'s, on the secure dispatch).
+- `iterations`, `n1`, `secure`, and `ac_check` (as `opf.dc`'s, on the secure dispatch); with
+  `branch_pairs`, `n2` as well, and pair rows carry `outage_kind = "pair"` with both ids in
+  `outage_ids`.
 - With `corrective`: `corrections` — one `CorrectiveActionResult` per outage that needed a
   redispatch, with every unit's corrected output and `delta_mw`, that outage's corrected-flow
   rows (`rating_mva` the normal rating) and `confirmed_max_loading`, the largest loading in a
@@ -180,7 +200,8 @@ is survivable too.
 
 ## Scope
 
-Single outages, DC, preventive or [corrective](#corrective-redispatch), with a per-branch
-[emergency rating](n1.md#emergency-ratings) for the immediate post-contingency flow. N-2, a cost
-on the corrective action itself, and an AC formulation are not modelled; the AC side is the same
+Single outages and, with `branch_pairs`, [branch pairs](#n-2-branch-pairs); DC; preventive or
+[corrective](#corrective-redispatch) (single outages only), with a per-branch
+[emergency rating](n1.md#emergency-ratings) for the immediate post-contingency flow. Generator
+pairs, a cost on the corrective action itself, and an AC formulation are not modelled; the AC side is the same
 `ac_check` DC-OPF offers — a check, not a constraint.

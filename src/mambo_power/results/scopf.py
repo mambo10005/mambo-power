@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mambo_power.results.feasibility import FeasibilityReport
 from mambo_power.results.n1 import N1Result
+from mambo_power.results.n2 import N2Result
 from mambo_power.results.opf import BusLmpResult, GenDispatchResult, OpfBranchFlowResult
 from mambo_power.results.provenance import ResultProvenance
 
@@ -29,8 +30,16 @@ class SecurityConstraintResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    outage_kind: Literal["branch", "generator"] = Field(description="What is lost.")
-    outage_id: str = Field(description="Id of the outaged branch or generator.")
+    outage_kind: Literal["branch", "generator", "pair"] = Field(
+        description='What is lost: one branch, one generator, or a "pair" of branches (ADR-025).'
+    )
+    outage_id: str = Field(
+        description="Id of the outaged branch or generator; for a pair, the first branch."
+    )
+    outage_ids: list[str] = Field(
+        default_factory=list,
+        description="For a pair, both outaged branch ids, in id order; empty otherwise.",
+    )
     branch_id: str = Field(description="The monitored branch id.")
     rating_mva: float = Field(
         gt=0.0,
@@ -109,7 +118,8 @@ class ScopfDcResult(BaseModel):
     iterations: int = Field(ge=1, description="LP solves the constraint-generation loop ran.")
     secure: bool = Field(
         default=False,
-        description="Whether the confirming contingency.n1 of the dispatch found no violation.",
+        description="Whether the confirming contingency.n1 (and, with branch_pairs, "
+        "contingency.n2) of the dispatch found no violation.",
     )
     base_objective_cost: float = Field(
         default=0.0, description="Cost of the plain (unsecured) DC-OPF, $/h."
@@ -140,6 +150,11 @@ class ScopfDcResult(BaseModel):
         default=None,
         description="contingency.n1 of the secure dispatch (the confirmation); None when not "
         "Optimal.",
+    )
+    n2: N2Result | None = Field(
+        default=None,
+        description="With ScopfOptions.branch_pairs (ADR-025): contingency.n2 of the secure "
+        "dispatch, the pair confirmation that `secure` also requires; None otherwise.",
     )
     corrections: list[CorrectiveActionResult] = Field(
         default_factory=list,

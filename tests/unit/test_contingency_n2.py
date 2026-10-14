@@ -176,3 +176,57 @@ def test_result_round_trips_and_the_jobs_kind_runs() -> None:
     assert reply.status == "ok" and isinstance(reply.result, N2Result)
     assert len(reply.result.outages) == 3 and reply.result.truncated
     assert reply.result.provenance.kind == "n2"
+
+
+# --- N-2 rows in the SCOPF (ADR-025) ----------------------------------------------------------
+
+
+def test_scopf_with_branch_pairs_is_infeasible_at_normal_ratings_and_secured_with_headroom() -> (
+    None
+):
+    from mambo_power.opf import ScopfOptions, solve_scopf
+
+    net = cases.load("derived/case14_rated")
+    at_normal = solve_scopf(net, ScopfOptions(branch_pairs=True))
+    # a pair that leaves a load with one path rated below it: no preventive dispatch exists
+    assert at_normal.status == "Infeasible" and at_normal.n2 is None
+
+    for br in net.branches:
+        if br.rating_mva is not None:
+            br.rating_emergency_mva = 1.3 * br.rating_mva
+    single = solve_scopf(net)
+    pairs = solve_scopf(net, ScopfOptions(branch_pairs=True))
+
+    assert pairs.status == "Optimal" and pairs.secure
+    assert pairs.n2 is not None and pairs.n2.outages == []  # the confirmation: nothing flagged
+    assert pairs.n1 is not None and pairs.n1.outages == []
+    assert single.objective_cost < pairs.objective_cost
+    kinds = {c.outage_kind for c in pairs.constraints}
+    assert "pair" in kinds and "branch" in kinds
+    pair_rows = [c for c in pairs.constraints if c.outage_kind == "pair"]
+    assert all(len(c.outage_ids) == 2 and c.outage_id == c.outage_ids[0] for c in pair_rows)
+    assert any(abs(c.dual) > 1e-9 for c in pair_rows)
+    # every pair row's reported flow is the generalised-LODF flow of the secure dispatch and
+    # inside its rating
+    arr = NetworkArrays.from_network(net)
+    dispatched = net.model_copy(deep=True)
+    for g in dispatched.generators:
+        g.p_mw = next(x.p_mw for x in pairs.generators if x.id == g.id)
+    arr_d = NetworkArrays.from_network(dispatched)
+    for c in pair_rows:
+        i, j = (arr.branch_index[b] for b in c.outage_ids)
+        flows = pair_flows_mw(arr_d, i, j)
+        assert (
+            abs(abs(flows[arr.branch_index[c.branch_id]]) - abs(c.post_contingency_flow_mw)) < 1e-6
+        )
+        assert abs(c.post_contingency_flow_mw) <= c.rating_mva + 1e-6
+
+
+def test_security_rows_refuse_a_cut_set_pair() -> None:
+    from mambo_power.numerics import lodf, ptdf
+    from mambo_power.opf.scopf import Contingency, security_rows
+
+    arr = NetworkArrays.from_network(_triangle())
+    ptdf_matrix = ptdf(arr)
+    with pytest.raises(ValueError, match="disconnects the network"):
+        security_rows(arr, ptdf_matrix, lodf(arr, ptdf_matrix), [Contingency("pair", 0, 2, 1)])

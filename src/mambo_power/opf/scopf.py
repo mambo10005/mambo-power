@@ -24,6 +24,13 @@ converges, in practice in a handful of iterations. The final dispatch is then co
 honest way: :func:`mambo_power.opf.solve_scopf` writes it into a copy of the network and runs
 the real :func:`mambo_power.contingency.n1`, re-solving every flagged outage.
 
+**Branch pairs (ADR-025).** With ``ScopfOptions.branch_pairs`` the loop also screens every
+pair of branch outages (:func:`mambo_power.contingency.n2.screen_n2_flows`) and adds a row per
+flagged (pair, branch): the generalised LODF makes a pair's post-contingency flow linear in the
+dispatch too, so the row has the same shape with composed weights. Pairs are secured
+preventively only, at the emergency rating; a pair that disconnects the network is skipped, as
+the screen skips it, since no dispatch survives it.
+
 **Corrective redispatch (ADR-021).** With ``ScopfOptions.corrective`` each outage the screen
 flags against the *normal* rating also gets a corrected dispatch in the same LP
 (:class:`~mambo_power.opf.dc_opf.CorrectiveRows`): the immediate flow is held to the emergency
@@ -52,6 +59,7 @@ from mambo_power.contingency.n1 import (
     dispatch_flows_mw,
     screen_n1_dispatch,
 )
+from mambo_power.contingency.n2 import N2Screen, pair_weights, screen_n2_flows
 from mambo_power.numerics import NetworkArrays, lodf
 from mambo_power.numerics import ptdf as compute_ptdf
 from mambo_power.numerics.bbus import p_shift, pf_shift
@@ -64,7 +72,7 @@ from mambo_power.opf.dc_opf import (
 )
 
 FloatArray = npt.NDArray[np.float64]
-OutageKind = Literal["branch", "generator"]
+OutageKind = Literal["branch", "generator", "pair"]
 
 _OPTIMAL = "Optimal"
 ITERATION_LIMIT = "IterationLimit"
@@ -98,6 +106,12 @@ class ScopfOptions(BaseModel):
         "flow is held to the emergency rating and a corrected dispatch, each unit moved by at "
         "most its ramp_up_mw / ramp_down_mw, to the normal rating.",
     )
+    branch_pairs: bool = Field(
+        default=False,
+        description="Also secure against every pair of branch outages (N-2, ADR-025), "
+        "preventively, at the emergency rating; pairs that disconnect the network are not "
+        "securable and are skipped as contingency.n2 skips them.",
+    )
     quadratic_segments: int = Field(
         default=16,
         ge=1,
@@ -112,11 +126,14 @@ class Contingency:
     """One (outage, monitored branch) pair that has a row in the security block."""
 
     kind: OutageKind
-    """``"branch"`` or ``"generator"``."""
+    """``"branch"``, ``"generator"`` or ``"pair"`` (two branches out together, ADR-025)."""
     outage: int
-    """Position of the outaged element in ``arr.branch_ids`` or ``arr.gen_ids``."""
+    """Position of the outaged element in ``arr.branch_ids`` or ``arr.gen_ids``; for a pair,
+    the first (lower) branch position."""
     monitored: int
     """Position of the monitored branch in ``arr.branch_ids``."""
+    outage2: int = -1
+    """For ``kind == "pair"``, the second branch position; ``-1`` otherwise."""
 
 
 @dataclass(frozen=True)
@@ -221,8 +238,11 @@ def security_rows(
     const_k``, where ``const`` is the fixed (load, shunt, phase-shift) part of each base-case
     flow exactly as :func:`~mambo_power.opf.dc_opf.dc_opf` computes it; for a generator outage
     the sensitivity and constant are the base case's and the outaged unit's own column is
-    zeroed. A branch outage must not be a bridge and a generator outage must not sit at the
-    slack bus — :func:`scopf_dc` only ever asks for pairs the screen produced, which skips both.
+    zeroed; for a branch pair (ADR-025) the sensitivity is ``PTDF[l] + w_i·PTDF[i] + w_j·PTDF[j]``
+    with the generalised-LODF weights of :func:`mambo_power.contingency.n2.pair_weights`. A
+    branch outage must not be a bridge, a pair must not be a cut set and a generator outage must
+    not sit at the slack bus — :func:`scopf_dc` only ever asks for pairs the screens produced,
+    which skip all three.
     """
     n_rows = len(contingencies)
     n_gen = len(arr.gen_ids)
@@ -239,6 +259,24 @@ def security_rows(
             factor = float(lodf_matrix[c.monitored, c.outage])
             sensitivity = ptdf_matrix[c.monitored] + factor * ptdf_matrix[c.outage]
             const_mw[r] = base_const[c.monitored] + factor * base_const[c.outage]
+            gen_coeffs[r] = sensitivity[arr.gen_bus]
+        elif c.kind == "pair":
+            # post = f_l + w_i·f_i + w_j·f_j with f linear in the dispatch (ADR-025)
+            weights = pair_weights(lodf_matrix, c.outage, c.outage2)
+            if weights is None:
+                raise ValueError(
+                    f"branch pair ({c.outage}, {c.outage2}) disconnects the network: no "
+                    "post-contingency row exists for it"
+                )
+            w_i, w_j = weights[0][c.monitored], weights[1][c.monitored]
+            sensitivity = (
+                ptdf_matrix[c.monitored]
+                + w_i * ptdf_matrix[c.outage]
+                + w_j * ptdf_matrix[c.outage2]
+            )
+            const_mw[r] = (
+                base_const[c.monitored] + w_i * base_const[c.outage] + w_j * base_const[c.outage2]
+            )
             gen_coeffs[r] = sensitivity[arr.gen_bus]
         else:
             sensitivity = ptdf_matrix[c.monitored]
@@ -268,6 +306,15 @@ def _flagged_pairs(screen: N1Screen) -> list[Contingency]:
         for monitored in screen.gen_flagged_positions[g]
     )
     return pairs
+
+
+def _flagged_branch_pairs(screen: N2Screen) -> list[Contingency]:
+    """Every (pair, monitored) triple the N-2 screen flagged, in pair order (ADR-025)."""
+    return [
+        Contingency("pair", i, monitored, j)
+        for (i, j) in sorted(screen.flagged)
+        for monitored in screen.flagged[(i, j)]
+    ]
 
 
 def scopf_dc(
@@ -376,6 +423,14 @@ def scopf_dc(
         # the immediate post-contingency flows, against the emergency rating
         screen = screen_n1_dispatch(arr, solution.dispatch_mw, n1_options, ptdf_matrix=ptdf_matrix)
         new = [c for c in _flagged_pairs(screen) if c not in seen]
+        if options.branch_pairs:
+            pair_screen = screen_n2_flows(
+                arr,
+                dispatch_flows_mw(arr, solution.dispatch_mw, ptdf_matrix),
+                ptdf_matrix=ptdf_matrix,
+                lodf_matrix=lodf_matrix,
+            )
+            new.extend(c for c in _flagged_branch_pairs(pair_screen) if c not in seen)
         # the corrected flows, against the normal rating: a corrected dispatch where the outage
         # has one, the base dispatch where it does not yet
         new_corrected: list[Contingency] = []

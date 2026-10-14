@@ -274,6 +274,7 @@ def test_generator_outages_off_secures_branches_only() -> None:
         "ac_check": False,
         "corrective": False,
         "quadratic_segments": 16,
+        "branch_pairs": False,
     }
 
 
