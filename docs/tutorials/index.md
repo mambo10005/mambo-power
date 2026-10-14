@@ -1,6 +1,6 @@
 # Tutorials
 
-Four narrative walkthroughs, difficulty-tiered, each self-contained but building on the one
+Five narrative walkthroughs, difficulty-tiered, each self-contained but building on the one
 before it. If [Getting started](../getting-started.md) is a five-minute install-and-first-solve,
 these are the five-to-eight-minute-each story of what the package actually does and why —
 prose-heavy, with the "why" explained alongside the "what," rather than the terse
@@ -12,6 +12,7 @@ one-concept-per-script style of the [examples](../examples/index.md).
 | [2. DC-OPF and N-1 screening](02-dc-opf-and-n1.ipynb) | Intermediate | `opf.solve_dc_opf` for cost-minimising dispatch and LMPs, `contingency.n1` for branch- and generator-outage screening on the bundled rated case |
 | [3. A nodal market](03-nodal-market.ipynb) | Intermediate | `market.solve_nodal` with elastic demand, LMP congestion splits, and settlement |
 | [4. Where next](04-where-next.ipynb) | Guided fork | `market.agents` (strategic bidding) and `io.*` (interchange formats) — pick your own next stop |
+| [5. Security and commitment](05-security-and-commitment.ipynb) | Intermediate–advanced | Emergency ratings, N-1 and N-2 screening, the preventive / corrective / N-2 security-constrained OPF, and unit commitment with a spinning-reserve requirement — the post-epic features (ADR-016 to ADR-025) as one story |
 
 ## The arc
 
@@ -26,6 +27,9 @@ Each tutorial answers a progressively harder question about the same kind of net
 4. **Where does the story go from here** — two independent directions, strategic bidding and
    real-world interchange formats, so you can pick whichever matches what you're actually
    building.
+5. **What does a planner do about an insecure dispatch** — rate the lines twice, screen single
+   and double outages, buy security three different ways, and decide which units to run and how
+   much to hold back.
 
 Every code cell in every notebook actually runs — they're executed fresh in CI on every push
 ([nbmake](https://github.com/treebeardtech/nbmake)), so the code you see is proven to run, not
@@ -35,5 +39,5 @@ site build — CI proves the code doesn't break, it doesn't re-render this page'
 want fresh numbers, `pip install mambo-power`, download the notebook and run it.
 
 Prefer a faster, terser reference once the narrative isn't needed anymore? See
-[Examples](../examples/index.md) (thirteen short scripts, one concept each) or the
+[Examples](../examples/index.md) (sixteen short scripts, one concept each) or the
 [Manual](../manual/model.md) (the full class-by-class and module-by-module reference).

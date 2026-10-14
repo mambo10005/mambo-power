@@ -122,6 +122,7 @@ nav:
       - 2. DC-OPF and N-1 screening: tutorials/02-dc-opf-and-n1.ipynb
       - 3. A nodal market: tutorials/03-nodal-market.ipynb
       - 4. Where next: tutorials/04-where-next.ipynb
+      - 5. Security and commitment: tutorials/05-security-and-commitment.ipynb
   - Manual:
       - Network model: manual/model.md
       - File formats: manual/formats.md
