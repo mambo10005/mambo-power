@@ -1068,6 +1068,47 @@ users author files, but every value then goes through the importer's scaling and
 is only approximately the identity; folding transformer charging into fixed shunts — see
 consequence 2.
 
+## ADR-023 — Spinning reserve as costless headroom columns, priced by the requirement row
+
+**Status:** accepted 2026-10-13.
+
+**Context.** ADR-017 listed reserve requirements as the next thing the commitment model lacked:
+a market that commits units for energy alone leaves the fleet with whatever headroom the energy
+optimum happens to have. Operators require a stated amount, and pay for it.
+
+**Decision.** `Period.reserve_mw` and `Generator.reserve_max_mw` on the model;
+`multiperiod_dc_opf(..., reserve_mw, reserve_max_mw)` on the builder; two more row families.
+
+1. **Reserve is headroom.** One costless column \(r_g[t]\) per unit per period, bounded by the
+   unit's cap, with \(\sum_g r_g[t] \ge R[t]\) (tier 15) and \(p_g[t] + r_g[t] \le p^{\max}_g
+   u_g[t]\) (tier 16; \(u = 1\) without commitment). Reserve is what the unit is *not*
+   generating, so an uncommitted unit holds none and a requirement the running fleet cannot
+   meet is what commits another.
+2. **Priced by its own dual.** The requirement row's dual is the reserve price: zero while
+   headroom is spare, otherwise the energy cost of freeing a MW. No reserve offer price: the
+   package carries none, and a costless column makes the price exactly the opportunity cost.
+3. **Settled outside the energy identity.** `total_reserve_payment = price × held` per period,
+   an uplift; LMPs, load payments, receipts and congestion rent are the energy market's as
+   before, so the settlement identity ADR-007's tests prove is untouched.
+4. **Opt-in by data.** No period stating a requirement means no column and no row: the LP is
+   byte-for-byte what it was.
+
+**Consequences.**
+
+1. **Three hand-costed answers.** Free reserve with spare headroom, $40/MW when only the cheap
+   unit may hold it (a MW of energy moves from $10 to $50), and a requirement that commits a
+   unit under ADR-017 — all in `tests/unit/test_market_reserve.py`.
+2. **One product, spinning only.** No distinction between regulation, spinning and
+   non-spinning reserve, no reserve from storage, no deliverability (zonal reserve) and no
+   reserve offer prices; each is a column, a row or a cost on the same block.
+3. **The file formats drop it.** `reserve_max_mw` has no column in pandapower, PyPSA or RAW
+   and is reported dropped; it travels through JSON and the CSV bundle.
+
+*Rejected:* a reserve fraction of load as an option — a per-period MW on `Period` is what
+operators state and what a scenario file can carry; a reserve offer price per unit — nothing
+in the model prices capacity, and the opportunity-cost price a costless column yields is the
+standard co-optimisation result.
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

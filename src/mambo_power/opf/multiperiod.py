@@ -119,6 +119,24 @@ stopped inside it is still off. A minimum of 1 is what the logic row already say
 row. An obligation from before the horizon (``Commitment.initial_state_periods``) is a fixed
 ``on`` column over the periods it covers, not a row.
 
+**Spinning reserve (ADR-023).** With ``reserve_mw`` (``(T,)``, the MW the fleet must hold in
+each period) one reserve column ``r_g[t]`` per generator per period is appended after every
+other column, bounded ``[0, reserve_max_mw[g]]`` (``inf`` where unlimited), costless, and two
+row families follow tier 14 (or tier 8 without commitment):
+
+===== ======================================== ==================================================
+tier  family                                    rows
+===== ======================================== ==================================================
+15    requirement, ``Σ_g r_g[t] >= reserve[t]`` ``T``
+16    headroom, ``p_g[t] + r_g[t] − p_max·u_g[t] <= 0`` ``T*n_gen`` (``u = 1`` without commitment)
+===== ======================================== ==================================================
+
+Reserve is held in a unit's unused capacity, so an uncommitted unit holds none, and a unit
+cannot be dispatched to its ceiling while holding any. The requirement row's dual
+(:attr:`MultiperiodDuals.reserve`) is the reserve price, nonnegative, nonzero when the fleet's
+headroom is short: the energy that has to move from a cheaper unit to a dearer one to free it.
+Storage holds no reserve here.
+
 A unit with ``p_min <= 0``, no no-load cost and no start-up or shut-down cost has nothing
 to commit — on at 0 MW and off are the same thing — so its binaries are fixed on and its
 events off, and it stays the continuous column it is in the LP; only the other units are
@@ -251,6 +269,9 @@ class MultiperiodDuals:
     cyclic: FloatArray
     """``(n_storage,)`` — dual of the end-of-horizon ``soc[T-1] == soc_initial`` equality row: the
     cost the cyclic condition itself imposes, separable from the SoC dynamics above it."""
+    reserve: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """``(T,)`` — dual of each period's reserve-requirement row (ADR-023), $/MW: the reserve
+    price, ``>= 0``. Length 0 without a ``reserve_mw`` argument."""
 
 
 @dataclass(frozen=True)
@@ -307,6 +328,9 @@ class MultiperiodSolution:
     no_load_cost: float = 0.0
     """``sum_t sum_g Commitment.no_load_cost_g · u_g[t]``, $, included in :attr:`objective_cost`;
     0.0 without a :class:`Commitment` block."""
+    reserve_mw: FloatArray = field(default_factory=lambda: np.zeros((0, 0)))
+    """``(T, n_gen)`` spinning reserve each unit holds per period (ADR-023); shape ``(0, 0)``
+    without a ``reserve_mw`` requirement."""
 
 
 def _sparse_rows(
@@ -338,13 +362,16 @@ def _sparse_rows(
     )
 
 
-def _checked_ramp(name: str, values: FloatArray | None, n_gen: int) -> FloatArray:
+def _checked_ramp(
+    name: str, values: FloatArray | None, n_gen: int, *, allow_zero: bool = False
+) -> FloatArray:
     """Validate one ramp array and normalise "unconstrained" to ``+inf``.
 
     ``None`` (no array at all), ``inf`` and ``nan`` all mean *unconstrained* — no row is built for
     that generator. Anything else must be **strictly** positive: ``0`` would freeze the generator
     at its first-period dispatch for the whole horizon, which is MATPOWER's unpopulated-column
-    default rather than a limit anybody declares (research §4.2, design table T1).
+    default rather than a limit anybody declares (research §4.2, design table T1). With
+    ``allow_zero`` (a reserve cap, ADR-023) ``0`` is a legitimate value: the unit holds none.
     """
     if values is None:
         return np.full(n_gen, np.inf)
@@ -353,6 +380,10 @@ def _checked_ramp(name: str, values: FloatArray | None, n_gen: int) -> FloatArra
         raise ValueError(f"{name} must have shape ({n_gen},), got {array.shape}")
     array = np.where(np.isnan(array), np.inf, array)
     finite = np.isfinite(array)
+    if allow_zero:
+        if finite.any() and (array[finite] < 0).any():
+            raise ValueError(f"{name} must be >= 0 (None/inf/nan for an uncapped generator)")
+        return array
     if finite.any() and (array[finite] <= 0).any():
         bad = int(np.flatnonzero(finite & (array <= 0))[0])
         raise ValueError(
@@ -391,6 +422,8 @@ def multiperiod_dc_opf(
     demand_bid_coeffs: Mapping[int, tuple[float, float, float]] | None = None,
     demand_pwl_bids: Mapping[int, Sequence[tuple[float, float]]] | None = None,
     commitment: Commitment | None = None,
+    reserve_mw: FloatArray | None = None,
+    reserve_max_mw: FloatArray | None = None,
 ) -> MultiperiodSolution:
     """Solve ``n_periods`` coupled DC-OPF periods as one LP/QP (module docstring).
 
@@ -417,6 +450,11 @@ def multiperiod_dc_opf(
     ``commitment`` (module docstring, "Unit commitment") turns the solve into a MIP over per-unit
     on/start-up/shut-down binaries, with the duals read from the LP left once those binaries are
     fixed at the optimum; ``None`` — every other caller — leaves the LP exactly as before.
+
+    ``reserve_mw`` (module docstring, "Spinning reserve") is the ``(T,)`` reserve requirement,
+    met from committed units' headroom and priced by its own row; ``reserve_max_mw`` caps each
+    unit's contribution (``(n_gen,)``; ``None``, ``nan`` and ``inf`` mean uncapped, 0 excludes
+    the unit). ``None`` builds no reserve column or row.
     """
     n_gen = len(arr.gen_ids)
     n_load = len(arr.load_ids)
@@ -484,6 +522,17 @@ def multiperiod_dc_opf(
                 "initial_state_periods", commitment.initial_state_periods, n_gen, 1
             )
         )
+
+    reserve: FloatArray | None = None
+    if reserve_mw is not None:
+        reserve = np.asarray(reserve_mw, dtype=np.float64)
+        if reserve.shape != (n_periods,):
+            raise ValueError(
+                f"reserve_mw must have shape ({n_periods},) (MW per period), got {reserve.shape}"
+            )
+        if np.any(reserve < 0) or not np.all(np.isfinite(reserve)):
+            raise ValueError("reserve_mw must be finite and >= 0")
+    reserve_cap = _checked_ramp("reserve_max_mw", reserve_max_mw, n_gen, allow_zero=True)
 
     # --- column layout (module docstring, "Column layout") -------------------------------------
     per_period_dispatch = n_gen + n_demand + 3 * n_storage
@@ -897,6 +946,37 @@ def multiperiod_dc_opf(
         # built here are small, so ask for the optimum.
         h.setOptionValue("mip_rel_gap", 1e-9)
 
+    # tiers 15-16 (module docstring, "Spinning reserve"): reserve columns after every other
+    # column, the requirement row per period and the headroom row per generator per period.
+    reserve_cols: list[ColArray] = []
+    n_reserve_rows = 0
+    if reserve is not None and n_gen:
+        base = h.getNumCol()
+        upper = np.where(np.isfinite(reserve_cap), reserve_cap, highspy.kHighsInf)
+        for t in range(n_periods):
+            reserve_cols.append(_cols(base, t * n_gen, n_gen))
+            h.addVars(n_gen, np.zeros(n_gen), upper)
+        requirement_rows = [[(int(c), 1.0) for c in reserve_cols[t]] for t in range(n_periods)]
+        headroom_rows = [
+            [(int(gen_cols[t][g]), 1.0), (int(reserve_cols[t][g]), 1.0)]
+            + ([(int(on_cols[t][g]), -float(p_max[g]))] if commitment is not None else [])
+            for t in range(n_periods)
+            for g in range(n_gen)
+        ]
+        headroom_upper = (
+            np.zeros(n_periods * n_gen)
+            if commitment is not None
+            else np.tile(np.asarray(p_max, dtype=np.float64), n_periods)
+        )
+        _add_rows(h, _sparse_rows(requirement_rows, reserve, np.full(n_periods, highspy.kHighsInf)))
+        _add_rows(
+            h,
+            _sparse_rows(
+                headroom_rows, np.full(n_periods * n_gen, -highspy.kHighsInf), headroom_upper
+            ),
+        )
+        n_reserve_rows = n_periods * (1 + n_gen)
+
     h.run()
     status = h.modelStatusToString(h.getModelStatus())
 
@@ -971,7 +1051,8 @@ def multiperiod_dc_opf(
         + n_storage  # tier 5 (cyclic), one per unit for the whole horizon
         + n_ramp_rows  # tier 6, empty at T == 1 or with nothing ramped; two families committed
         + n_periods * (n_epigraph + n_hypograph)  # tiers 7-8, one row per segment per period
-        + n_commit_rows  # tiers 9-12 (ADR-017)
+        + n_commit_rows  # tiers 9-14 (ADR-017, ADR-019)
+        + n_reserve_rows  # tiers 15-16 (ADR-023)
     )
     assert h.getNumRow() == expected_rows, (
         f"multiperiod_dc_opf built {h.getNumRow()} rows, but the row-order contract in this "
@@ -1007,7 +1088,19 @@ def multiperiod_dc_opf(
         storage_power_limit=row_dual[limit_base:cyclic_base].reshape(n_periods, n_storage),
         storage_soc_bound=_read(soc_cols, col_dual),
         cyclic=row_dual[cyclic_base:ramp_base].copy(),
+        reserve=(
+            # a >= row's dual is nonnegative at a minimum; clip HiGHS's -0.0 / -1e-13 to 0
+            np.maximum(
+                row_dual[
+                    expected_rows - n_reserve_rows : expected_rows - n_reserve_rows + n_periods
+                ],
+                0.0,
+            )
+            if n_reserve_rows
+            else np.zeros(0)
+        ),
     )
+    reserve_held = _read(reserve_cols, col_value) if reserve_cols else np.zeros((0, 0))
 
     pwl_gen_cost = float(
         sum(col_value[cost_col_of[t][i]] for t in range(n_periods) for i in pwl_gen_idxs)
@@ -1037,4 +1130,5 @@ def multiperiod_dc_opf(
         stopped=stopped,
         commitment_cost=commitment_cost,
         no_load_cost=no_load_cost,
+        reserve_mw=reserve_held,
     )

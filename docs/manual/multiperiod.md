@@ -24,7 +24,7 @@ period; `market.nodal.load_bid_coeffs` supplies the load bids, shared rather tha
 
 ```text
 Scenario(network: Network, periods: list[Period] | None = None)
-Period(load_p_mw: dict[str, float])
+Period(load_p_mw: dict[str, float], reserve_mw: float | None = None)
 ```
 
 `Period.load_p_mw` is an id-keyed **override** of each `Load.p_mw` for that period, not a scale
@@ -105,6 +105,7 @@ re-derived for `T` periods rather than inherited from `dc_opf`:
 | 6 | ramp coupling, per ramped generator per adjacent pair | after tier 5, `(t-1)*n_ramped + j` |
 | 7-8 | PWL epigraph / hypograph rows | last — an encoding detail, never part of the dual shape |
 | 9-14 | unit-commitment rows, only with `unit_commitment` | after tier 8 — see [Unit commitment](#unit-commitment) and [Minimum up and down times](#minimum-up-and-down-times) |
+| 15-16 | reserve rows, only where a period states a `reserve_mw` | last — see [Spinning reserve](#spinning-reserve) |
 
 ## Ramp coupling
 
@@ -451,6 +452,37 @@ start-up to $8000 and the answer flips to the peaker alone at $9000, with the LM
 prices here are the restricted LP's: `baseload` is marginal at $10 in every period.
 
 Runnable script: [`15_unit_commitment.py`](../examples/index.md#15-unit-commitment).
+
+## Spinning reserve
+
+A period may require the fleet to **hold** capacity as well as dispatch it
+([ADR-023](../design/decisions.md)): `Period.reserve_mw` is the spinning reserve the committed
+units must have in unused capacity in that period, and `Generator.reserve_max_mw` caps what one
+unit may hold (`None` = its full headroom, `0` = none — a unit that cannot respond in time).
+Where any period states a requirement the builder adds one costless reserve column \(r_g[t]\) per
+unit per period and two row families after every other:
+
+| Tier | Family | Rows |
+| --- | --- | --- |
+| 15 | requirement, \(\sum_g r_g[t] \ge R[t]\) | `T` |
+| 16 | headroom, \(p_g[t] + r_g[t] \le p^{\max}_g u_g[t]\) (\(u = 1\) without commitment) | `T*n_gen` |
+
+Reserve lives in unused capacity, so an uncommitted unit holds none, a unit at its ceiling holds
+none, and under [unit commitment](#unit-commitment) a requirement the running fleet cannot meet
+is what commits an extra unit. The requirement row's dual is the **reserve price**: zero while
+the fleet has headroom to spare, and otherwise the energy cost of freeing one more MW — backing a
+cheap unit off so a dear one covers its energy. The hand case in
+`tests/unit/test_market_reserve.py`: a $10 unit (0–200 MW) and a $50 unit (0–100 MW) serving
+150 MW; 60 MW of reserve costs nothing while either may hold it, and $40/MW once only the cheap
+unit may, since every MW it holds is a MW the dear unit must generate.
+
+The result carries each unit's `reserve_mw` per period, each period's `reserve_requirement_mw`,
+`reserve_price` and `total_reserve_payment` (price × reserve held), and the horizon
+`total_reserve_payment`. Reserve payments are an uplift settled **outside** the energy identity
+below: the LMPs, load payments, generator receipts and congestion rent are the energy
+market's, exactly as without a requirement. The array-level builder takes `reserve_mw`
+(`(T,)`) and `reserve_max_mw` (`(n_gen,)`) and returns `MultiperiodSolution.reserve_mw` and
+`MultiperiodDuals.reserve`. Storage holds no reserve.
 
 ## Degeneracy: one period is the nodal clearing
 

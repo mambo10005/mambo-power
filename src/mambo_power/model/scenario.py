@@ -42,6 +42,13 @@ class Period(BaseModel):
         description="Per-load active-power override for this period, MW, keyed by Load id. The "
         "same range as Load.p_mw, negatives included; must be finite."
     )
+    reserve_mw: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Spinning reserve the committed fleet must hold in this period, MW "
+        "(ADR-023), met from generators' unused capacity and priced by its own dual; None = "
+        "no requirement.",
+    )
 
 
 class Scenario(BaseModel):

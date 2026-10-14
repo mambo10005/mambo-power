@@ -31,7 +31,7 @@ python examples/02_ac_power_flow.py
 | [`12_agent_market.py`](#12-strategic-bidding) | `market.solve_agents`: generators offering through a `Strategy`, price-takers reproducing `solve_nodal` bit-exactly, a pivotal markup stopping at demand's own bid, the duopoly, `termination_reason`, `StrategyConfig` crossing `jobs` as JSON | [Agent-based bidding](../manual/agents.md) |
 | [`13_interop.py`](#13-interop) | pandapower JSON export solved by `pp.rundcpp`, pandapower's case14 imported losslessly, PyPSA export optimised by PyPSA against `solve_dc_opf`, PSS/E RAW import with `RAW_NO_COSTS`, a bit-exact CSV bundle round trip, and one deliberately lossy conversion with its `ExportReport`; additionally needs `pip install pandapower pypsa` | [File formats](../manual/formats.md) |
 | [`14_scopf.py`](#14-security-constrained-opf) | `opf.solve_scopf`: the cheapest dispatch no single outage can overload, what it costs, which contingencies bind, the confirming `contingency.n1`; corrective redispatch with emergency ratings | [Security-constrained OPF](../manual/scopf.md) |
-| [`15_unit_commitment.py`](#15-unit-commitment) | `market.solve_multiperiod` with `unit_commitment=True`: start-up costs, minimum outputs, minimum down times, when a cheap unit is worth starting, prices with the commitment fixed | [Multiperiod market › Unit commitment](../manual/multiperiod.md#unit-commitment) |
+| [`15_unit_commitment.py`](#15-unit-commitment) | `market.solve_multiperiod` with `unit_commitment=True`: start-up costs, minimum outputs, minimum down times, a spinning-reserve requirement, when a cheap unit is worth starting, prices with the commitment fixed | [Multiperiod market › Unit commitment](../manual/multiperiod.md#unit-commitment) |
 | [`16_ac_opf.py`](#16-ac-optimal-power-flow) | `opf.solve_ac_opf` beside `solve_dc_opf`: losses, reactive dispatch, voltage bands, AC LMPs that vary with no limit binding | [AC-OPF](../manual/ac-opf.md) |
 
 ## 1. Load and validate
@@ -211,7 +211,9 @@ the answer depends on the start-up cost — at $5000 the unit is started and kep
 $8000 it stays off and the peaker serves everything ($9000) — and the LMPs are the restricted
 LP's, which do not recover the start-up. A 3-period minimum down time on a unit that stopped one
 period before the horizon holds it off for two periods and moves a start that would pay at once
-to period 2 ([ADR-019](../design/decisions.md)).
+to period 2 ([ADR-019](../design/decisions.md)). A 60 MW spinning-reserve requirement the
+peaker cannot hold alone commits the baseload unit even at a start-up that energy alone would
+not pay for ([ADR-023](../design/decisions.md)).
 
 ``` { .python }
 --8<-- "examples/15_unit_commitment.py"

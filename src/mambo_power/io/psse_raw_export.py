@@ -241,6 +241,7 @@ class _Writer:
                     "min_up_periods",
                     "min_down_periods",
                     "initial_state_periods",
+                    "reserve_max_mw",
                 )
                 if getattr(gen, name) is not None
             ]

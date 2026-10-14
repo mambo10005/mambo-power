@@ -16,6 +16,9 @@ What this shows:
 * Minimum up and down times (ADR-019): ``Generator.min_down_periods`` with
   ``initial_state_periods`` holds a unit that has just stopped off into the horizon, so the
   cheapest start is the first one the rules allow, not period 0.
+* Spinning reserve (ADR-023): ``Period.reserve_mw`` is capacity the committed fleet must hold
+  unused; a requirement the running units cannot cover is what commits another, and the
+  requirement row's dual is the reserve price.
 
 Runs from any directory, with no repository clone: ``python 15_unit_commitment.py``.
 """
@@ -106,3 +109,24 @@ for label, result in (("no minimum", free), ("min down 3, off for 1", held)):
     on = "".join("1" if x else "0" for x in c.on)
     print(f"\n{label:22s} baseload on={on}  horizon cost {result.objective_cost:.0f} $")
 print("(the start moves to the first period the rule allows; the peak is met by the peaker)")
+
+# --- 4. Spinning reserve: a requirement the running fleet cannot hold commits a unit --------
+# the peaker may hold at most 20 MW of reserve; 60 MW of reserve in every period needs baseload
+reserved = scenario(5000.0)
+for gen in reserved.network.generators:
+    if gen.id == "peaker":
+        gen.reserve_max_mw = 20.0
+for period in reserved.periods or []:
+    period.reserve_mw = 60.0
+for label, sc in (("energy only", scenario(8000.0)), ("60 MW reserve", reserved)):
+    if label == "60 MW reserve":
+        for gen in sc.network.generators:
+            if gen.id == "baseload":
+                gen.cost = PolynomialCost(coefficients=[10.0, 0.0], startup=8000.0)
+    result = solve_multiperiod(sc, MarketMultiperiodOptions(unit_commitment=True))
+    c = next(c for c in result.commitment if c.id == "baseload")
+    on = "".join("1" if x else "0" for x in c.on)
+    prices = [f"{p.reserve_price:.0f}" for p in result.periods]
+    print(f"\n{label:14s} baseload on={on}  horizon cost {result.objective_cost:.0f} $", end="")
+    print(f"  reserve price by period {prices} $/MW")
+print("(at $8000 the start did not pay for itself on energy; the reserve requirement makes it)")

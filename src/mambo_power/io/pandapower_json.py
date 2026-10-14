@@ -920,7 +920,12 @@ def _export_generators(
             dropped(gen.id, "ramp_up_mw", gen.ramp_up_mw)
         if gen.ramp_down_mw is not None:
             dropped(gen.id, "ramp_down_mw", gen.ramp_down_mw)
-        for name in ("min_up_periods", "min_down_periods", "initial_state_periods"):
+        for name in (
+            "min_up_periods",
+            "min_down_periods",
+            "initial_state_periods",
+            "reserve_max_mw",
+        ):
             if getattr(gen, name) is not None:
                 dropped(gen.id, name, getattr(gen, name))
         if gen is slack_gen:

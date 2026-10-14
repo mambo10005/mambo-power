@@ -49,6 +49,12 @@ and down times (ADR-019) come off ``Generator.min_up_periods`` / ``min_down_peri
 obligation a unit brings into the horizon off ``initial_state_periods``: a unit that states no
 history is taken to have been in its state long enough that none carries in.
 
+**Spinning reserve (ADR-023).** A ``Period.reserve_mw`` is handed to the builder as that
+period's requirement (a period that states none requires 0 once any period does), each unit's
+``Generator.reserve_max_mw`` as its cap; the result carries each unit's ``reserve_mw``, each
+period's ``reserve_price`` (the requirement row's dual) and ``total_reserve_payment``, which is
+settled outside the energy identity below.
+
 **Settlement.** Payments, receipts and congestion rent are computed per period, directly from
 that period's LMPs and dispatch. Storage is settled as the third participant it physically is --
 it pays for what it stores and is paid for what it returns -- and
@@ -221,6 +227,26 @@ def _commitment_rows(
     return rows
 
 
+def _reserve(
+    net: Network, arr: NetworkArrays, periods: list[Period] | None
+) -> tuple[FloatArray | None, FloatArray | None]:
+    """``(reserve_mw, reserve_max_mw)`` for the builder (ADR-023): the per-period requirement
+    (a period that states none requires 0) and each unit's cap in ``arr`` order (``None`` →
+    uncapped). ``(None, None)`` when no period states a requirement, so the LP is untouched."""
+    if periods is None or all(p.reserve_mw is None for p in periods):
+        return None, None
+    gens_by_id = {g.id: g for g in net.generators}
+    requirement = np.array([0.0 if p.reserve_mw is None else p.reserve_mw for p in periods])
+    caps = np.array(
+        [
+            np.inf if gens_by_id[g].reserve_max_mw is None else gens_by_id[g].reserve_max_mw
+            for g in arr.gen_ids
+        ],
+        dtype=np.float64,
+    )
+    return requirement, caps
+
+
 def _period_load_mw(net: Network, arr: NetworkArrays, periods: list[Period]) -> FloatArray:
     """``(T, n_load)`` MW in ``NetworkArrays.load_ids`` order, resolving each period's overrides.
 
@@ -266,6 +292,7 @@ def _period_rows(
     *,
     fixed_load_mw: FloatArray | None,
     elastic_pos: dict[int, int],
+    reserve_requirement: float = 0.0,
 ) -> MarketPeriodResult:
     """Assemble period ``t``'s rows and settlement from the horizon solution."""
     duals = solution.duals
@@ -293,6 +320,7 @@ def _period_rows(
             # no row reaching into it and reports 0.0 rather than borrowing another period's.
             ramp_dual=float(duals.ramp[t - 1, i]) if t > 0 else 0.0,
             committed=bool(solution.committed[t, i]) if solution.committed.size else True,
+            reserve_mw=float(solution.reserve_mw[t, i]) if solution.reserve_mw.size else 0.0,
         )
         for i, gen_id in enumerate(arr.gen_ids)
     ]
@@ -353,6 +381,8 @@ def _period_rows(
     congestion_rent = (total_load_payment + charge_payment) - (
         total_generator_receipts + discharge_revenue
     )
+    reserve_price = float(duals.reserve[t]) if duals.reserve.size else 0.0
+    reserve_held = float(sum(row.reserve_mw for row in generators))
 
     return MarketPeriodResult(
         period=t,
@@ -365,6 +395,9 @@ def _period_rows(
         total_storage_charge_payment=charge_payment,
         total_storage_discharge_revenue=discharge_revenue,
         congestion_rent=congestion_rent,
+        reserve_requirement_mw=reserve_requirement,
+        reserve_price=reserve_price,
+        total_reserve_payment=reserve_price * reserve_held,
     )
 
 
@@ -406,6 +439,8 @@ def solve_multiperiod(
             net, arr, cost_coeffs, pwl_costs, opts.quadratic_segments
         )
 
+    reserve_mw, reserve_max_mw = _reserve(net, arr, periods)
+
     solution = multiperiod_dc_opf(
         arr,
         cost_coeffs,
@@ -417,6 +452,8 @@ def solve_multiperiod(
         demand_bid_coeffs=demand_bid_coeffs or None,
         demand_pwl_bids=demand_pwl_bids or None,
         commitment=commitment,
+        reserve_mw=reserve_mw,
+        reserve_max_mw=reserve_max_mw,
     )
     elapsed_s = time.perf_counter() - clock
     provenance = ResultProvenance(
@@ -441,7 +478,15 @@ def solve_multiperiod(
     elastic_idxs = sorted(set(demand_bid_coeffs) | set(demand_pwl_bids))
     elastic_pos = {idx: j for j, idx in enumerate(elastic_idxs)}
     period_results = [
-        _period_rows(net, arr, solution, t, fixed_load_mw=fixed_load_mw, elastic_pos=elastic_pos)
+        _period_rows(
+            net,
+            arr,
+            solution,
+            t,
+            fixed_load_mw=fixed_load_mw,
+            elastic_pos=elastic_pos,
+            reserve_requirement=0.0 if reserve_mw is None else float(reserve_mw[t]),
+        )
         for t in range(n_periods)
     ]
 
@@ -460,6 +505,7 @@ def solve_multiperiod(
         total_storage_charge_payment=horizon("total_storage_charge_payment"),
         total_storage_discharge_revenue=horizon("total_storage_discharge_revenue"),
         congestion_rent=horizon("congestion_rent"),
+        total_reserve_payment=horizon("total_reserve_payment"),
         commitment=_commitment_rows(arr, solution, commitment) if commitment is not None else [],
         commitment_cost=solution.commitment_cost,
         no_load_cost=solution.no_load_cost,

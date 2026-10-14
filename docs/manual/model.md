@@ -147,6 +147,7 @@ flow needs no schema bump; no power-flow solver reads it.
 | `ramp_down_mw` | `float \| None` | MW | `None` | Max decrease from the previous period; same rules. |
 | `min_up_periods` | `int \| None` | periods | `None` | Minimum consecutive periods on once started; `None` or 1 = none. Read by [unit commitment](multiperiod.md#minimum-up-and-down-times). |
 | `min_down_periods` | `int \| None` | periods | `None` | Minimum consecutive periods off once stopped; same rules. |
+| `reserve_max_mw` | `float \| None` | MW | `None` | Most spinning reserve the unit can hold in a period; `None` = its full headroom, 0 = none. Read by [reserve co-optimisation](multiperiod.md#spinning-reserve). |
 | `initial_state_periods` | `int \| None` | periods | `None` | How long the unit has already been in its pre-horizon state (on if `p_mw > 0`), counting the period just before the horizon. `None` = long enough that no up/down obligation carries into the horizon. |
 
 Several generators may sit on one bus. Their powers and limits are summed per bus in the
@@ -228,13 +229,15 @@ network to clear, plus the horizon to clear it over.
 | `network` | `Network` | required | The network to clear; the scenario is self-contained. `Network`'s own validator runs while the `Scenario` is being constructed. |
 | `periods` | `list[Period] \| None` | `None` | `None` = single-period, `market.nodal` semantics. If given, must be non-empty. |
 
-`Period` carries one field, `load_p_mw: dict[str, float]` — an id-keyed **override** of each
+`Period` carries `load_p_mw: dict[str, float]` — an id-keyed **override** of each
 `Load.p_mw` for that period, not a scale factor. A load absent from the dict keeps its own
 `p_mw`. Values carry exactly `Load.p_mw`'s own range, **negatives included** (`case300` ships
 eight negative loads, and an override may not be narrower than the field it overrides); only
 non-finite values are rejected. Every key must resolve to a `Load` id in the scenario's network,
 checked by `Scenario` rather than by `Period`, which has no network to check against. See
-[Multiperiod market](multiperiod.md#the-horizon-scenarioperiods-and-period).
+[Multiperiod market](multiperiod.md#the-horizon-scenarioperiods-and-period). Its other field,
+`reserve_mw: float | None`, is the spinning reserve the fleet must hold in that period
+([ADR-023](../design/decisions.md)); see [Spinning reserve](multiperiod.md#spinning-reserve).
 
 ## `Zone`
 

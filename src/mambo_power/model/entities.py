@@ -209,6 +209,13 @@ class Generator(_Entity):
         description="Minimum number of consecutive periods the unit stays off once stopped "
         "(unit commitment, ADR-019); None or 1 = none.",
     )
+    reserve_max_mw: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Most spinning reserve the unit can hold in a period, MW (ADR-023): None = "
+        "its full headroom, 0 = none. Read by market.multiperiod where a Period states a "
+        "reserve_mw.",
+    )
     initial_state_periods: int | None = Field(
         default=None,
         ge=1,

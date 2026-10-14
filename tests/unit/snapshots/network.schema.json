@@ -374,6 +374,20 @@
           "description": "Minimum number of consecutive periods the unit stays off once stopped (unit commitment, ADR-019); None or 1 = none.",
           "title": "Min Down Periods"
         },
+        "reserve_max_mw": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Most spinning reserve the unit can hold in a period, MW (ADR-023): None = its full headroom, 0 = none. Read by market.multiperiod where a Period states a reserve_mw.",
+          "title": "Reserve Max Mw"
+        },
         "initial_state_periods": {
           "anyOf": [
             {

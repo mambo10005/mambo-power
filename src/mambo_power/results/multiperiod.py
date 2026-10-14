@@ -61,6 +61,12 @@ class GenPeriodDispatchResult(GenDispatchResult):
         description="Whether the unit is committed (on) in this period; always True without "
         "unit commitment (ADR-017).",
     )
+    reserve_mw: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Spinning reserve the unit holds in this period, MW (ADR-023); 0.0 "
+        "without a reserve requirement.",
+    )
 
 
 class GenCommitmentResult(BaseModel):
@@ -162,6 +168,21 @@ class MarketPeriodResult(BaseModel):
         description="Sum over every storage unit of LMP(bus_s)*discharge_mw, $/h -- what the "
         "market pays storage for the energy it returns. 0.0 with no storage.",
     )
+    reserve_requirement_mw: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Spinning reserve required in this period, MW (ADR-023); 0.0 when none.",
+    )
+    reserve_price: float = Field(
+        default=0.0,
+        description="Dual of the reserve-requirement row, $/MW: what one more MW of reserve "
+        "would cost, nonzero only when the fleet's headroom is short (ADR-023).",
+    )
+    total_reserve_payment: float = Field(
+        default=0.0,
+        description="reserve_price times the reserve held, $/h: what generators are paid for "
+        "reserve in this period, outside the energy settlement and the congestion rent.",
+    )
     congestion_rent: float = Field(
         default=0.0,
         description="(load payment + storage charge payment) - (generator receipts + storage "
@@ -218,6 +239,9 @@ class MarketMultiperiodResult(BaseModel):
     )
     congestion_rent: float = Field(
         default=0.0, description="Horizon sum of the per-period congestion rents, $."
+    )
+    total_reserve_payment: float = Field(
+        default=0.0, description="Horizon sum of the per-period reserve payments, $ (ADR-023)."
     )
     commitment: list[GenCommitmentResult] = Field(
         default_factory=list,
