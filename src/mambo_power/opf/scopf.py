@@ -23,6 +23,16 @@ so each iteration either terminates or adds at least one new row from a finite s
 converges, in practice in a handful of iterations. The final dispatch is then confirmed the
 honest way: :func:`mambo_power.opf.solve_scopf` writes it into a copy of the network and runs
 the real :func:`mambo_power.contingency.n1`, re-solving every flagged outage.
+
+**Corrective redispatch (ADR-021).** With ``ScopfOptions.corrective`` each outage the screen
+flags against the *normal* rating also gets a corrected dispatch in the same LP
+(:class:`~mambo_power.opf.dc_opf.CorrectiveRows`): the immediate flow is held to the emergency
+rating and the corrected one, reachable within each unit's ramp, to the normal rating. HiGHS's
+QP solver does not survive the corrective column blocks ("Solve error", the failure ADR-017 met
+on the commitment MIP), so with ``corrective`` a quadratic cost is linearised into
+``quadratic_segments`` convex chords and the problem solved as an LP; the reported cost is the
+chord cost, an over-estimate of the quadratic one by the chord error (0.1 % on case14 at 16
+chords). The preventive path keeps the exact QP.
 """
 
 from __future__ import annotations
@@ -87,6 +97,13 @@ class ScopfOptions(BaseModel):
         description="Allow post-contingency redispatch (ADR-021): the immediate post-outage "
         "flow is held to the emergency rating and a corrected dispatch, each unit moved by at "
         "most its ramp_up_mw / ramp_down_mw, to the normal rating.",
+    )
+    quadratic_segments: int = Field(
+        default=16,
+        ge=1,
+        description="With corrective, the number of equal-width chords a quadratic generator "
+        "cost is linearised into between p_min and p_max: HiGHS's QP solver does not survive "
+        "the corrective column blocks, so the corrective problem is solved as an LP.",
     )
 
 
@@ -281,6 +298,10 @@ def scopf_dc(
     ptdf_matrix = compute_ptdf(arr)
     lodf_matrix = lodf(arr, ptdf_matrix)
     n_gen = len(arr.gen_ids)
+    if options.corrective:
+        cost_coeffs, pwl_costs = _linearised(
+            arr, cost_coeffs, pwl_costs, options.quadratic_segments
+        )
     normal_rating_mw = arr.rating_pu * arr.base_mva
     ramp_up = _corrective_ramp("ramp_up_mw", ramp_up_mw, n_gen)
     ramp_down = _corrective_ramp("ramp_down_mw", ramp_down_mw, n_gen)
@@ -406,6 +427,35 @@ def scopf_dc(
             corrective = corrective_rows(
                 arr, ptdf_matrix, lodf_matrix, outages, corrected, ramp_up, ramp_down
             )
+
+
+def _linearised(
+    arr: NetworkArrays,
+    cost_coeffs: FloatArray,
+    pwl_costs: Mapping[int, Sequence[tuple[float, float]]] | None,
+    segments: int,
+) -> tuple[FloatArray, dict[int, list[tuple[float, float]]] | None]:
+    """``cost_coeffs``/``pwl_costs`` with every quadratic cost replaced by *segments* equal-width
+    convex chords of ``c2·p² + c1·p`` over ``[p_min, p_max]`` (the constant ``c0`` stays in the
+    coefficients): the corrective problem is solved as an LP (module docstring, ADR-021). The
+    inputs are not modified; a network with no quadratic cost comes back as it went in."""
+    coeffs = np.array(cost_coeffs, dtype=np.float64, copy=True)
+    pwl: dict[int, list[tuple[float, float]]] = (
+        {} if pwl_costs is None else {i: list(pts) for i, pts in pwl_costs.items()}
+    )
+    if not np.any(coeffs[:, 0] != 0.0):
+        return cost_coeffs, pwl or None
+    p_min = arr.gen_p_min_pu * arr.base_mva
+    p_max = arr.gen_p_max_pu * arr.base_mva
+    for i in range(coeffs.shape[0]):
+        c2, c1 = float(coeffs[i, 0]), float(coeffs[i, 1])
+        if c2 == 0.0:
+            continue
+        lo, hi = float(p_min[i]), float(p_max[i])
+        grid = np.linspace(lo, hi, segments + 1) if hi > lo else np.array([lo, lo + 1.0])
+        pwl[i] = [(float(p), float(c2 * p * p + c1 * p)) for p in grid]
+        coeffs[i, :2] = 0.0
+    return coeffs, pwl
 
 
 def _corrective_ramp(name: str, values: FloatArray | None, n_gen: int) -> FloatArray:

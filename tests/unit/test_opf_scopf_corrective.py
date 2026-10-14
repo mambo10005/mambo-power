@@ -163,7 +163,10 @@ def test_case14_rated_corrective_sits_between_the_two_preventive_answers_and_is_
                 assert r.p_mw == pytest.approx(0.0, abs=1e-9)  # the lost unit, ramp or not
             else:
                 assert abs(r.delta_mw) <= 20.0 + 1e-6
-    assert solve_dc_opf(net).objective_cost == pytest.approx(corrective.base_objective_cost)
+    # the corrective problem is an LP over chords of the quadratic costs (module docstring):
+    # its base cost over-estimates the QP's by the chord error, under 0.1 % at 16 chords
+    quadratic = solve_dc_opf(net).objective_cost
+    assert quadratic < corrective.base_objective_cost < 1.001 * quadratic
 
 
 def test_builder_without_a_corrective_block_is_unchanged_and_rejects_bad_ramps() -> None:

@@ -1014,7 +1014,11 @@ dispatch to the same LP.
 3. **The ramp field does double duty.** `ramp_up_mw` / `ramp_down_mw` are the per-period ramps
    of the multiperiod market and the corrective ramps here; a dedicated corrective ramp is a
    field away if a caller needs the two to differ.
-4. **Not modelled:** a cost on the correction, load shedding as a corrective action, N-2.
+4. **An LP, like the commitment.** HiGHS's QP solver reports "Solve error" on the corrective
+   problem of case14_rated (it survives the preventive one), so under `corrective` a quadratic
+   cost is linearised into `quadratic_segments` chords (default 16, 0.1 % chord error on
+   case14) — ADR-017's answer to the same failure. The preventive path keeps the exact QP.
+5. **Not modelled:** a cost on the correction, load shedding as a corrective action, N-2.
 
 *Rejected:* corrective rows on the base columns with a relaxed rating (a "soft preventive"
 formulation) — it answers a different question and cannot express a lost unit's replacement; a

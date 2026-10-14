@@ -273,6 +273,7 @@ def test_generator_outages_off_secures_branches_only() -> None:
         "max_iterations": 25,
         "ac_check": False,
         "corrective": False,
+        "quadratic_segments": 16,
     }
 
 

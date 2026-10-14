@@ -114,6 +114,13 @@ preventive at the emergency rating alone is the cheapest, and promises nothing a
 under the normal rating; corrective sits between them. Without an emergency rating the corrective
 answer *is* the preventive one, because the immediate flow already has to fit the normal rating.
 
+HiGHS's QP solver does not survive the corrective column blocks (the "Solve error" [ADR-017](../design/decisions.md)
+met on the commitment MIP), so with `corrective` a quadratic cost is linearised into
+`ScopfOptions.quadratic_segments` (default 16) equal-width convex chords between `p_min_mw` and
+`p_max_mw` and the problem is solved as an LP; the reported costs are chord costs, an over-estimate
+of the quadratic ones by the chord error (under 0.1 % on case14 at 16 chords). The preventive path
+keeps the exact QP.
+
 The prices follow: a corrected balance row's dual joins the energy term (a marginal MW of load
 has to be served after each corrected contingency too) and a binding corrected flow row's dual
 the congestion term, so an LMP can carry the cost of a corrective ramp that binds —
