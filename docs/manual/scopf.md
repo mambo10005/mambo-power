@@ -144,6 +144,17 @@ leaves a load with a single path rated below it, and the result says `Infeasible
 emergency rating the N-2-secure dispatch costs $8457/h against $8314/h for N-1 alone and $7643/h
 unsecured, found in two solves with 224 rows, 210 of them pair rows; four pair rows bind.
 
+## The oracle
+
+Constraint generation is checked against the whole problem written out: `tests/unit/
+test_scopf_vs_dense_lp.py` assembles every single outage, every corrected dispatch block and
+every non-islanding branch pair as one dense `scipy.optimize.linprog` LP from the PTDF and LODF
+matrices alone, and the four modes above — preventive at the normal and at the emergency rating,
+corrective, N-2 — land on the dense LP's objective to \(10^{-7}\) and its dispatch to
+\(10^{-4}\) MW on case14_rated with linear costs (the chord linearisation is not in play), and
+agree that N-2 at the normal rating is infeasible. The lazily generated rows are a few dozen of
+the dense LP's thousands.
+
 ## The result
 
 `ScopfDcResult` carries the DC-OPF rows (`generators`, `buses`, `branches` — base-case flows at
