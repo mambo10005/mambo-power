@@ -373,6 +373,16 @@ On the example scenario below, give `baseload` a 2-period minimum up time and it
 run for the peak alone; give it a 3-period minimum down time with `initial_state_periods=1`
 and it is held off for the first two periods whatever its start-up costs.
 
+### Parity
+
+`tests/parity/test_market_unit_commitment_vs_pypsa.py` runs the hand cases of the unit tier —
+a start-up that pays and one that does not, a minimum up time holding a started unit on, minimum
+down and up times carried in from before the horizon — against PyPSA's committable generators
+(`start_up_cost`, `min_up_time` / `min_down_time`, `up_time_before` / `down_time_before`,
+`stand_by_cost` where the installed PyPSA has it) and checks that the two land on the same
+objective, the same schedule and the same dispatch. The two formulations share nothing but the
+problem.
+
 ### Quadratic costs are linearised
 
 HiGHS solves MILPs, not MIQPs. A unit whose cost has a nonzero `c2` — every bundled MATPOWER case
