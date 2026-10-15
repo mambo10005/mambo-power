@@ -118,7 +118,7 @@ def test_solve_ac_opf_converges_optimal(case: Case) -> None:
 def test_the_fixture_has_an_interior_and_a_pinned_load(case: Case) -> None:
     elastic = {ld.id: ld for ld in case.ours.loads if ld.elastic}
     assert set(elastic) == set(BIDS)
-    full = {ld.id: -float(case.pp.sgen.at[idx, "min_p_mw"]) for ld, idx in case.sgen_idx.items()}
+    full = {i: -float(case.pp.sgen.at[idx, "min_p_mw"]) for i, idx in case.sgen_idx.items()}
     assert any(elastic[i].p_mw < full[i] - 1e-3 for i in BIDS)
     assert any(abs(elastic[i].p_mw - full[i]) < 1e-6 for i in BIDS)
 
