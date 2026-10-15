@@ -349,6 +349,10 @@ def test_per_load_bounds_are_zero_to_own_demand(marr: NetworkArrays) -> None:
 def test_per_load_sums_agree_with_aggregate(marr: NetworkArrays) -> None:
     summed = np.bincount(marr.load_bus, weights=marr.load_p_max_pu, minlength=marr.n_bus)
     np.testing.assert_allclose(summed, marr.p_load_pu, rtol=0, atol=1e-15)
+    # the per-load reactive demand (ADR-030) sums to the aggregate the same way
+    summed_q = np.bincount(marr.load_bus, weights=marr.load_q_pu, minlength=marr.n_bus)
+    np.testing.assert_allclose(summed_q, marr.q_load_pu, rtol=0, atol=1e-15)
+    assert marr.load_q_pu.shape == marr.load_p_max_pu.shape
 
 
 def multi_storage_network() -> Network:

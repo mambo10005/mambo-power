@@ -192,7 +192,7 @@ MATPOWER gencost MODEL 1: piecewise-linear breakpoints.
 | `p_mw` | `float` | MW | required | Active demand (positive consumes). |
 | `q_mvar` | `float` | MVAr | required | Reactive demand. |
 | `in_service` | `bool` | — | `True` | |
-| `bid` | `PolynomialBid \| PiecewiseBid \| None` | — | `None` | Elastic-demand bid covering this load's entire `p_mw`; read by the [market clearings](market.md#the-scenario), not by `opf.solve_dc_opf`. |
+| `bid` | `PolynomialBid \| PiecewiseBid \| None` | — | `None` | Elastic-demand bid covering this load's entire `p_mw`; read by the [market clearings](market.md#the-scenario) and by [`opf.solve_ac_opf`](ac-opf.md#elastic-demand) with `elastic_demand=True`, not by `opf.solve_dc_opf`. |
 
 ## `Shunt`
 

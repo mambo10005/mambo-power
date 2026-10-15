@@ -33,7 +33,14 @@ polynomial or convex piecewise-linear costs the DC-OPF takes — subject to
   angle-difference limit (`Branch.angle_min_deg` / `angle_max_deg`, MATPOWER's `ANGMIN` /
   `ANGMAX`; [ADR-029](../design/decisions.md)); a branch without one has no row. The angle
   difference is linear in \(V_a\), so these rows are exact in every LP step, carried with the
-  same elastic slacks as the flow limits.
+  same elastic slacks as the flow limits;
+- with `OpfAcOptions(elastic_demand=True)` ([ADR-030](../design/decisions.md)), every load with
+  a `bid` is served at \(P_d \in [0, p_\text{mw}]\) at its own power factor
+  (\(Q_d = P_d \cdot q_\text{mvar} / p_\text{mw}\)), and its concave bid value leaves the
+  objective: minimise \(\sum_g c_g(P_g) - \sum_d \text{value}_d(P_d)\). \(-\text{value}_d\) is
+  convex, so it is carried exactly like a quadratic cost — as chords through the current
+  \(P_d\) — or, for a piecewise-linear bid, as its own segments. A load without a bid, or any
+  load when the option is off (the default, like `solve_dc_opf`), is fixed.
 
 ## How it is solved: trust-region sequential LP
 
@@ -117,8 +124,11 @@ table above and left out of the pandapower comparison.
 `OpfAcResult` carries `generators` (`p_mw`, `q_mvar`, the two bound duals), `buses` (`vm_pu`,
 `va_deg`, `lmp_p`, `lmp_q`, the voltage-band dual), `branches` (`p`/`q` at both ends,
 `s_from_mva`/`s_to_mva`, `loading_percent` on a rated branch, the two limit duals, `angle_deg`
-— the angle difference \(V_a^\text{from} - V_a^\text{to}\) — and `angle_dual`), plus
-`objective_cost`, `losses_mw` and `iterations`. `lmp_p` is the AC LMP: the marginal cost of
+— the angle difference \(V_a^\text{from} - V_a^\text{to}\) — and `angle_dual`), `loads` (every
+in-service load's served `p_mw` / `q_mvar`, `elastic` when its bid set it, and the `bound_dual`
+of an elastic load pinned at 0 or at its `p_mw`), plus `objective_cost`, `demand_value` (the
+bids' worth of the demand served; the solver minimises `objective_cost − demand_value`),
+`losses_mw` and `iterations`. `lmp_p` is the AC LMP: the marginal cost of
 active demand at the bus with losses and voltage support priced in, so it varies across the
 network even with no branch limit binding — the DC-OPF's LMPs cannot.
 
@@ -174,9 +184,44 @@ dual -4431.9 $/rad.h = -77.35 $/deg.h
 binds (relaxing it by a degree would save about 77 $/h here), positive when the lower one does,
 0 otherwise. The unit test checks it against a finite difference of the optimum in the cap.
 
+### Elastic demand
+
+A load with a `bid` is a decision when `elastic_demand` is on: it is served up to the point
+where its marginal value meets the AC LMP at its bus, losses and voltage support included. Three
+of case14's loads bidding a flat 38 $/MWh — between the unconstrained LMPs of about 36 at the
+slack end and 41 at the far end:
+
+```python
+from mambo_power.model import PolynomialBid
+
+net = cases.load("case14")
+for load in net.loads[:3]:  # load-2, load-3, load-4
+    load.bid = PolynomialBid(coefficients=[38.0, 0.0])  # worth 38 $/MWh, every MW
+ac = opf.solve_ac_opf(net, opf.OpfAcOptions(elastic_demand=True))
+lmp = {b.id: b.lmp_p for b in ac.buses}
+print(f"{ac.objective_cost:.2f} cost, {ac.demand_value:.2f} value, "
+      f"{ac.objective_cost - ac.demand_value:.2f} net $/h")
+for ld in ac.loads[:3]:
+    print(f"{ld.id}: {ld.p_mw:.2f} MW, LMP {lmp[ld.bus]:.2f}, bound dual {ld.bound_dual:.2f}")
+```
+
+```text
+5727.36 cost, 3977.29 value, 1750.08 net $/h
+load-2: 21.70 MW, LMP 36.39, bound dual -1.61
+load-3: 45.60 MW, LMP 38.00, bound dual 0.00
+load-4: 37.37 MW, LMP 38.01, bound dual 0.00
+```
+
+`load-2` sits near the cheap slack unit where power is worth less than its bid, so it takes
+its full 21.7 MW and its bound dual is the gap, LMP − bid; the other two are cut back until the
+price at their bus is exactly the bid. `tests/parity/test_ac_opf_elastic_vs_pandapower.py`
+checks welfare, served demand and LMPs against pandapower's `runopp` with the bids framed as
+sign-flipped `sgen`s (the DC nodal market's oracle convention), and the unit tier against the
+SLSQP hand case with the demand added to its decision vector.
+
 ## Scope
 
 Single period, polynomial or convex piecewise-linear costs, apparent-power limits at the normal
-rating, angle-difference limits. Not modelled: dispatchable loads and reactive costs, a
+rating, angle-difference limits, elastic demand. Not modelled: reactive costs, a
 security-constrained AC formulation, and a reference that re-slacks when the slack unit hits a
 bound (the slack's own active bound is enforced; a residual beyond it is reported as a mismatch).

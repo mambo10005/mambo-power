@@ -17,6 +17,25 @@ class _Row(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
 
+class AcLoadDispatchResult(_Row):
+    """One load's served demand in the AC-OPF (ADR-030): its bid's dispatch when it is elastic,
+    its fixed ``Load.p_mw`` otherwise. Every in-service load gets a row."""
+
+    id: str = Field(description="Load id from the network.")
+    bus: str = Field(description="Bus id the load is connected to.")
+    p_mw: float = Field(description="Served active demand, MW.")
+    q_mvar: float = Field(description="Served reactive demand, MVAr, at the load's power factor.")
+    elastic: bool = Field(
+        description="True when the load's bid set its dispatch (options.elastic_demand and a "
+        "Load.bid); False for a fixed load."
+    )
+    bound_dual: float = Field(
+        default=0.0,
+        description="Elastic load only: reduced cost of its [0, p_mw] bound, $/MWh — the gap "
+        "between its marginal bid value and the bus LMP when pinned; 0 otherwise.",
+    )
+
+
 class AcGenDispatchResult(_Row):
     """One generator's AC-OPF dispatch and its bounds' shadow prices."""
 
@@ -96,6 +115,11 @@ class OpfAcResult(BaseModel):
     message: str | None = Field(default=None, description="Diagnostic when status != Optimal.")
     iterations: int = Field(ge=0, description="LP steps the trust-region loop took.")
     objective_cost: float = Field(default=0.0, description="Total generation cost, $/h.")
+    demand_value: float = Field(
+        default=0.0,
+        description="Bid value of the demand served by the elastic loads, $/h (ADR-030); the "
+        "solver minimises objective_cost − demand_value. 0 without elastic loads.",
+    )
     losses_mw: float = Field(
         default=0.0, description="Total active losses, MW: generation minus load at the optimum."
     )
@@ -103,5 +127,6 @@ class OpfAcResult(BaseModel):
         default=0.0, description="Largest nodal power mismatch at the final point, pu."
     )
     generators: list[AcGenDispatchResult] = Field(default_factory=list)
+    loads: list[AcLoadDispatchResult] = Field(default_factory=list)
     buses: list[AcBusResult] = Field(default_factory=list)
     branches: list[AcBranchFlowResult] = Field(default_factory=list)

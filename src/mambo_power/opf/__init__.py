@@ -65,6 +65,7 @@ from mambo_power.results import (
     AcBranchFlowResult,
     AcBusResult,
     AcGenDispatchResult,
+    AcLoadDispatchResult,
     BusLmpResult,
     CorrectiveActionResult,
     GenCorrectionResult,
@@ -522,9 +523,11 @@ def solve_ac_opf(net: Network, options: OpfAcOptions | None = None) -> OpfAcResu
 
     The same never-raise convention as :func:`solve_dc_opf`: a run that does not converge is
     reported through ``OpfAcResult.status``/``message``. Raises :class:`NonConvexCostError` and
-    :class:`MissingCostError` up front like :func:`solve_dc_opf`. A bus with no ``v_min_pu`` /
-    ``v_max_pu`` takes ``options.v_default_min_pu`` / ``v_default_max_pu``. The network is not
-    modified.
+    :class:`MissingCostError` up front like :func:`solve_dc_opf`, and
+    :class:`~mambo_power.opf.dc_opf.NonConcaveBidError` for a non-concave bid when
+    ``options.elastic_demand`` is on (ADR-030: every ``Load.bid`` is then honoured, the welfare
+    ``objective_cost − demand_value`` minimised). A bus with no ``v_min_pu`` / ``v_max_pu``
+    takes ``options.v_default_min_pu`` / ``v_default_max_pu``. The network is not modified.
     """
     opts = options if options is not None else OpfAcOptions()
     started_at = datetime.now(UTC)
@@ -534,8 +537,22 @@ def solve_ac_opf(net: Network, options: OpfAcOptions | None = None) -> OpfAcResu
     v_min, v_max = voltage_limits(
         net, arr, default_min=opts.v_default_min_pu, default_max=opts.v_default_max_pu
     )
+    bid_coeffs: dict[int, tuple[float, float, float]] = {}
+    pwl_bids: dict[int, list[tuple[float, float]]] = {}
+    if opts.elastic_demand:
+        from mambo_power.market.nodal import load_bid_coeffs  # market imports opf: lazily
+
+        bid_coeffs, pwl_bids = load_bid_coeffs(net, arr)
+    elastic_idxs = sorted(set(bid_coeffs) | set(pwl_bids))
     solution = ac_opf(
-        arr, cost_coeffs, opts, v_min_pu=v_min, v_max_pu=v_max, pwl_costs=pwl_costs or None
+        arr,
+        cost_coeffs,
+        opts,
+        v_min_pu=v_min,
+        v_max_pu=v_max,
+        pwl_costs=pwl_costs or None,
+        demand_bid_coeffs=bid_coeffs or None,
+        demand_pwl_bids=pwl_bids or None,
     )
     provenance = ResultProvenance(
         engine="mambo-power",
@@ -567,6 +584,23 @@ def solve_ac_opf(net: Network, options: OpfAcOptions | None = None) -> OpfAcResu
             q_bound_dual=float(duals.gen_q_bound[i]),
         )
         for i, gen_id in enumerate(arr.gen_ids)
+    ]
+    served = arr.load_p_max_pu * base
+    served[elastic_idxs] = solution.demand_dispatch_mw
+    bound_dual = np.zeros(len(arr.load_ids))
+    bound_dual[elastic_idxs] = duals.demand_bound
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pf_ratio = np.where(arr.load_p_max_pu > 0.0, arr.load_q_pu / arr.load_p_max_pu, 0.0)
+    loads = [
+        AcLoadDispatchResult(
+            id=load_id,
+            bus=arr.bus_ids[int(arr.load_bus[i])],
+            p_mw=float(served[i]),
+            q_mvar=float(served[i] * pf_ratio[i]) if served[i] != 0.0 else 0.0,
+            elastic=i in elastic_idxs,
+            bound_dual=float(bound_dual[i]),
+        )
+        for i, load_id in enumerate(arr.load_ids)
     ]
     buses = [
         AcBusResult(
@@ -609,16 +643,18 @@ def solve_ac_opf(net: Network, options: OpfAcOptions | None = None) -> OpfAcResu
                 angle_dual=float(duals.angle[k]) if duals.angle.size else 0.0,
             )
         )
-    losses_mw = float(np.sum(solution.gen_p_mw) - np.sum(arr.p_load_pu) * base)
+    losses_mw = float(np.sum(solution.gen_p_mw) - np.sum(served))
     return OpfAcResult(
         provenance=provenance,
         status=solution.status,
         message=None,
         iterations=solution.iterations,
         objective_cost=solution.objective_cost,
+        demand_value=solution.demand_value,
         losses_mw=losses_mw,
         max_mismatch_pu=solution.max_mismatch_pu,
         generators=generators,
+        loads=loads,
         buses=buses,
         branches=branches,
     )

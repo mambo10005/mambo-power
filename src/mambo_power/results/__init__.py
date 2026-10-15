@@ -10,6 +10,7 @@ from mambo_power.results.ac_opf import (
     AcBranchFlowResult,
     AcBusResult,
     AcGenDispatchResult,
+    AcLoadDispatchResult,
     OpfAcResult,
 )
 from mambo_power.results.agents import (
@@ -76,6 +77,7 @@ __all__ = [
     "AcBranchFlowResult",
     "AcBusResult",
     "AcGenDispatchResult",
+    "AcLoadDispatchResult",
     "AcPowerFlowResult",
     "AgentOfferResult",
     "BranchResult",

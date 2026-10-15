@@ -1327,6 +1327,46 @@ where none), and in the AC-OPF one row per given bound.
 *Rejected:* an angle limit in the DC-OPF (redundant with the rating, see 4); a limit on the
 angle in the power flow (a power flow has no freedom to honour it).
 
+## ADR-030 — Elastic demand in the AC-OPF as the bid's negated value over a demand column
+
+**Status:** accepted 2026-10-14.
+
+**Context.** `Load.bid` (ADR-007's elastic demand) clears in the DC nodal and zonal markets;
+the AC-OPF (ADR-018) served every load in full and listed dispatchable loads as unmodelled. An
+AC clearing is what prices demand response against losses and voltage support.
+
+**Decision.** `ac_opf(demand_bid_coeffs, demand_pwl_bids)`, the array-level mirror of
+`dc_opf`'s, and `OpfAcOptions.elastic_demand` (default off) on `solve_ac_opf`.
+
+1. **One column per bid load, at its power factor.** \(P_d \in [0, p_\text{mw}]\), with
+   \(Q_d = P_d \cdot q_\text{mvar} / p_\text{mw}\): a load is a point on its own
+   power-factor line, not a reactive decision (MATPOWER's dispatchable-load convention). The
+   fixed part of the bus aggregate is the aggregate less the bid loads at `p_mw`, `dc_opf`'s
+   double-counting contract carried over.
+2. **\(-\text{value}_d\) is a cost.** A concave bid's negation is convex, so it takes the
+   generator cost's own path through the SLP: linear in the objective, chords across the trust
+   region for a quadratic, the segments themselves for a piecewise bid, in the same epigraph
+   encoding; the merit function and the model prediction both carry it. The reported
+   `objective_cost` stays generation cost (ADR-007's convention) with `demand_value` beside it.
+3. **Off by default, like `solve_dc_opf`.** A bid in the network changes nothing until the
+   option says so; the market surfaces are where bids clear unasked.
+4. **Every load gets a row** in `OpfAcResult.loads`, bid or not: the settlement identity sums
+   over all demand, and `losses_mw` is generation less what was actually served.
+
+**Consequences.**
+
+1. **The LMP meets the bid.** An interior elastic load's bus price equals its marginal value
+   (to the SLP's tolerance); a pinned one's `bound_dual` is the gap. The parity test against
+   pandapower's `runopp` uses the sign-flipped `sgen` oracle of the DC nodal market, with the
+   bid loads made purely active because a controllable `sgen`'s reactive output is free in
+   pandapower where ours follows the power factor.
+2. **No AC settlement yet.** Payments, receipts and congestion rent at AC LMPs are the AC
+   market's question; this ADR gives it the clearing.
+
+*Rejected:* a free reactive demand per bid load — a load's power factor is a fact of the load,
+not a bid; reusing the generator columns with a sign flip (the pseudo-generator trick ADR-007
+rejected for the same reasons).
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

@@ -106,6 +106,9 @@ class NetworkArrays:
     formula does not depend on bid presence; whether/how a given load's bound is actually used
     by ``opf.dc_opf`` is decided per-load elsewhere, not here. ``p_load_pu``/``q_load_pu`` (the
     bus aggregate) are untouched by this addition."""
+    load_q_pu: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Per-load ``q_mvar`` in pu, the reactive demand that goes with ``load_p_max_pu``: an
+    elastic load in the AC-OPF (ADR-030) is served at this power factor."""
 
     storage_ids: list[str] = field(default_factory=list)
     storage_bus: IntArray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
@@ -288,6 +291,7 @@ class NetworkArrays:
             load_bus=load_bus,
             load_p_min_pu=np.zeros(n_load),
             load_p_max_pu=per_load([ld.p_mw for ld in loads]),
+            load_q_pu=per_load([ld.q_mvar for ld in loads]),
             storage_ids=[s.id for s in storage_units],
             storage_bus=storage_bus,
             storage_p_max_pu=per_storage([s.p_max_mw / base for s in storage_units]),

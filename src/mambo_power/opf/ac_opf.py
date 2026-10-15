@@ -129,6 +129,12 @@ class OpfAcOptions(BaseModel):
     restoration_iter: int = Field(
         default=5, ge=0, le=50, description="Newton iterations of the restoration after a step."
     )
+    elastic_demand: bool = Field(
+        default=False,
+        description="solve_ac_opf only (ADR-030): honour Load.bid — a load with a bid is served "
+        "where its marginal value meets the AC LMP, within [0, p_mw], at its own power factor. "
+        "False keeps every load fixed, like solve_dc_opf.",
+    )
 
 
 @dataclass(frozen=True)
@@ -153,6 +159,9 @@ class AcOpfDuals:
     """Per-branch dual of the angle-difference limit (ADR-029), $/rad·h: negative when the
     upper limit binds, positive when the lower one does, 0 otherwise or on an unlimited
     branch."""
+    demand_bound: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Per-elastic-load reduced cost of its ``[0, p_mw]`` bound (ADR-030), $/MWh, in
+    :attr:`AcOpfSolution.demand_dispatch_mw` order; 0 unless pinned."""
 
 
 @dataclass(frozen=True)
@@ -186,6 +195,13 @@ class AcOpfSolution:
     """Per-branch from-side complex flow, pu."""
     s_to_pu: ComplexArray = field(default_factory=lambda: np.zeros(0, dtype=np.complex128))
     """Per-branch to-side complex flow, pu."""
+    demand_dispatch_mw: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """Per-elastic-load served demand, MW (ADR-030), in ``sorted(set(demand_bid_coeffs) |
+    set(demand_pwl_bids))`` order like
+    :attr:`~mambo_power.opf.dc_opf.OpfSolution.demand_dispatch_mw`; length 0 without bids."""
+    demand_value: float = 0.0
+    """``Σ value_d(P_d)`` of the elastic loads at the final point, $/h; the solver minimises
+    ``objective_cost − demand_value``."""
 
 
 def _dsbr_dv(
@@ -258,6 +274,8 @@ def ac_opf(
     v_min_pu: FloatArray,
     v_max_pu: FloatArray,
     pwl_costs: Mapping[int, Sequence[tuple[float, float]]] | None = None,
+    demand_bid_coeffs: Mapping[int, tuple[float, float, float]] | None = None,
+    demand_pwl_bids: Mapping[int, Sequence[tuple[float, float]]] | None = None,
 ) -> AcOpfSolution:
     """Solve the AC-OPF of ``arr`` (module docstring).
 
@@ -267,6 +285,12 @@ def ac_opf(
     order. Raises :class:`~mambo_power.opf.dc_opf.NonConvexCostError` up front for a non-convex
     cost and ``ValueError`` for mis-shaped limits; never raises for a run that does not
     converge — reported through ``status``/``message``.
+
+    ``demand_bid_coeffs`` / ``demand_pwl_bids`` are :func:`~mambo_power.opf.dc_opf.dc_opf`'s
+    (ADR-030): a load index in either becomes an elastic load served at ``P_d`` in
+    ``[load_p_min, load_p_max]`` at its own power factor (``Q_d = P_d · q_mvar / p_mw``), its
+    bid's value joining the objective as ``−value_d(P_d)``; a non-concave bid raises
+    :class:`~mambo_power.opf.dc_opf.NonConcaveBidError` up front. Every other load stays fixed.
     """
     n_bus, n_gen, n_branch = arr.n_bus, len(arr.gen_ids), arr.n_branch
     base = arr.base_mva
@@ -276,9 +300,25 @@ def ac_opf(
         raise ValueError(f"v_min_pu and v_max_pu must have shape ({n_bus},), bus order")
     if np.any(v_min_pu > v_max_pu) or np.any(v_min_pu <= 0.0):
         raise ValueError("voltage limits must satisfy 0 < v_min_pu <= v_max_pu at every bus")
-    problem = _extract_and_validate(cost_coeffs, pwl_costs, None, None, n_gen, 0)
+    problem = _extract_and_validate(
+        cost_coeffs, pwl_costs, demand_bid_coeffs, demand_pwl_bids, n_gen, len(arr.load_ids)
+    )
     c2, c1, c0 = problem.c2, problem.c1, problem.c0
     pwl_gen_idxs, segments_by_gen = problem.pwl_gen_idxs, problem.segments_by_gen
+    # elastic loads (ADR-030): −value_d is convex, so it is carried exactly like a cost, as
+    # chords of a2·p² + a1·p with a2 = −v2 >= 0, a1 = −v1 (a piecewise bid's segments negated)
+    elastic = np.asarray(problem.elastic_load_idxs, dtype=np.int64)
+    n_dem = elastic.size
+    a2, a1, a0 = -problem.v2, -problem.v1, -problem.v0
+    pwl_dem = [
+        j for j, idx in enumerate(problem.elastic_load_idxs) if idx in problem.demand_pwl_idxs
+    ]
+    pwl_dem_set = set(pwl_dem)
+    neg_segments_by_dem = {
+        j: [(-slope, -intercept) for slope, intercept in problem.demand_segments_by_load[idx]]
+        for j, idx in enumerate(problem.elastic_load_idxs)
+        if idx in problem.demand_pwl_idxs
+    }
 
     y = ybus(arr)
     yf, yt = yf_yt(arr)
@@ -289,7 +329,21 @@ def ac_opf(
     angle_lo = arr.angle_min_rad[angled]
     angle_hi = arr.angle_max_rad[angled]
     rating_sq = arr.rating_pu[rated] ** 2
-    p_load, q_load = arr.p_load_pu, arr.q_load_pu
+    dem_bus = arr.load_bus[elastic]
+    d_min, d_max = arr.load_p_min_pu[elastic] * base, arr.load_p_max_pu[elastic] * base
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pf_ratio = np.where(d_max > 0.0, arr.load_q_pu[elastic] * base / d_max, 0.0)
+    c_d = sparse.csc_matrix((np.ones(n_dem), (dem_bus, np.arange(n_dem))), shape=(n_bus, n_dem))
+    # the bus aggregate holds every load at p_mw: take the elastic ones out, they come back
+    # through P_d (dc_opf's double-counting contract)
+    p_load_fixed = arr.p_load_pu - np.asarray(c_d @ (d_max / base)).ravel()
+    q_load_fixed = arr.q_load_pu - np.asarray(c_d @ (pf_ratio * d_max / base)).ravel()
+
+    def loads_at(pd_mw: FloatArray) -> tuple[FloatArray, FloatArray]:
+        p_load = p_load_fixed + np.asarray(c_d @ (pd_mw / base)).ravel()
+        q_load = q_load_fixed + np.asarray(c_d @ (pf_ratio * pd_mw / base)).ravel()
+        return p_load, q_load
+
     gen_bus = arr.gen_bus
     c_g = sparse.csc_matrix((np.ones(n_gen), (gen_bus, np.arange(n_gen))), shape=(n_bus, n_gen))
     p_min, p_max = arr.gen_p_min_pu * base, arr.gen_p_max_pu * base
@@ -315,6 +369,7 @@ def ac_opf(
     va = np.angle(v)
     va -= va[arr.slack]
     v = vm * np.exp(1j * va)
+    pd = d_max.copy()  # the declared demand, the power flow's own starting load
 
     def cost_of(pg_mw: FloatArray, pwl_value: float) -> float:
         return float(np.sum(c2 * pg_mw**2 + c1 * pg_mw + c0)) + pwl_value
@@ -325,10 +380,21 @@ def ac_opf(
             total += max(s * pg_mw[g] + b for s, b in segments_by_gen[g])
         return total
 
+    def value_of(pd_mw: FloatArray) -> float:
+        """``Σ value_d(P_d)``, $/h: the bids' worth of the demand served."""
+        total = float(np.sum(-(a2 * pd_mw**2 + a1 * pd_mw + a0)))
+        for j in pwl_dem:
+            total -= max(s * pd_mw[j] + b for s, b in neg_segments_by_dem[j])
+        return total
+
+    def net_cost(pg_mw: FloatArray, pd_mw: FloatArray) -> float:
+        return cost_of(pg_mw, pwl_cost_of(pg_mw)) - value_of(pd_mw)
+
     def residuals(
-        v: ComplexArray, pg_mw: FloatArray, qg_mvar: FloatArray
+        v: ComplexArray, pg_mw: FloatArray, qg_mvar: FloatArray, pd_mw: FloatArray
     ) -> tuple[FloatArray, FloatArray, FloatArray, ComplexArray, ComplexArray]:
         s_bus = v * np.conj(y @ v)
+        p_load, q_load = loads_at(pd_mw)
         g_p = s_bus.real + p_load - np.asarray(c_g @ (pg_mw / base)).ravel()
         g_q = s_bus.imag + q_load - np.asarray(c_g @ (qg_mvar / base)).ravel()
         s_f = v[f_idx] * np.conj(yf @ v)
@@ -355,7 +421,7 @@ def ac_opf(
     pf_bus_type[arr.slack] = _SLACK
 
     def restore(
-        v: ComplexArray, pg_mw: FloatArray, qg_mvar: FloatArray
+        v: ComplexArray, pg_mw: FloatArray, qg_mvar: FloatArray, pd_mw: FloatArray
     ) -> tuple[ComplexArray, FloatArray, FloatArray]:
         """An AC power flow at the LP's point, by :func:`mambo_power.pf.ac_newton.newton`
         with its Q-limit rounds: generator buses hold the LP's magnitude (PV) and the slack its
@@ -365,8 +431,11 @@ def ac_opf(
         first-order step leaves of the nodal residual is second order and this removes it."""
         vm = np.abs(v)
         gen_v_set = vm[gen_bus]
+        p_load, q_load = loads_at(pd_mw)
         point = dataclasses.replace(
             arr,
+            p_load_pu=p_load,
+            q_load_pu=q_load,
             bus_type=pf_bus_type,
             v_set=np.where(has_gen, vm, 1.0),
             p_gen_pu=np.asarray(np.bincount(gen_bus, weights=pg_mw, minlength=n_bus) / base),
@@ -392,17 +461,19 @@ def ac_opf(
         qg_new = np.clip(solved.gen_q_pu * base, q_min, q_max)
         return solved.v, pg_new, qg_new
 
-    def merit(v: ComplexArray, pg_mw: FloatArray, qg_mvar: FloatArray) -> float:
-        g_p, g_q, viol, _, _ = residuals(v, pg_mw, qg_mvar)
+    def merit(v: ComplexArray, pg_mw: FloatArray, qg_mvar: FloatArray, pd_mw: FloatArray) -> float:
+        g_p, g_q, viol, _, _ = residuals(v, pg_mw, qg_mvar, pd_mw)
         residual = float(np.sum(np.abs(g_p)) + np.sum(np.abs(g_q)) + np.sum(viol))
-        return cost_of(pg_mw, pwl_cost_of(pg_mw)) + options.penalty * base * residual
+        return net_cost(pg_mw, pd_mw) + options.penalty * base * residual
 
-    # --- column layout of every QP: [dva | dvm | dpg | dqg | sp+ | sp- | sq+ | sq- | cost_g]
+    # --- column layout of every LP: [dva | dvm | dpg | dqg | dpd | sp+ | sp- | sq+ | sq- |
+    # flow and angle slacks | cost_g and −value_d epigraph columns]
     col_va = np.arange(0, n_bus, dtype=np.int32)
     col_vm = np.arange(n_bus, 2 * n_bus, dtype=np.int32)
     col_pg = np.arange(2 * n_bus, 2 * n_bus + n_gen, dtype=np.int32)
     col_qg = np.arange(2 * n_bus + n_gen, 2 * n_bus + 2 * n_gen, dtype=np.int32)
-    slack_base = 2 * n_bus + 2 * n_gen
+    col_pd = np.arange(2 * n_bus + 2 * n_gen, 2 * n_bus + 2 * n_gen + n_dem, dtype=np.int32)
+    slack_base = 2 * n_bus + 2 * n_gen + n_dem
     col_sp_plus = np.arange(slack_base, slack_base + n_bus, dtype=np.int32)
     col_sp_minus = col_sp_plus + n_bus
     col_sq_plus = col_sp_plus + 2 * n_bus
@@ -417,48 +488,63 @@ def ac_opf(
     cost_base = slack_base + 4 * n_bus + n_flow
     curved = sorted(set(pwl_gen_idxs) | set(np.flatnonzero(c2 != 0.0).tolist()))
     cost_col_of = {g: cost_base + j for j, g in enumerate(curved)}
-    n_cols = cost_base + len(curved)
+    curved_dem = sorted(pwl_dem_set | set(np.flatnonzero(a2 != 0.0).tolist()))
+    value_col_of = {j: cost_base + len(curved) + k for k, j in enumerate(curved_dem)}
+    n_cols = cost_base + len(curved) + len(curved_dem)
     inf = highspy.kHighsInf
 
-    def chord_segments(g: int, radius: float) -> list[tuple[float, float]]:
-        """``(slope, intercept)`` chords of generator *g*'s quadratic cost: ``options.chords``
-        across ``[pg − radius, pg + radius]`` (clipped to the bounds, the current ``pg`` always a
-        breakpoint) plus one chord out to each bound."""
-        lo, hi = max(p_min[g], pg[g] - radius), min(p_max[g], pg[g] + radius)
+    def chords(
+        q2: float, q1: float, at: float, lo_bound: float, hi_bound: float, radius: float
+    ) -> list[tuple[float, float]]:
+        """``(slope, intercept)`` chords of the convex quadratic ``q2·p² + q1·p``:
+        ``options.chords`` across ``[at − radius, at + radius]`` (clipped to the bounds, the
+        current *at* always a breakpoint) plus one chord out to each bound."""
+        lo, hi = max(lo_bound, at - radius), min(hi_bound, at + radius)
         half = options.chords // 2
         points = sorted(
-            {float(np.clip(pg[g] + radius * k / half, lo, hi)) for k in range(-half, half + 1)}
-            | {float(p_min[g]), float(p_max[g])}
+            {float(np.clip(at + radius * k / half, lo, hi)) for k in range(-half, half + 1)}
+            | {float(lo_bound), float(hi_bound)}
         )
         segments = []
         for a, b in zip(points[:-1], points[1:], strict=True):
             if b - a <= 1e-12:
                 continue
-            ca = c2[g] * a * a + c1[g] * a
-            cb = c2[g] * b * b + c1[g] * b
+            ca = q2 * a * a + q1 * a
+            cb = q2 * b * b + q1 * b
             slope = (cb - ca) / (b - a)
             segments.append((slope, ca - slope * a))
-        if not segments:  # a unit pinned by p_min == p_max
-            segments.append((c1[g] + 2.0 * c2[g] * pg[g], c2[g] * pg[g] ** 2 - c2[g] * pg[g] ** 2))
+        if not segments:  # pinned by lo_bound == hi_bound
+            segments.append((q1 + 2.0 * q2 * at, -q2 * at * at))
         return segments
+
+    def chord_segments(g: int, radius: float) -> list[tuple[float, float]]:
+        """Generator *g*'s quadratic cost as :func:`chords` through the current ``pg``."""
+        return chords(float(c2[g]), float(c1[g]), float(pg[g]), p_min[g], p_max[g], radius)
+
+    def demand_chord_segments(j: int, radius: float) -> list[tuple[float, float]]:
+        """Elastic load *j*'s ``−value`` as :func:`chords` through the current ``pd``."""
+        return chords(float(a2[j]), float(a1[j]), float(pd[j]), d_min[j], d_max[j], radius)
 
     stalled = 0
     radius_va, radius_vm = 0.2, 0.05
-    pg_range = float(np.max(p_max - p_min)) if n_gen else 1.0
+    pg_range = max(
+        float(np.max(p_max - p_min)) if n_gen else 1.0,
+        float(np.max(d_max - d_min)) if n_dem else 0.0,
+    )
     radius_pg = max(pg_range / 10.0, 1.0)
     radius_min = 1e-9
     iterations = 0
     status = "IterationLimit"
     message: str | None = None
     duals: AcOpfDuals | None = None
-    g_p, g_q, viol, s_f, s_t = residuals(v, pg, qg)
+    g_p, g_q, viol, s_f, s_t = residuals(v, pg, qg, pd)
 
     while iterations < options.max_iter:
         iterations += 1
         vm, va = np.abs(v), np.angle(v)
         ds_dvm, ds_dva = _dsbus_dv(y, v)
         dsf_dva, dsf_dvm, dst_dva, dst_dvm, s_f, s_t = _dsbr_dv(yf, yt, v, f_idx, t_idx)
-        g_p, g_q, viol, _, _ = residuals(v, pg, qg)
+        g_p, g_q, viol, _, _ = residuals(v, pg, qg, pd)
 
         h = highspy.Highs()  # type: ignore[no-untyped-call]  # highspy ships no type stubs
         h.setOptionValue("output_flag", False)
@@ -474,6 +560,8 @@ def ac_opf(
         lower[col_pg] = np.maximum(p_min - pg, -radius_pg)
         upper[col_pg] = np.maximum(lower[col_pg], np.minimum(p_max - pg, radius_pg))
         lower[col_qg], upper[col_qg] = q_min - qg, q_max - qg
+        lower[col_pd] = np.maximum(d_min - pd, -radius_pg)
+        upper[col_pd] = np.maximum(lower[col_pd], np.minimum(d_max - pd, radius_pg))
         lower[slack_base:cost_base], upper[slack_base:cost_base] = 0.0, inf
         lower[cost_base:], upper[cost_base:] = -inf, inf
         # a bound within rounding of zero is zero: HiGHS treats 1e-16 as a tiny open interval
@@ -483,6 +571,8 @@ def ac_opf(
         cost = np.zeros(n_cols)
         cost[col_pg] = np.where(c2 != 0.0, 0.0, c1)  # a curved unit's cost is its cost_g column
         cost[col_pg[pwl_gen_idxs]] = 0.0
+        cost[col_pd] = np.where(a2 != 0.0, 0.0, a1)  # −v1: served demand is worth its bid
+        cost[col_pd[pwl_dem]] = 0.0
         cost[slack_base:cost_base] = options.penalty * base  # slacks are pu, the penalty $/MW
         cost[cost_base:] = 1.0
         h.changeColsCost(n_cols, np.arange(n_cols, dtype=np.int32), cost)
@@ -496,6 +586,7 @@ def ac_opf(
                     (ds_dva.real, col_va),
                     (ds_dvm.real, col_vm),
                     (-c_g / base, col_pg),
+                    (c_d / base, col_pd),
                     (eye, col_sp_plus),
                     (-eye, col_sp_minus),
                 ],
@@ -510,6 +601,7 @@ def ac_opf(
                     (ds_dva.imag, col_va),
                     (ds_dvm.imag, col_vm),
                     (-c_g / base, col_qg),
+                    (c_d @ sparse.diags(pf_ratio) / base, col_pd),
                     (eye, col_sq_plus),
                     (-eye, col_sq_minus),
                 ],
@@ -572,8 +664,9 @@ def ac_opf(
                 ),
             )
         # epigraph rows, cost_g − slope·dpg >= slope·pg + intercept: a piecewise-linear cost's
-        # own segments, a quadratic cost's chords through the current dispatch
-        if curved:
+        # own segments, a quadratic cost's chords through the current dispatch; the same for
+        # an elastic load's −value over its dpd column
+        if curved or curved_dem:
             rows = []
             rhs = []
             for g in curved:
@@ -583,6 +676,15 @@ def ac_opf(
                 for slope, intercept in segments:
                     rows.append([(cost_col_of[g], 1.0), (int(col_pg[g]), -slope)])
                     rhs.append(slope * pg[g] + intercept)
+            for j in curved_dem:
+                segments = (
+                    neg_segments_by_dem[j]
+                    if j in pwl_dem_set
+                    else demand_chord_segments(j, radius_pg)
+                )
+                for slope, intercept in segments:
+                    rows.append([(value_col_of[j], 1.0), (int(col_pd[j]), -slope)])
+                    rhs.append(slope * pd[j] + intercept)
             block = _RowBlock(
                 lower=np.asarray(rhs),
                 upper=np.full(len(rhs), inf),
@@ -601,7 +703,7 @@ def ac_opf(
         sol = h.getSolution()
         step = np.asarray(sol.col_value, dtype=np.float64)
         d_va, d_vm = step[col_va], step[col_vm]
-        d_pg, d_qg = step[col_pg], step[col_qg]
+        d_pg, d_qg, d_pd = step[col_pg], step[col_qg], step[col_pd]
         slack_total = float(np.sum(step[slack_base:cost_base]))
 
         # convergence: a feasible point from which the LP moves nowhere — or gains nothing
@@ -613,15 +715,20 @@ def ac_opf(
             np.max(np.abs(d_vm)),
             np.max(np.abs(d_pg)) / base if n_gen else 0.0,
             np.max(np.abs(d_qg)) / base if n_gen else 0.0,
+            np.max(np.abs(d_pd)) / base if n_dem else 0.0,
         )
         linear = np.flatnonzero((c2 == 0.0) & ~np.isin(np.arange(n_gen), pwl_gen_idxs))
-        merit_now = merit(v, pg, qg)
+        linear_dem = np.flatnonzero((a2 == 0.0) & ~np.isin(np.arange(n_dem), pwl_dem))
+        merit_now = merit(v, pg, qg, pd)
         # the model's prediction: linearised residual is zero except the elastic slacks, and the
         # linearised flow rows hold, so the predicted merit is the LP objective (in $/h)
         model_cost = float(
             np.sum(c1[linear] * (pg[linear] + d_pg[linear]))
             + np.sum(c0)
             + sum(step[cost_col_of[g]] for g in curved)
+            + np.sum(a1[linear_dem] * (pd[linear_dem] + d_pd[linear_dem]))
+            + np.sum(a0)
+            + sum(step[value_col_of[j]] for j in curved_dem)
             + options.penalty * base * slack_total
         )
         predicted = merit_now - model_cost
@@ -653,6 +760,7 @@ def ac_opf(
             at_p = (np.abs(pg - p_min) <= 1e-6) | (np.abs(pg - p_max) <= 1e-6)
             at_q = (np.abs(qg - q_min) <= 1e-6) | (np.abs(qg - q_max) <= 1e-6)
             at_v = (np.abs(vm - v_min_pu) <= 1e-6) | (np.abs(vm - v_max_pu) <= 1e-6)
+            at_d = (np.abs(pd - d_min) <= 1e-6) | (np.abs(pd - d_max) <= 1e-6)
             duals = AcOpfDuals(
                 lmp_p=-row_dual[:n_bus] / base,
                 lmp_q=-row_dual[n_bus : 2 * n_bus] / base,
@@ -662,6 +770,7 @@ def ac_opf(
                 flow_from=flow_from,
                 flow_to=flow_to,
                 angle=angle_dual,
+                demand_bound=np.where(at_d, col_dual[col_pd], 0.0),
             )
             status = _OPTIMAL
             message = None
@@ -670,21 +779,23 @@ def ac_opf(
         # trust-region step acceptance on the ℓ₁ merit function
         pg_new = np.clip(pg + d_pg, p_min, p_max)
         qg_new = np.clip(qg + d_qg, q_min, q_max)
+        pd_new = np.clip(pd + d_pd, d_min, d_max)
         vm_new = np.clip(vm + d_vm, v_min_pu, v_max_pu)
         va_new = va + d_va
         v_new = np.asarray(vm_new * np.exp(1j * va_new), dtype=np.complex128)
-        v_new, pg_new, qg_new = restore(v_new, pg_new, qg_new)
-        merit_new = merit(v_new, pg_new, qg_new)
+        v_new, pg_new, qg_new = restore(v_new, pg_new, qg_new, pd_new)
+        merit_new = merit(v_new, pg_new, qg_new, pd_new)
         actual = merit_now - merit_new
         ratio = actual / predicted if predicted > 1e-12 else (1.0 if actual >= 0.0 else -1.0)
         at_boundary = (
             np.max(np.abs(d_va)) >= 0.99 * radius_va
             or np.max(np.abs(d_vm)) >= 0.99 * radius_vm
             or (n_gen and np.max(np.abs(d_pg)) >= 0.99 * radius_pg)
+            or (n_dem and np.max(np.abs(d_pd)) >= 0.99 * radius_pg)
         )
         if ratio >= 0.1:
             stalled = stalled + 1 if actual <= economic_tol else 0
-            v, pg, qg = v_new, pg_new, qg_new
+            v, pg, qg, pd = v_new, pg_new, qg_new, pd_new
             if ratio >= 0.25 and at_boundary:
                 radius_va = min(2.0 * radius_va, 1.0)
                 radius_vm = min(2.0 * radius_vm, 0.2)
@@ -694,7 +805,7 @@ def ac_opf(
             radius_vm *= 0.5
             radius_pg = max(radius_pg * 0.5, options.step_tol_mw)
             if radius_vm < radius_min:
-                g_p, g_q, viol, _, _ = residuals(v, pg, qg)
+                g_p, g_q, viol, _, _ = residuals(v, pg, qg, pd)
                 status = "Infeasible" if not feasible else "IterationLimit"
                 message = (
                     f"ac_opf: trust region collapsed at iteration {iterations} with max mismatch "
@@ -704,7 +815,7 @@ def ac_opf(
     else:
         message = f"ac_opf: did not converge in {options.max_iter} LP steps"
 
-    g_p, g_q, viol, s_f, s_t = residuals(v, pg, qg)
+    g_p, g_q, viol, s_f, s_t = residuals(v, pg, qg, pd)
     return AcOpfSolution(
         status=status,
         v=v,
@@ -718,4 +829,6 @@ def ac_opf(
         message=message,
         s_from_pu=s_f,
         s_to_pu=s_t,
+        demand_dispatch_mw=pd,
+        demand_value=value_of(pd),
     )
