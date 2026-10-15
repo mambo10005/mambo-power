@@ -13,12 +13,17 @@ modules' functions, so importing this costs no optional dependency.
 
 from __future__ import annotations
 
-from mambo_power.io import csv_bundle, pandapower_json, psse_raw, pypsa
+from mambo_power.io import csv_bundle, matpower_export, pandapower_json, psse_raw, pypsa
 
 __all__ = ["LIMITATIONS"]
 
 LIMITATIONS: dict[str, tuple[str, ...]] = {
-    "io.matpower": ("BASE_KV_REPLACED", "GENCOST_REACTIVE_IGNORED", "ISLAND_DEACTIVATED"),
+    "io.matpower": (
+        "BASE_KV_REPLACED",
+        "GENCOST_REACTIVE_IGNORED",
+        "ISLAND_DEACTIVATED",
+        *matpower_export.EXPORT_CODES,
+    ),
     "io.pandapower_json": pandapower_json.CODES,
     "io.pypsa": pypsa.CODES,
     "io.psse_raw": psse_raw.CODES,

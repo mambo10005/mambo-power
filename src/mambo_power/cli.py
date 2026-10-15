@@ -16,9 +16,10 @@ command line adds no behaviour of its own:
   kind's options model.
 * ``convert SOURCE TARGET`` — read a network in one format, write it in another. Formats are
   inferred from the path (``.m`` MATPOWER, ``.raw`` PSS/E, ``.json`` native, a directory the
-  CSV bundle) or named with ``--from`` / ``--to`` (``pandapower`` for pandapower JSON, which
-  shares the extension). Every import or export report issue is printed to stderr, one per
-  line, so a lossy conversion is never silent; ``--strict`` makes any issue a failure.
+  CSV bundle; every one readable and writable since ADR-032 gave MATPOWER a writer) or named
+  with ``--from`` / ``--to`` (``pandapower`` for pandapower JSON, which shares the extension).
+  Every import or export report issue is printed to stderr, one per line, so a lossy
+  conversion is never silent; ``--strict`` makes any issue a failure.
 
 Everything prints JSON or plain lines, nothing is interactive, and the only exit statuses are
 0 (done), 1 (the job failed or the conversion had issues under ``--strict``) and 2 (bad usage,
@@ -48,7 +49,7 @@ _Handler = Callable[[argparse.Namespace], int]
 
 Format = Literal["matpower", "raw", "json", "pandapower", "csv"]
 FORMATS: tuple[str, ...] = ("matpower", "raw", "json", "pandapower", "csv")
-"""The formats ``convert`` reads and writes (MATPOWER is read-only)."""
+"""The formats ``convert`` reads and writes."""
 
 _EXTENSIONS: dict[str, Format] = {".m": "matpower", ".raw": "raw", ".json": "json"}
 
@@ -171,8 +172,6 @@ def _solve(args: argparse.Namespace) -> int:
 
 def _convert(args: argparse.Namespace) -> int:
     target_format = args.target_format or _infer_format(args.target, "--to")
-    if target_format == "matpower":
-        raise _CliError("MATPOWER .m is read-only here: no writer exists")
     net, import_report = _read_network_with_report(args.source, args.source_format)
     issues = list(import_report.warnings) + list(import_report.errors)
     export_report = _write_network(net, args.target, target_format)
@@ -263,6 +262,8 @@ def _write_network(net: Network, target: str, fmt: Format) -> ExportReport | Non
     try:
         if fmt == "raw":
             return psse_raw.dump_with_report(net, target)
+        if fmt == "matpower":
+            return matpower.dump_with_report(net, target)
         if fmt == "json":
             native.save(net, target)
             return None

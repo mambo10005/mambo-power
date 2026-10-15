@@ -1407,6 +1407,44 @@ support too, and no such identity closes without loss factors.
 dependent); a loss-allocation scheme returning the surplus to participants (a market-design
 choice, not a clearing).
 
+## ADR-032 — MATPOWER export writes exactly what the importer reads, and says where it cannot
+
+**Status:** accepted 2026-10-14.
+
+**Context.** MATPOWER `.m` was the one shipped format without a writer: `convert` refused it,
+and a network built here or read from RAW, pandapower or PyPSA had no way into MATPOWER, Octave
+or the many tools that read the caseformat. The importer's column map was already a complete
+specification of the file.
+
+**Decision.** `io.matpower_export` (re-exported from `io.matpower` as `dump`, `dumps` and
+their `_with_report` forms), with one contract:
+
+1. **The importer is the specification.** Every column is written as the importer reads it,
+   so `loads(dumps(load(path))) == load(path)` on every bundled case with an empty report —
+   the test that defines "lossless" here. Derived ids are kept by construction (`bus-<n>` is
+   the bus number, `gen-<row>` and `branch-<row>` the row order).
+2. **Numbers by shortest round-trip `repr`**, not a fixed decimal width: a `.m` file is text
+   MATLAB evaluates, and `1e-05` is as valid there as `0.00001`; a width would lose digits.
+3. **Rows the format reads as a matrix are one width.** `gencost` rows of different `NCOST`
+   are zero-padded, as MATPOWER itself does; the importer's "NCOST governs" rule reads them
+   back.
+4. **What the file cannot hold is dropped, merged or defaulted and named** (D1), with codes
+   that say which: `MATPOWER_ID_RENUMBERED`, `ELEMENT_MERGED` (loads and shunts live on the
+   bus row), `COST_DEFAULTED` (`gencost` is all rows or none), and the shared
+   `ELEMENT_DROPPED` / `FIELD_DROPPED` / `FIELD_DEFAULTED` / `BID_DROPPED`.
+
+**Consequences.**
+
+1. **`convert` writes `.m`**, and a MATPOWER case read with repairs (`BASE_KV_REPLACED`)
+   writes back with the repaired values — the report of that conversion is the import's,
+   never the export's.
+2. **A second parser checks the file**: the parity tier's independent regex + `numpy`
+   reader gets the same matrices from the written file as from the original, column for
+   column, so the file is MATPOWER's layout and not merely this importer's.
+
+*Rejected:* writing a `mpc.bus_name` or a comment block carrying the dropped fields (a side
+channel no other reader honours); a fixed-width "pretty" layout (loses digits, see 2).
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

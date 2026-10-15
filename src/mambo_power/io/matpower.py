@@ -1,4 +1,6 @@
-"""MATPOWER case-file (``.m``) importer.
+"""MATPOWER case-file (``.m``) importer — and, re-exported from
+:mod:`mambo_power.io.matpower_export`, the writer that produces what it reads (ADR-032):
+:func:`dumps` / :func:`dump` and their ``_with_report`` forms.
 
 A parser, not a MATLAB interpreter: it recognises ``mpc.<name> = <scalar>;``,
 ``mpc.<name> = [ rows ];`` and ``mpc.<name> = { ... };`` statements, tolerates ``%`` comments,
@@ -42,6 +44,13 @@ from os import PathLike
 from pathlib import Path
 from typing import Literal
 
+from mambo_power.io.matpower_export import (  # the writer, ADR-032
+    EXPORT_CODES,
+    dump,
+    dump_with_report,
+    dumps,
+    dumps_with_report,
+)
 from mambo_power.io.report import ImportReport
 from mambo_power.model import (
     Branch,
@@ -60,9 +69,14 @@ from mambo_power.model import (
 )
 
 __all__ = [
+    "EXPORT_CODES",
     "ImportReport",
     "MatpowerImportCode",
     "MatpowerImportError",
+    "dump",
+    "dump_with_report",
+    "dumps",
+    "dumps_with_report",
     "load",
     "load_with_report",
     "load_with_warnings",

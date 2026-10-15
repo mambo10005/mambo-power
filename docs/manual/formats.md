@@ -3,7 +3,7 @@
 `mambo_power.io` holds importers and exporters. Every format speaks only
 [`mambo_power.model`](model.md): an importer produces a validated `Network`, an exporter
 consumes one, and neither touches arrays or solvers. Six formats ship: the **native JSON**
-format, the **MATPOWER `.m`** importer, **pandapower JSON** both ways, **PyPSA** export,
+format, **MATPOWER `.m`** both ways, **pandapower JSON** both ways, **PyPSA** export,
 **PSS/E RAW v33** both ways and the **CSV bundle**. Every importer returns an `ImportReport` and
 every exporter an `ExportReport` (see [`io.report`](../api/io-report.md)) with one rule: an
 empty report means the conversion was lossless; anything dropped, approximated or repaired is an
@@ -232,8 +232,8 @@ is left to `Network` validation and raises `NetworkValidationError`
 - Only the caseformat v2 column layout is supported; v1 files (no `mpc.` prefix, different
   branch columns) are not recognised.
 - Dropped columns (listed above): `MBASE`, `PC1`–`APF`, `RATE_B`,
-  every `MU_*` / `LAM_*` and stored-result column. Re-exporting a case is therefore lossy
-  for those fields (an exporter is not shipped yet).
+  every `MU_*` / `LAM_*` and stored-result column. Re-exporting a case through the
+  [exporter below](#matpower-m-export) writes them as zeros.
 - `mpc.bus_name` is ignored because `Bus` carries no name field.
 - No DC lines (`mpc.dcline`), no three-winding transformers, no three-phase data.
 - The reactive half of a `2 * ngen` gencost is dropped, not stored.
@@ -250,6 +250,66 @@ print(len(net.buses), len(warnings), warnings[0])
 
 ```text
 14 14 BASE_KV_REPLACED: bus-1: BASE_KV is 0; base_kv set to 1.0 (line 25)
+```
+
+## MATPOWER `.m` export
+
+`mambo_power.io.matpower` also writes the caseformat v2 layout its importer reads
+([ADR-032](../design/decisions.md)); the writer lives in `io.matpower_export` and is re-exported
+under the same names as the other formats' writers.
+
+| Function | Does |
+| --- | --- |
+| `matpower.dumps(net) -> str` | `.m` text; report discarded. |
+| `matpower.dump(net, path)` | Write a file. |
+| `matpower.dumps_with_report(net) -> (str, ExportReport)` | Text and what the format could not carry. |
+| `matpower.dump_with_report(net, path) -> ExportReport` | Write a file and return the report. |
+
+### What is written
+
+A `function mpc = ...` file with `mpc.version = '2'`, `mpc.baseMVA`, `mpc.bus`, `mpc.gen`,
+`mpc.branch` and — when any generator carries a cost — `mpc.gencost`, column for column the
+[importer's map](#column-map-mpcbus): bus numbers from `bus-<n>` ids, `PD`/`QD` and `GS`/`BS`
+summed over the bus's in-service loads and shunts, `AREA`/`ZONE` from the labels (as numbers
+when every label is one), `GEN_STATUS`/`BR_STATUS` from `in_service`, `RATE_A` from
+`rating_mva` (0 when `None`), `RATE_C` from `rating_emergency_mva`, `TAP` 0 for no tap,
+`ANGMIN`/`ANGMAX` from the angle limits (`-360`/`360` for none), generator rows padded with
+zeros over `PC1`…`APF`, and `gencost` rows zero-padded to one width (`NCOST` governs). Numbers
+are written with Python's shortest round-trip `repr`, which MATLAB and Octave read.
+
+**Every bundled case round-trips losslessly**: `matpower.loads(matpower.dumps(net))` equals
+`net` for each `.m` case the package ships, derived ids and costs included, with an empty
+report — except `derived/case14_island`, whose out-of-service `pv` bus the format spells
+`BUS_TYPE 4` (`tests/unit/test_io_matpower_export.py`, which also reads the written file with
+the parity tier's independent `numpy` reader).
+
+### Warnings (dropped or defaulted, never silently)
+
+| Code | When |
+| --- | --- |
+| `MATPOWER_ID_RENUMBERED` | A bus id that is not `bus-<n>` (or `<n>` not unique) is numbered by position; a generator or branch id that is not its `gen-<row>` / `branch-<row>` reads back renamed; area or zone labels that are not all positive integers are numbered by first appearance. |
+| `ELEMENT_MERGED` | Several in-service loads (shunts) at one bus become the bus row's single `PD`/`QD` (`GS`/`BS`); a single one whose id is not `load-<n>` / `shunt-<n>` reads back renamed. |
+| `ELEMENT_DROPPED` | Storage; an out-of-service or all-zero load or shunt (no status column, and a zero row is read as no element); a zone no bus names. |
+| `FIELD_DROPPED` | Generator ramps, minimum up/down times, start-up tiers, reserve caps and initial state; `Zone.name`; a `rating_emergency_mva` equal to `rating_mva` (`RATE_C` is read only where it exceeds `RATE_A`); an angle limit of exactly ±360 (the "no limit" spelling); the `pv` type of an out-of-service bus; `kind = "transformer"` at nominal tap and shift (MATPOWER tells a transformer by its `TAP`). |
+| `FIELD_DEFAULTED` | A bus with no stored `vm_pu`/`va_deg` is written at `1.0`/`0`; one with no voltage limits at `VMAX 1.1`/`VMIN 0.9`; both read back as values. |
+| `COST_DEFAULTED` | Some generators carry a cost and others none: the latter get a zero polynomial (`2 0 0 2 0 0`), since `gencost` needs one row per generator; it reads back as a cost. With no costs at all the section is omitted. |
+| `BID_DROPPED` | Load bids; MATPOWER has no demand-side costs. |
+
+### Example
+
+```python
+from mambo_power import cases
+from mambo_power.io import matpower
+
+net = cases.load("derived/case14_rated")
+text, report = matpower.dumps_with_report(net)
+print(len(report.warnings), matpower.loads(text) == net)
+print(text.splitlines()[5])
+```
+
+```text
+0 True
+mpc.baseMVA = 100;
 ```
 
 ## pandapower JSON

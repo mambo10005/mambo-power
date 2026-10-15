@@ -15,7 +15,7 @@ import pytest
 
 from mambo_power import cases, jobs
 from mambo_power.cli import main
-from mambo_power.io import native, psse_raw
+from mambo_power.io import matpower, native, psse_raw
 from mambo_power.results import DcPowerFlowResult, ScopfDcResult
 
 
@@ -89,8 +89,6 @@ def test_usage_errors_go_to_stderr_with_exit_status_1(capsys: pytest.CaptureFixt
     assert "--options is not valid JSON" in capsys.readouterr().err
     assert main(["solve", "pf.dc", "case14", "--options", "[1]"]) == 1
     assert "must be a JSON object" in capsys.readouterr().err
-    assert main(["convert", "case14", "out.m"]) == 1
-    assert "read-only" in capsys.readouterr().err
     assert main(["convert", "case14", "out.xyz"]) == 1
     assert "cannot infer the format" in capsys.readouterr().err
     with pytest.raises(SystemExit) as exc:
@@ -145,6 +143,14 @@ def test_convert_round_trips_through_raw_json_and_csv(
     # a bundled RAW case, by name, with --to overriding the extension
     assert main(["convert", "case14_v33.raw", str(tmp_path / "x.txt"), "--to", "json"]) == 0
     assert native.load(tmp_path / "x.txt").buses[0].id == "bus-1"
+
+    # MATPOWER is written too (ADR-032), losslessly for a case the importer produced
+    m = tmp_path / "c14.m"
+    assert main(["convert", "case14", str(m)]) == 0
+    err = capsys.readouterr().err
+    assert "BASE_KV_REPLACED" in err and "DROPPED" not in err  # the import's repair, no loss
+    assert matpower.load(m) == cases.load("case14")
+    assert main(["convert", str(m), str(tmp_path / "again.m"), "--strict"]) == 0  # lossless
 
 
 def test_python_dash_m_runs_the_same_program() -> None:

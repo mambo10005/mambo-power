@@ -46,6 +46,10 @@ ImportIssueCode = Literal[
     "FIELD_DROPPED",
     "COST_DROPPED",
     "BID_DROPPED",
+    # io.matpower_export (ADR-032)
+    "MATPOWER_ID_RENUMBERED",
+    "ELEMENT_MERGED",
+    "COST_DEFAULTED",
     # io.pypsa (wave M8, W3) — see ``mambo_power.io.pypsa.CODES``
     "PYPSA_PWL_COST_DROPPED",
     "PYPSA_COST_DEGREE_DROPPED",

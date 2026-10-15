@@ -10,7 +10,7 @@ from typing import get_args
 
 import pytest
 
-from mambo_power.io import limitations
+from mambo_power.io import limitations, matpower
 from mambo_power.model import ImportIssueCode
 
 FORMATS_MD = Path(__file__).parents[2] / "docs" / "manual" / "formats.md"
@@ -44,8 +44,13 @@ def test_every_registered_code_is_a_known_issue_code(module_name: str, code: str
 
 
 def test_matpower_registers_exactly_the_codes_it_emits() -> None:
-    src = (Path(limitations.__file__).parent / "matpower.py").read_text(encoding="utf-8")
+    here = Path(limitations.__file__).parent
+    src = (here / "matpower.py").read_text(encoding="utf-8")
+    src += (here / "matpower_export.py").read_text(encoding="utf-8")
     emitted = {c for c in get_args(ImportIssueCode) if f'code="{c}"' in src}
+    emitted |= {  # the exporter emits through its warn(code, ...) helper
+        c for c in get_args(ImportIssueCode) if f'"{c}",' in src and c in matpower.EXPORT_CODES
+    }
     emitted.add("ISLAND_DEACTIVATED")  # emitted through model.repair_islands, which matpower calls
     assert set(limitations.LIMITATIONS["io.matpower"]) == emitted
 

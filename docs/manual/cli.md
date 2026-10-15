@@ -22,7 +22,7 @@ reported issues under `--strict`, or a usage error reported on stderr) or 2 (bad
 `case14_v33.raw`) or a path, and infer the format from the path: `.m` MATPOWER, `.raw` PSS/E,
 `.json` the native JSON, a directory the CSV bundle. pandapower JSON shares the `.json`
 extension, so it is named: `--from pandapower` / `--to pandapower` (and needs pandapower
-installed). MATPOWER is read-only, as in the package. A conversion prints every import and
+installed). A conversion prints every import and
 export report issue — a dropped cost, a renumbered id, a defaulted field — one per line on
 stderr, so a lossy conversion is never silent; `--strict` turns any issue into exit status 1.
 
