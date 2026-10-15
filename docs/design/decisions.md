@@ -1367,6 +1367,46 @@ AC clearing is what prices demand response against losses and voltage support.
 not a bid; reusing the generator columns with a sign flip (the pseudo-generator trick ADR-007
 rejected for the same reasons).
 
+## ADR-031 — The nodal market at AC physics settles at the P-balance duals, with the surplus undecomposed
+
+**Status:** accepted 2026-10-14.
+
+**Context.** ADR-030 gave the AC-OPF elastic demand and left the settlement to "the AC
+market". The DC nodal market (ADR-007) settles at PTDF-decomposed LMPs with a congestion rent
+that the settlement identity ties to the flow duals; at AC the price carries losses and voltage
+support too, and no such identity closes without loss factors.
+
+**Decision.** `market.solve_nodal_ac(scenario, MarketNodalAcOptions(opf=...))`, kind
+`market.nodal_ac`.
+
+1. **The clearing is `solve_ac_opf` with `elastic_demand` forced on.** No second solver, no
+   second extraction of costs and bids; the market layer is rows plus settlement, as in
+   `market.nodal`.
+2. **Settlement at the AC LMP**, the P-balance dual: `total_load_payment`,
+   `total_generator_receipts`, and `merchandising_surplus` as their difference — the loss rent
+   plus the congestion rent. It is reported as one number, not decomposed: a loss/congestion
+   split needs loss factors at a reference bus and changes with the bus chosen, where the DC
+   split is unique.
+3. **Reactive power is settled beside, not inside.** `total_reactive_payment` and
+   `total_reactive_receipts` at the Q-balance duals; the active surplus stays comparable to
+   the DC congestion rent.
+4. **The result carries the AC rows** (`AcGenDispatchResult`, `AcLoadDispatchResult`,
+   `AcBranchFlowResult`) and `BusLmpAcResult` (`lmp`, `lmp_q`, `vm_pu`, `va_deg`) rather than
+   the DC row types: a reader comparing the two markets sees exactly what AC adds.
+
+**Consequences.**
+
+1. **The two markets coincide where they should.** Lossless and uncongested: one price,
+   zero surplus. Lossless and congested: the surplus equals the DC market's congestion rent on
+   the same problem. Lossy: positive surplus with nothing congested, above the cost of the
+   losses themselves — marginal-loss pricing over-recovers, the known property.
+2. **No multiperiod or zonal AC market.** Both are reachable the same way (the clearing is
+   the solver's) and neither is claimed.
+
+*Rejected:* decomposing the AC LMP into energy, loss and congestion components (reference-bus
+dependent); a loss-allocation scheme returning the surplus to participants (a market-design
+choice, not a clearing).
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

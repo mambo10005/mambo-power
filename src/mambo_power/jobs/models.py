@@ -34,6 +34,7 @@ from mambo_power.results import (
     DcPowerFlowResult,
     MarketAgentsResult,
     MarketMultiperiodResult,
+    MarketNodalAcResult,
     MarketNodalResult,
     MarketZonalResult,
     N1Result,
@@ -53,6 +54,7 @@ ResultModel = (
     | N1Result
     | N2Result
     | MarketNodalResult
+    | MarketNodalAcResult
     | MarketMultiperiodResult
     | MarketZonalResult
     | MarketAgentsResult

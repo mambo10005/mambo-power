@@ -32,6 +32,7 @@ from mambo_power.contingency import N1Options, N2Options, n1, n2
 from mambo_power.market.agents import AgentSetError, MarketAgentsOptions, solve_agents
 from mambo_power.market.multiperiod import MarketMultiperiodOptions, solve_multiperiod
 from mambo_power.market.nodal import MarketNodalOptions, solve_nodal
+from mambo_power.market.nodal_ac import MarketNodalAcOptions, solve_nodal_ac
 from mambo_power.market.zonal import MarketZonalOptions, UnzonedBusError, solve_zonal
 from mambo_power.model import NetworkValidationError, Scenario, ValidationIssue
 from mambo_power.opf import (
@@ -48,6 +49,7 @@ from mambo_power.results import (
     DcPowerFlowResult,
     MarketAgentsResult,
     MarketMultiperiodResult,
+    MarketNodalAcResult,
     MarketNodalResult,
     MarketZonalResult,
     N1Result,
@@ -182,6 +184,16 @@ def _run_n1(scenario: Scenario, options: BaseModel | None) -> BaseModel:
     """Runner for ``n1``: :func:`mambo_power.contingency.n1`."""
     assert isinstance(options, N1Options)  # guaranteed by run(): validated into options_model
     return n1(scenario.network, options=options)
+
+
+def _run_market_nodal_ac(scenario: Scenario, options: BaseModel | None) -> BaseModel:
+    """Runner for ``market.nodal_ac``: :func:`mambo_power.market.nodal_ac.solve_nodal_ac`
+    (ADR-031); a non-Optimal status is translated like ``opf.ac``'s."""
+    assert isinstance(options, MarketNodalAcOptions)
+    result = solve_nodal_ac(scenario, options=options)
+    if result.status != "Optimal":
+        _translate_non_optimal_status("market.nodal_ac", result.status, result.message)
+    return result
 
 
 def _run_market_nodal(scenario: Scenario, options: BaseModel | None) -> BaseModel:
@@ -351,6 +363,14 @@ register(
         options_model=MarketNodalOptions,
         result_model=MarketNodalResult,
         runner=_run_market_nodal,
+    )
+)
+register(
+    KindSpec(
+        kind="market.nodal_ac",
+        options_model=MarketNodalAcOptions,
+        result_model=MarketNodalAcResult,
+        runner=_run_market_nodal_ac,
     )
 )
 register(

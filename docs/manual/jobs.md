@@ -33,7 +33,7 @@ survive that boundary. `jobs` turns every outcome into data.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `kind` | `str` | One of the keys of `KINDS`: `"pf.ac"`, `"pf.dc"` in M2; `"opf.dc"`, `"n1"` in M3; `"market.nodal"` in M4; `"market.multiperiod"` in M5; `"market.zonal"` in M6; `"market.agents"` in M7; `"opf.scopf"`, `"opf.ac"` and `"n2"` post-epic (ADR-016, ADR-018, ADR-024). |
+| `kind` | `str` | One of the keys of `KINDS`: `"pf.ac"`, `"pf.dc"` in M2; `"opf.dc"`, `"n1"` in M3; `"market.nodal"` in M4; `"market.multiperiod"` in M5; `"market.zonal"` in M6; `"market.agents"` in M7; `"opf.scopf"`, `"opf.ac"`, `"n2"` and `"market.nodal_ac"` post-epic (ADR-016, ADR-018, ADR-024, ADR-031). |
 | `network` | `Network \| None` | The network to solve (inline; the request is self-contained). Mutually exclusive with `scenario`. |
 | `scenario` | `Scenario \| None` | The scenario to solve — a network plus its `periods`. Mutually exclusive with `network`. |
 | `options` | `dict[str, Any]` | Kind-specific options, validated against the kind's options model (`AcOptions` for `pf.ac`; none for `pf.dc`). Unknown keys are a failure, not silently ignored. Default `{}`. |
@@ -103,7 +103,7 @@ discriminator lives on the parent, not inside the result.
 | `VALIDATION` (no `issues`) | An `opf.dc` or `market.*` kind was given an in-service generator with no `Generator.cost` (`opf.MissingCostError`, wave M8): the message names every such generator; `issues` is `None` because a missing cost is legal model data, not one of the model's own `ValidationCode`s. Set `Generator.cost` or take the generator out of service. |
 | `NO_SLACK_GENERATOR` | The slack bus has no in-service generator (`NoSlackGeneratorError` from `effective_roles`). |
 | `UNSOLVABLE_NETWORK` | A valid network the numerics it was handed to cannot solve, e.g. DC on a branch with `x == 0` (`UnsolvableNetworkError`) — user data, not a solver bug. |
-| `INFEASIBLE_LP` | An `opf.dc`, `opf.ac`, `opf.scopf`, `market.nodal`, `market.multiperiod`, `market.zonal` or `market.agents` LP/QP came back with a non-`"Optimal"`, non-`"Unbounded"` status: there is no feasible dispatch at all, so there is nothing to return. For `market.agents` this is the round the loop stopped in, whichever round that was. |
+| `INFEASIBLE_LP` | An `opf.dc`, `opf.ac`, `opf.scopf`, `market.nodal`, `market.nodal_ac`, `market.multiperiod`, `market.zonal` or `market.agents` LP/QP came back with a non-`"Optimal"`, non-`"Unbounded"` status: there is no feasible dispatch at all, so there is nothing to return. For `market.agents` this is the round the loop stopped in, whichever round that was. |
 | `UNBOUNDED_LP` | The same seven kinds, status `"Unbounded"`. |
 | `BAD_REQUEST` | `run_json` only: the text is not valid JSON, not a `SolveRequest`, or carries neither/both of `network` and `scenario`. Also JSON that names the same key twice in one object, at any depth and for every kind (a generator listed twice under `options.strategies`, say): the message names the key and its path, and the request is never run on the last-wins value a JSON parser would otherwise keep silently. |
 | `INTERNAL` | Anything else the runner raised (singular matrix, a bug): `"ExceptionType: message"`. |
@@ -202,7 +202,7 @@ for name, spec in jobs.KINDS.items():
 ```
 
 ```text
-['market.agents', 'market.multiperiod', 'market.nodal', 'market.zonal', 'n1', 'n2', 'opf.ac', 'opf.dc', 'opf.scopf', 'pf.ac', 'pf.dc']
+['market.agents', 'market.multiperiod', 'market.nodal', 'market.nodal_ac', 'market.zonal', 'n1', 'n2', 'opf.ac', 'opf.dc', 'opf.scopf', 'pf.ac', 'pf.dc']
 pf.ac AcOptions AcPowerFlowResult
 pf.dc None DcPowerFlowResult
 opf.dc OpfDcOptions OpfDcResult
@@ -211,6 +211,7 @@ opf.scopf ScopfOptions ScopfDcResult
 n1 N1Options N1Result
 n2 N2Options N2Result
 market.nodal MarketNodalOptions MarketNodalResult
+market.nodal_ac MarketNodalAcOptions MarketNodalAcResult
 market.multiperiod MarketMultiperiodOptions MarketMultiperiodResult
 market.zonal MarketZonalOptions MarketZonalResult
 market.agents MarketAgentsOptions MarketAgentsResult
@@ -269,7 +270,7 @@ print(noslack.status, noslack.error.code, "|", noslack.error.message)
 ```
 
 ```text
-failed UNKNOWN_KIND | unknown kind "pf.telepathy"; registered kinds: market.agents, market.multiperiod, market.nodal, market.zonal, n1, n2, opf.ac, opf.dc, opf.scopf, pf.ac, pf.dc
+failed UNKNOWN_KIND | unknown kind "pf.telepathy"; registered kinds: market.agents, market.multiperiod, market.nodal, market.nodal_ac, market.zonal, n1, n2, opf.ac, opf.dc, opf.scopf, pf.ac, pf.dc
 failed BAD_OPTIONS | [{'type': 'float_parsing', 'loc': ['tol'], 'msg': 'Input should be a valid number, unable to parse string as a number'}]
 failed VALIDATION | ['DANGLING_REF at branches[0].to_bus: branch "branch-1": to_bus references missing bus "bus-999"']
 failed NO_SLACK_GENERATOR | slack bus "bus-1" (position 0) has no in-service generator; a power flow cannot close the balance

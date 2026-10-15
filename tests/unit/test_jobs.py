@@ -96,6 +96,7 @@ KNOWN_KINDS = {
     "n1",
     "n2",
     "market.nodal",
+    "market.nodal_ac",
     "market.multiperiod",
     "market.zonal",
     "market.agents",
@@ -580,6 +581,7 @@ ALL_EIGHT_KINDS = (
     "opf.dc",
     "n1",
     "market.nodal",
+    "market.nodal_ac",
     "market.multiperiod",
     "market.zonal",
     "market.agents",
@@ -600,7 +602,7 @@ def test_kinds_registers_market_multiperiod_as_the_sixth_kind() -> None:
     # NOTE (M6/S7b/AC-7, bumped again M7/S7/AC-6): 6 -> 7 -> 8, the same necessary-count-edit
     # treatment KNOWN_KINDS documents above -- an 8th kind (market.agents) is now registered too,
     # and this pre-existing exact-count assertion would otherwise assert something now false.
-    assert len(KINDS) == 11  # 8 at M7 close; opf.scopf (ADR-016) 9th, opf.ac (ADR-018) 10th
+    assert len(KINDS) == 12  # 8 at M7 close; opf.scopf, opf.ac, n2, market.nodal_ac since
     assert "market.multiperiod" in KINDS
     spec = KINDS["market.multiperiod"]
     assert spec.options_model is MarketMultiperiodOptions
@@ -830,7 +832,7 @@ def _case30_zonal_options(net: Network) -> MarketZonalOptions:
 def test_kinds_registers_market_zonal_as_the_seventh_kind() -> None:
     # NOTE (M7/S7/AC-6): bumped 7 -> 8, the same treatment given to the 6th kind's own count
     # assertion above -- an 8th kind (market.agents) is now registered too.
-    assert len(KINDS) == 11  # 8 at M7 close; opf.scopf (ADR-016) 9th, opf.ac (ADR-018) 10th
+    assert len(KINDS) == 12  # 8 at M7 close; opf.scopf, opf.ac, n2, market.nodal_ac since
     assert "market.zonal" in KINDS
     spec = KINDS["market.zonal"]
     assert spec.options_model is MarketZonalOptions
@@ -1200,7 +1202,7 @@ def _markup_options(
 
 # --- KINDS contract: the 8th kind -----------------------------------------------------------------
 def test_kinds_registers_market_agents_as_the_eighth_kind() -> None:
-    assert len(KINDS) == 11  # 8 at M7 close; opf.scopf (ADR-016) 9th, opf.ac (ADR-018) 10th
+    assert len(KINDS) == 12  # 8 at M7 close; opf.scopf, opf.ac, n2, market.nodal_ac since
     assert "market.agents" in KINDS
     spec = KINDS["market.agents"]
     assert spec.options_model is MarketAgentsOptions

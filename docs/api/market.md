@@ -18,6 +18,10 @@ three-solve chain, corridors, and the three separated gap figures.
 
 ::: mambo_power.market.nodal
 
+## The nodal market at AC physics
+
+::: mambo_power.market.nodal_ac
+
 ## Multiperiod clearing over a horizon
 
 ::: mambo_power.market.multiperiod

@@ -96,6 +96,15 @@ per-load dispatch (`LoadDispatchResult`, alongside the reused `GenDispatchResult
 as every other result on this page. See the nodal-market manual page for the full field
 reference and the settlement identity these fields satisfy.
 
+## `MarketNodalAcResult`
+
+`market.solve_nodal_ac` (see [Manual › Nodal market › The AC clearing](market.md#the-ac-clearing-solve_nodal_ac))
+returns the AC-OPF's rows — `AcGenDispatchResult`, `AcLoadDispatchResult`,
+`AcBranchFlowResult` — with `BusLmpAcResult` (`lmp`, `lmp_q`, the voltage) in place of the DC
+`BusLmpResult`, and the settlement at AC prices: `total_load_payment`,
+`total_generator_receipts`, `merchandising_surplus` (loss rent plus congestion rent) and the
+reactive pair `total_reactive_payment` / `total_reactive_receipts`.
+
 ## `MarketMultiperiodResult`
 
 `market.solve_multiperiod` (see [Manual › Multiperiod market](multiperiod.md)) clears a whole

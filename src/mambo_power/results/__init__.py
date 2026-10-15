@@ -25,7 +25,12 @@ from mambo_power.results.feasibility import (
     feasibility_report,
 )
 from mambo_power.results.from_arrays import ac_result_from_arrays, dc_result_from_arrays
-from mambo_power.results.market import LoadDispatchResult, MarketNodalResult
+from mambo_power.results.market import (
+    BusLmpAcResult,
+    LoadDispatchResult,
+    MarketNodalAcResult,
+    MarketNodalResult,
+)
 from mambo_power.results.multiperiod import (
     GenCommitmentResult,
     GenPeriodDispatchResult,
@@ -81,6 +86,7 @@ __all__ = [
     "AcPowerFlowResult",
     "AgentOfferResult",
     "BranchResult",
+    "BusLmpAcResult",
     "BusLmpResult",
     "CorrectiveActionResult",
     "BusResult",
@@ -97,6 +103,7 @@ __all__ = [
     "LoadRedispatchResult",
     "MarketAgentsResult",
     "MarketMultiperiodResult",
+    "MarketNodalAcResult",
     "MarketNodalResult",
     "MarketPeriodResult",
     "MarketZonalResult",

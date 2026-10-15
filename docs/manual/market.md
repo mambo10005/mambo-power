@@ -268,10 +268,67 @@ only part of a load's demand while the rest stays must-serve, split it into two 
 at the same bus: one with `bid=None` for the fixed portion, one bid-carrying for the elastic
 remainder (`market.nodal` sums both onto that bus like any other two loads).
 
+## The AC clearing: `solve_nodal_ac`
+
+`market.solve_nodal_ac(scenario)` ([ADR-031](../design/decisions.md)) is the same market at
+AC physics: the [AC-OPF with elastic demand](ac-opf.md#elastic-demand) clears the generator
+costs against the load bids, and the result is settled at the AC LMPs — the P-balance duals,
+losses and voltage support included. `MarketNodalAcOptions.opf` carries the AC-OPF's own solver
+options (its `elastic_demand` flag is forced on). The result, `MarketNodalAcResult`, has the AC
+rows (`generators` with `q_mvar`, `loads` with served `p_mw`/`q_mvar` and an `elastic` flag,
+`buses` with `lmp`, `lmp_q` and the voltage, `branches` with apparent flows) and the settlement:
+
+* `total_load_payment` — `Σ_d LMP(bus_d) · p_d` over every load's served demand;
+* `total_generator_receipts` — `Σ_g LMP(bus_g) · p_g`;
+* `merchandising_surplus` — the difference. In the DC market this is the congestion rent
+  alone; here it is the **loss rent plus the congestion rent**. Marginal-loss pricing
+  over-recovers the losses (the marginal loss factor is about twice the average), so the
+  surplus is positive on an uncongested lossy network and zero only when the network is
+  lossless and uncongested — where the AC and DC clearings coincide, and the surplus equals
+  `MarketNodalResult.congestion_rent` on the same problem (`tests/unit/test_market_nodal_ac.py`);
+* `total_reactive_payment` / `total_reactive_receipts` — the same sums at `lmp_q` over
+  `q_mvar`, reported beside the active settlement rather than folded into it.
+
+No energy/loss/congestion decomposition of the AC LMP is reported: unlike the DC price's PTDF
+decomposition it depends on the reference bus chosen for the loss factors, and the settlement
+does not need one.
+
+case14 with three loads bidding a flat 38 $/MWh, cleared both ways:
+
+```python
+from mambo_power import cases, market
+from mambo_power.model import PolynomialBid, Scenario
+
+net = cases.load("case14")
+for load in net.loads[:3]:  # load-2, load-3, load-4
+    load.bid = PolynomialBid(coefficients=[38.0, 0.0])
+ac = market.solve_nodal_ac(Scenario(network=net))
+dc = market.solve_nodal(Scenario(network=net))
+print(f"AC: payment {ac.total_load_payment:.2f}, receipts {ac.total_generator_receipts:.2f}, "
+      f"surplus {ac.merchandising_surplus:.2f} $/h over {ac.losses_mw:.2f} MW of losses")
+print(f"DC: payment {dc.total_load_payment:.2f}, receipts {dc.total_generator_receipts:.2f}, "
+      f"congestion rent {dc.congestion_rent:.2f} $/h")
+print("served AC:", [(ld.id, round(ld.p_mw, 2)) for ld in ac.loads if ld.elastic])
+print("       DC:", [(ld.id, round(ld.p_mw, 2)) for ld in dc.loads[:3]])
+```
+
+```text
+AC: payment 7580.51, receipts 7307.45, surplus 273.06 $/h over 7.40 MW of losses
+DC: payment 9316.06, receipts 9316.06, congestion rent 0.00 $/h
+served AC: [('load-2', 21.7), ('load-3', 45.6), ('load-4', 37.37)]
+       DC: [('load-2', 21.7), ('load-3', 80.36), ('load-4', 47.8)]
+```
+
+The DC market has one price (38 $/MWh, the marginal bid, nothing congested) and settles to the
+cent; the AC market prices delivery — 35 $/MWh at the slack end, 39 at the far end — so the two
+far loads take less than their bids would buy at the DC price, and the operator is left holding
+273 $/h of loss rent.
+
 ## Jobs API
 
 `market.nodal` is a registered [jobs](jobs.md) kind: `jobs.run(jobs.SolveRequest(kind=
 "market.nodal", network=net))` returns a `MarketNodalResult`. Since wave M5 the `Network`-to-
 `Scenario` wrap happens at `SolveRequest.resolved_scenario` rather than inside the runner, so a
 request may equally carry `scenario=...` directly; either way this kind clears one period. See [Jobs API › Failures are
-data](jobs.md#failures-are-data) for the structured-failure shape.
+data](jobs.md#failures-are-data) for the structured-failure shape. `market.nodal_ac` is
+registered the same way, with `MarketNodalAcOptions` and a `MarketNodalAcResult`.
