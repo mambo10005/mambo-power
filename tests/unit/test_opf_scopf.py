@@ -275,6 +275,7 @@ def test_generator_outages_off_secures_branches_only() -> None:
         "corrective": False,
         "quadratic_segments": 16,
         "branch_pairs": False,
+        "load_shed_cost": None,
     }
 
 

@@ -284,6 +284,14 @@ class CorrectiveRows:
     """``(n_rows,)`` fixed (load, shunt, phase-shift) contribution to each corrected flow."""
     rating_mw: FloatArray
     """``(n_rows,)`` normal rating of each row's monitored branch, MW."""
+    shed_cost: float | None = None
+    """Value of lost load, $/MWh (ADR-033): when given, every block also gets one *load-shed*
+    column per bus, ``0 <= s_i <= shed_max_mw[i]``, entering that block's balance as an
+    injection (shed demand need not be served), its corrected flow rows through the same bus
+    sensitivity, and the objective at this price. ``None`` (the default) allows no shedding."""
+    shed_max_mw: FloatArray = field(default_factory=lambda: np.zeros(0))
+    """``(n_bus,)`` fixed load each bus may shed in a corrected state, MW; ignored without
+    ``shed_cost``."""
 
     @property
     def n_blocks(self) -> int:
@@ -337,6 +345,12 @@ class OpfSolution:
     corrective_dispatch_mw: FloatArray = field(default_factory=lambda: np.zeros((0, 0)))
     """``(n_blocks, n_gen)`` corrected dispatch per :class:`CorrectiveRows` block (ADR-021),
     MW; shape ``(0, 0)`` without a corrective block or when ``status != "Optimal"``."""
+    corrective_shed_mw: FloatArray = field(default_factory=lambda: np.zeros((0, 0)))
+    """``(n_blocks, n_bus)`` load shed per block and bus (ADR-033), MW; shape ``(0, 0)``
+    without ``CorrectiveRows.shed_cost`` or when ``status != "Optimal"``."""
+    corrective_shed_cost: float = 0.0
+    """``shed_cost × Σ corrective_shed_mw``, $/h — the shedding the LP paid for, not part of
+    ``objective_cost`` (which stays the base dispatch's generation cost)."""
 
 
 @dataclass(frozen=True)
@@ -1119,6 +1133,8 @@ def dc_opf(
     # dispatch, in that order, block after block, right after the security rows.
     n_blocks = corrective.n_blocks if corrective is not None else 0
     corrective_cols: list[ColArray] = []
+    corrective_shed_cols: list[ColArray] = []
+    shed_buses = np.zeros(0, dtype=np.int64)
     corrective_row_index: list[int] = []  # LP row of each corrected flow row, caller's order
     corrective_balance_index: list[int] = []
     if corrective is not None and n_blocks:
@@ -1132,6 +1148,14 @@ def dc_opf(
         next_col = h.getNumCol()
         next_row = n_rows + n_security
         elastic_load_bus = arr.load_bus[elastic_idx_arr]
+        shedding = corrective.shed_cost is not None
+        if shedding and corrective.shed_max_mw.shape != (arr.n_bus,):
+            raise ValueError(f"corrective shed_max_mw must have shape ({arr.n_bus},), bus order")
+        shed_buses = (
+            np.flatnonzero(corrective.shed_max_mw > 0.0)
+            if shedding
+            else np.zeros(0, dtype=np.int64)
+        )
         for b in range(n_blocks):
             cols = np.arange(next_col, next_col + n_gen, dtype=np.int32)
             next_col += n_gen
@@ -1141,7 +1165,18 @@ def dc_opf(
                 lower[lost] = upper[lost] = 0.0
             h.addVars(n_gen, lower, upper)
             corrective_cols.append(cols)
-            _add_rows(h, _balance_row(cols, demand_cols, total_fixed))
+            # load shed (ADR-033): an injection in this block's balance and flow rows, at VOLL
+            shed_cols = np.arange(next_col, next_col + shed_buses.size, dtype=np.int32)
+            if shed_buses.size:
+                next_col += shed_buses.size
+                h.addVars(
+                    shed_buses.size, np.zeros(shed_buses.size), corrective.shed_max_mw[shed_buses]
+                )
+                h.changeColsCost(
+                    shed_buses.size, shed_cols, np.full(shed_buses.size, corrective.shed_cost)
+                )
+            corrective_shed_cols.append(shed_cols)
+            _add_rows(h, _balance_row(np.concatenate([cols, shed_cols]), demand_cols, total_fixed))
             corrective_balance_index.append(next_row)
             next_row += 1
             rows = np.flatnonzero(corrective.block_of_row == b)
@@ -1154,7 +1189,8 @@ def dc_opf(
                     -sensitivity[:, elastic_load_bus] if n_demand else np.zeros((rows.size, 0))
                 )
                 starts, indices, values = _dense_csr(
-                    np.hstack([coeffs, withdrawals]), np.concatenate([cols, demand_cols])
+                    np.hstack([coeffs, withdrawals, sensitivity[:, shed_buses]]),
+                    np.concatenate([cols, demand_cols, shed_cols]),
                 )
                 _add_rows(
                     h,
@@ -1241,6 +1277,13 @@ def dc_opf(
         if corrective_cols
         else np.zeros((0, 0))
     )
+    corrective_shed_mw = np.zeros((0, 0))
+    corrective_shed_cost = 0.0
+    if corrective is not None and corrective.shed_cost is not None and corrective_cols:
+        corrective_shed_mw = np.zeros((n_blocks, arr.n_bus))
+        for b, shed_cols in enumerate(corrective_shed_cols):
+            corrective_shed_mw[b, shed_buses] = [sol.col_value[c] for c in shed_cols]
+        corrective_shed_cost = float(corrective.shed_cost * np.sum(corrective_shed_mw))
 
     # objective_cost stays "total generation cost only" (unchanged M2/M3 semantics, docstring on
     # OpfSolution.objective_cost) even with elastic demand in the same solve — computed directly
@@ -1260,4 +1303,6 @@ def dc_opf(
         demand_dispatch_mw=demand_dispatch_mw,
         demand_bound=demand_bound,
         corrective_dispatch_mw=corrective_dispatch_mw,
+        corrective_shed_mw=corrective_shed_mw,
+        corrective_shed_cost=corrective_shed_cost,
     )

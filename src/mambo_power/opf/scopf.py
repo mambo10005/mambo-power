@@ -50,7 +50,7 @@ from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mambo_power.contingency.n1 import (
     VIOLATION_TOL_MVA,
@@ -119,6 +119,20 @@ class ScopfOptions(BaseModel):
         "cost is linearised into between p_min and p_max: HiGHS's QP solver does not survive "
         "the corrective column blocks, so the corrective problem is solved as an LP.",
     )
+    load_shed_cost: float | None = Field(
+        default=None,
+        gt=0.0,
+        description="Value of lost load, $/MWh (ADR-033): with corrective, a corrected state "
+        "may also shed fixed load at any bus, paid at this price in the objective, so that an "
+        "outage no redispatch can cover is served at a cost instead of making the problem "
+        "infeasible. None allows no shedding. Requires corrective.",
+    )
+
+    @model_validator(mode="after")
+    def _shedding_is_corrective(self) -> ScopfOptions:
+        if self.load_shed_cost is not None and not self.corrective:
+            raise ValueError("load_shed_cost is a corrective action: it requires corrective=True")
+        return self
 
 
 @dataclass(frozen=True)
@@ -175,6 +189,11 @@ class ScopfSolution:
     corrected_flow_mw: FloatArray = field(default_factory=lambda: np.zeros(0))
     """Signed corrected flow of each pair in ``corrected_contingencies`` at the final corrected
     dispatches, MW."""
+    corrected_shed_mw: FloatArray = field(default_factory=lambda: np.zeros((0, 0)))
+    """``(n_blocks, n_bus)`` load shed in each corrected state (ADR-033), MW; shape ``(0, 0)``
+    without ``options.load_shed_cost``."""
+    shed_cost: float = 0.0
+    """``load_shed_cost × Σ corrected_shed_mw``, $/h, the LP's price of the shedding; 0 without."""
 
 
 def corrective_rows(
@@ -185,15 +204,19 @@ def corrective_rows(
     contingencies: Sequence[Contingency],
     ramp_up_mw: FloatArray,
     ramp_down_mw: FloatArray,
+    shed_cost: float | None = None,
 ) -> CorrectiveRows:
     """Build the :class:`~mambo_power.opf.dc_opf.CorrectiveRows` block (ADR-021): one block per
     entry of *outages*, one corrected flow row per entry of *contingencies* (each of which names
     an outage in *outages*), held to the **normal** rating. The sensitivities and constants are
-    :func:`security_rows`'s; the lost unit's column is zeroed by ``dc_opf`` itself.
+    :func:`security_rows`'s; the lost unit's column is zeroed by ``dc_opf`` itself. With
+    *shed_cost* (ADR-033) every bus may shed its fixed load in a corrected state at that price.
     """
     block_index = {outage: b for b, outage in enumerate(outages)}
     rows = security_rows(arr, ptdf_matrix, lodf_matrix, contingencies)
     return CorrectiveRows(
+        shed_cost=shed_cost,
+        shed_max_mw=np.maximum(arr.p_load_pu * arr.base_mva, 0.0),
         lost_gen=np.array(
             [outage if kind == "generator" else -1 for kind, outage in outages], dtype=np.int64
         ),
@@ -214,11 +237,14 @@ def _corrected_flows_mw(
     lodf_matrix: FloatArray,
     outage: tuple[OutageKind, int],
     dispatch_mw: FloatArray,
+    shed_mw: FloatArray | None = None,
 ) -> FloatArray:
     """Signed flow of every branch under *outage* at a corrected *dispatch_mw*, which balances
-    the load with the lost unit at zero: no slack pickup, so a generator outage's flows are the
-    plain flows of that dispatch."""
+    the load (less *shed_mw* per bus, ADR-033) with the lost unit at zero: no slack pickup, so a
+    generator outage's flows are the plain flows of that dispatch."""
     flows = dispatch_flows_mw(arr, dispatch_mw, ptdf_matrix)
+    if shed_mw is not None and shed_mw.size:
+        flows = flows + ptdf_matrix @ shed_mw
     kind, k = outage
     if kind == "branch":
         flows = flows + lodf_matrix[:, k] * flows[k]
@@ -363,6 +389,9 @@ def scopf_dc(
     base_cost: float | None = None
     iterations = 0
 
+    def shed_of(solution: OpfSolution, b: int) -> FloatArray | None:
+        return solution.corrective_shed_mw[b] if solution.corrective_shed_mw.size else None
+
     def finish(
         status: str, solution: OpfSolution, screen: N1Screen, message: str | None
     ) -> ScopfSolution:
@@ -374,6 +403,7 @@ def scopf_dc(
                     lodf_matrix,
                     (c.kind, c.outage),
                     solution.corrective_dispatch_mw[outages.index((c.kind, c.outage))],
+                    shed_of(solution, outages.index((c.kind, c.outage))),
                 )[c.monitored]
                 for c in corrected
             ]
@@ -392,6 +422,8 @@ def scopf_dc(
             corrected_contingencies=list(corrected),
             corrective=corrective,
             corrected_flow_mw=corrected_flows,
+            corrected_shed_mw=solution.corrective_shed_mw,
+            shed_cost=solution.corrective_shed_cost,
         )
 
     while True:
@@ -448,7 +480,12 @@ def scopf_dc(
             for b, outage in enumerate(outages):
                 flows = np.abs(
                     _corrected_flows_mw(
-                        arr, ptdf_matrix, lodf_matrix, outage, solution.corrective_dispatch_mw[b]
+                        arr,
+                        ptdf_matrix,
+                        lodf_matrix,
+                        outage,
+                        solution.corrective_dispatch_mw[b],
+                        shed_of(solution, b),
                     )
                 )
                 skip = outage[1] if outage[0] == "branch" else -1
@@ -480,7 +517,14 @@ def scopf_dc(
             corrected.extend(new_corrected)
             corrected_seen.update(new_corrected)
             corrective = corrective_rows(
-                arr, ptdf_matrix, lodf_matrix, outages, corrected, ramp_up, ramp_down
+                arr,
+                ptdf_matrix,
+                lodf_matrix,
+                outages,
+                corrected,
+                ramp_up,
+                ramp_down,
+                options.load_shed_cost,
             )
 
 

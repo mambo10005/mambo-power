@@ -1445,6 +1445,50 @@ their `_with_report` forms), with one contract:
 *Rejected:* writing a `mpc.bus_name` or a comment block carrying the dropped fields (a side
 channel no other reader honours); a fixed-width "pretty" layout (loses digits, see 2).
 
+## ADR-033 — Load shedding is a corrective action, priced at VOLL and never probability-weighted
+
+**Status:** accepted 2026-10-14.
+
+**Context.** A corrective SCOPF (ADR-021) is infeasible whenever some outage cannot be covered
+by redispatch within the ramps — a lost unit larger than the others' combined ramp-up is the
+common case. Operators cover such outages by shedding load, and want to know how much and what
+it is worth; "Infeasible" tells them neither.
+
+**Decision.** `ScopfOptions.load_shed_cost` (VOLL, $/MWh; requires `corrective`) and, on the
+builder, `CorrectiveRows.shed_cost` / `shed_max_mw`.
+
+1. **Shedding lives in the corrected state only.** One shed column per bus per corrective
+   block, bounded by the bus's fixed load, an injection in that block's balance row and its
+   corrected flow rows; the preventive rows — the immediate post-outage flow at the emergency
+   rating — are untouched. Shedding is what the operator does after the outage, with the
+   redispatch, and it never relaxes the base case or the immediate state.
+2. **Priced in the objective, not probability-weighted.** `VOLL · Σ shed` over every corrected
+   state joins the LP objective as if every outage happened. The alternative — weighting each
+   state by an outage probability — needs data the model does not carry and would make the
+   reported figure an expectation nobody could check. `shed_cost` is reported beside
+   `objective_cost`, not inside it: the base dispatch's cost keeps ADR-016's meaning.
+3. **Free redispatch comes first.** Any positive VOLL costs more than a redispatch, which the
+   objective does not charge, so shedding is used only where the ramps run out; and the LP
+   trades base cost against shedding at VOLL, buying a MW of base shift whenever it is cheaper
+   than the MW it saves.
+4. **Confirmed like the redispatch.** Each correction's DC re-solve takes the shed load off its
+   bus (every load at the bus scaled by the shed share) before the loadings are checked, so
+   `corrected_secure` means the same thing with and without shedding.
+
+**Consequences.**
+
+1. **An infeasible corrective SCOPF becomes a priced one** with the same base-case promise
+   (`secure`, from `n1` on the immediate flows), and the shed MW per outage and bus is the
+   operator's exposure.
+2. **Generator outages are the ones that shed.** On the tightened case14 example a lost 40 MW
+   unit against 10 MW ramps sheds the difference; branch outages mostly redispatch.
+3. **N-2 pairs are not shed**: they are preventive rows (ADR-025), so a pair the network
+   cannot survive stays infeasible — a corrective N-2 is a separate decision.
+
+*Rejected:* shedding in the preventive rows (would relax the immediate state, which is what
+the emergency rating is for); a shed cost on elastic demand (a bid load already has a price —
+`solve_scopf` takes no bids); probability weighting (see 2).
+
 ## Wave M2 semantic decisions
 
 Two behaviours M1 deferred were settled for M2 (ratified 2026-08-21).

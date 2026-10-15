@@ -61,6 +61,7 @@ from mambo_power.results.provenance import ResultProvenance
 from mambo_power.results.scopf import (
     CorrectiveActionResult,
     GenCorrectionResult,
+    LoadShedResult,
     ScopfDcResult,
     SecurityConstraintResult,
 )
@@ -95,6 +96,7 @@ __all__ = [
     "FeasibilityReport",
     "GenCommitmentResult",
     "GenCorrectionResult",
+    "LoadShedResult",
     "GenDispatchResult",
     "GenPeriodDispatchResult",
     "GenRedispatchResult",

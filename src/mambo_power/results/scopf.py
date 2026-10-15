@@ -62,6 +62,15 @@ class GenCorrectionResult(BaseModel):
     delta_mw: float = Field(description="p_mw minus the base-case dispatch, MW.")
 
 
+class LoadShedResult(BaseModel):
+    """Load shed at one bus in one corrected state (ADR-033)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    bus: str = Field(description="Bus id from the network.")
+    shed_mw: float = Field(ge=0.0, description="Fixed load left unserved at the bus, MW.")
+
+
 class CorrectiveActionResult(BaseModel):
     """The post-contingency redispatch for one outage (ADR-021, corrective SCOPF).
 
@@ -88,8 +97,14 @@ class CorrectiveActionResult(BaseModel):
     confirmed_max_loading: float = Field(
         ge=0.0,
         description="Largest |flow| / normal rating over every rated branch in the confirming DC "
-        "re-solve with the outage applied and the redispatch in place.",
+        "re-solve with the outage applied and the redispatch (and any shedding) in place.",
     )
+    shed: list[LoadShedResult] = Field(
+        default_factory=list,
+        description="With ScopfOptions.load_shed_cost (ADR-033): every bus where this corrected "
+        "state sheds load, bus order; empty where the redispatch alone covers the outage.",
+    )
+    shed_mw: float = Field(default=0.0, ge=0.0, description="Total load shed in this state, MW.")
 
 
 class ScopfDcResult(BaseModel):
@@ -165,6 +180,14 @@ class ScopfDcResult(BaseModel):
         default=True,
         description="Whether every correction's confirming re-solve keeps every branch at or "
         "under its normal rating; True when there are no corrections.",
+    )
+    shed_cost: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="With ScopfOptions.load_shed_cost (ADR-033): load_shed_cost × the total MW "
+        "shed over every corrected state, $/h — the LP's objective is objective_cost + "
+        "shed_cost; 0 without shedding. Not probability-weighted: every corrected state is "
+        "priced as if it happened.",
     )
     ac_check: FeasibilityReport | None = Field(
         default=None,

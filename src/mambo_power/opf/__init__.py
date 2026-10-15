@@ -70,6 +70,7 @@ from mambo_power.results import (
     CorrectiveActionResult,
     GenCorrectionResult,
     GenDispatchResult,
+    LoadShedResult,
     OpfAcResult,
     OpfBranchFlowResult,
     OpfDcResult,
@@ -291,13 +292,27 @@ def solve_dc_opf(net: Network, options: OpfDcOptions | None = None) -> OpfDcResu
     )
 
 
-def _dispatched_copy(net: Network, arr: NetworkArrays, dispatch_mw: FloatArray) -> Network:
-    """A deep copy of *net* with each in-service generator's ``p_mw`` set from *dispatch_mw*."""
+def _dispatched_copy(
+    net: Network, arr: NetworkArrays, dispatch_mw: FloatArray, shed_mw: FloatArray | None = None
+) -> Network:
+    """A deep copy of *net* with each in-service generator's ``p_mw`` set from *dispatch_mw*
+    and, with *shed_mw* (``(n_bus,)``, ADR-033), each bus's in-service loads scaled down by the
+    shed share of that bus's load."""
     dispatched = net.model_copy(deep=True)
     p_mw_by_id = dict(zip(arr.gen_ids, dispatch_mw.tolist(), strict=True))
     for gen in dispatched.generators:
         if gen.id in p_mw_by_id:
             gen.p_mw = p_mw_by_id[gen.id]
+    if shed_mw is not None and np.any(shed_mw > 0.0):
+        bus_index = {bus_id: i for i, bus_id in enumerate(arr.bus_ids)}
+        bus_load = arr.p_load_pu * arr.base_mva
+        for load in dispatched.loads:
+            i = bus_index.get(load.bus)
+            if i is None or not load.in_service or bus_load[i] <= 0.0 or shed_mw[i] <= 0.0:
+                continue
+            keep = 1.0 - shed_mw[i] / bus_load[i]
+            load.p_mw *= keep
+            load.q_mvar *= keep
     return dispatched
 
 
@@ -427,6 +442,7 @@ def solve_scopf(net: Network, options: ScopfOptions | None = None) -> ScopfDcRes
         ac_check=ac_check,
         corrections=corrections,
         corrected_secure=all(c.confirmed_max_loading <= 1.0 + 1e-9 for c in corrections),
+        shed_cost=secured.shed_cost,
     )
 
 
@@ -466,8 +482,9 @@ def _corrections(
     out: list[CorrectiveActionResult] = []
     for b, (kind, outage) in enumerate(secured.corrected_outages):
         corrected = solution.corrective_dispatch_mw[b]
+        shed = solution.corrective_shed_mw[b] if solution.corrective_shed_mw.size else None
         outage_id = (arr.branch_ids if kind == "branch" else arr.gen_ids)[outage]
-        outaged = _dispatched_copy(net, arr, corrected)
+        outaged = _dispatched_copy(net, arr, corrected, shed)
         if kind == "branch":
             next(br for br in outaged.branches if br.id == outage_id).in_service = False
         else:
@@ -489,9 +506,20 @@ def _corrections(
                 ],
                 constraints=rows_by_outage.get((kind, outage), []),
                 confirmed_max_loading=float(np.max(loading)) if loading.size else 0.0,
+                shed=_shed_rows(arr, shed),
+                shed_mw=float(np.sum(shed)) if shed is not None else 0.0,
             )
         )
     return out
+
+
+def _shed_rows(arr: NetworkArrays, shed: FloatArray | None) -> list[LoadShedResult]:
+    if shed is None:
+        return []
+    return [
+        LoadShedResult(bus=arr.bus_ids[int(i)], shed_mw=float(shed[i]))
+        for i in np.flatnonzero(shed > 1e-9)
+    ]
 
 
 def voltage_limits(

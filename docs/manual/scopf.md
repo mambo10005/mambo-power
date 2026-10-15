@@ -126,6 +126,57 @@ has to be served after each corrected contingency too) and a binding corrected f
 the congestion term, so an LMP can carry the cost of a corrective ramp that binds —
 `lmp_decomposition(duals, ptdf, security, corrective)`.
 
+### Load shedding as a corrective action
+
+`ScopfOptions(corrective=True, load_shed_cost=VOLL)` ([ADR-033](../design/decisions.md)) lets a
+corrected state also leave fixed load unserved, at `VOLL` $/MWh. Each corrective block gains one
+shed column per bus, \(0 \le s_i \le\) that bus's fixed load, entering the block's balance as an
+injection and its corrected flow rows through the same post-contingency sensitivity; the
+objective pays `VOLL · Σ s`. Nothing changes for the immediate flow, which is still held to the
+emergency rating by the preventive rows — shedding is something the operator does *after* the
+outage, like the redispatch. So an outage no redispatch can cover within the ramps — a lost unit
+larger than the others' combined ramp-up, a corridor that cannot be relieved from where the
+units are — stops making the problem infeasible and gets a price instead; where the redispatch
+suffices nothing is shed, since any positive `VOLL` costs more than a redispatch that is free.
+
+The price is not probability-weighted: every corrected state is charged as if its outage
+happened, so `shed_cost` (`VOLL ×` the total MW shed over all corrected states) is a measure of
+exposure, not an expected cost — compare it across designs, not with the base cost. The LP
+does trade it against the base dispatch, though: a MW of base cost that removes a MW of
+shedding is bought whenever it costs less than `VOLL`, and the test suite's triangle shows the
+trade going the other way at a `VOLL` below the units' cost gap. Every correction's
+`shed` rows (bus and MW) and `shed_mw` are reported, and the confirming DC re-solve of each
+corrected state takes the shed load off its bus before checking the loadings:
+
+```python
+net = cases.load("derived/case14_rated")
+for br in net.branches:
+    if br.rating_mva is not None:
+        br.rating_mva *= 0.9  # a tighter grid ...
+        br.rating_emergency_mva = 1.4 * br.rating_mva  # ... with short-term headroom
+for g in net.generators:
+    g.ramp_up_mw = g.ramp_down_mw = 10.0  # and slow units
+
+print(opf.solve_scopf(net, opf.ScopfOptions(corrective=True)).status)
+shed = opf.solve_scopf(net, opf.ScopfOptions(corrective=True, load_shed_cost=5000.0))
+print(shed.status, f"{shed.objective_cost:.2f} $/h base, {shed.shed_cost:.2f} $/h of shedding")
+for c in shed.corrections:
+    if c.shed:
+        print(f"{c.outage_id}: {c.shed_mw:.2f} MW shed at", [(s.bus, round(s.shed_mw, 2)) for s in c.shed])
+```
+
+```text
+Infeasible
+Optimal 8624.27 $/h base, 183435.68 $/h of shedding
+branch-12: 0.27 MW shed at [('bus-13', 0.27)]
+gen-3: 18.54 MW shed at [('bus-3', 18.54)]
+gen-4: 17.87 MW shed at [('bus-9', 17.87)]
+```
+
+With 10 MW ramps the other units cannot pick up a lost 40 MW unit, so the two generator
+outages shed what the ramps leave; the one branch outage that needed it sheds a fraction of a
+MW at the far end of the corridor.
+
 ## N-2 branch pairs
 
 `ScopfOptions(branch_pairs=True)` ([ADR-025](../design/decisions.md)) secures the dispatch
@@ -176,7 +227,8 @@ the secure dispatch) plus:
   rows (`rating_mva` the normal rating) and `confirmed_max_loading`, the largest loading in a
   real DC re-solve with the outage applied and the redispatch in place; `corrected_secure` is
   that confirmation's verdict over every correction, as `secure` is `n1`'s over the immediate
-  flows.
+  flows. With `load_shed_cost`, each correction's `shed` (`LoadShedResult` rows: bus, MW) and
+  `shed_mw`, and the result's `shed_cost`.
 
 ## Using it
 
@@ -213,6 +265,8 @@ is survivable too.
 
 Single outages and, with `branch_pairs`, [branch pairs](#n-2-branch-pairs); DC; preventive or
 [corrective](#corrective-redispatch) (single outages only), with a per-branch
-[emergency rating](n1.md#emergency-ratings) for the immediate post-contingency flow. Generator
-pairs, a cost on the corrective action itself, and an AC formulation are not modelled; the AC side is the same
-`ac_check` DC-OPF offers — a check, not a constraint.
+[emergency rating](n1.md#emergency-ratings) for the immediate post-contingency flow and
+priced [load shedding](#load-shedding-as-a-corrective-action) in the corrected state. Generator
+pairs, a cost on the redispatch itself, probability-weighted contingencies and an AC
+formulation are not modelled; the AC side is the same `ac_check` DC-OPF offers — a check, not a
+constraint.
